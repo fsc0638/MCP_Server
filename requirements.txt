@@ -1,0 +1,4 @@
+pyyaml
+pathlib
+argparse
+python-dotenv
