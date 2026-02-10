@@ -106,6 +106,43 @@ def run_with_adapter(adapter, adapter_name, user_input, conversation_history):
         print(f"[ERROR] {adapter_name}: {e}")
         return {"status": "error", "message": str(e)}
 
+# --------------- Session Summary via LLM ---------------
+
+def generate_session_summary(adapter, adapter_name, conversation_history, turn_count):
+    """Ask the LLM to generate a concise summary of the conversation for MEMORY.md."""
+    if not adapter or turn_count == 0:
+        return f"Session with {turn_count} turns (no summary generated)"
+
+    # Build a summarization prompt
+    summary_prompt = (
+        "Please generate a concise summary (2-3 sentences, in the same language as the conversation) "
+        "of the following conversation. Include: key topics discussed, specific names or data mentioned, "
+        "tools that were called, and their results. Do NOT include greetings or filler.\n\n"
+    )
+
+    # Collect user/assistant turns (skip system message)
+    for msg in conversation_history:
+        role = msg.get("role", "")
+        content = msg.get("content", "")
+        if role in ("user", "assistant") and content:
+            summary_prompt += f"[{role}]: {content}\n"
+
+    try:
+        if adapter_name == "openai":
+            result = adapter.chat(
+                messages=[{"role": "user", "content": summary_prompt}],
+                user_query=None  # No tool injection for summary
+            )
+        else:
+            result = adapter.chat(summary_prompt)
+
+        if result and result.get("status") == "success":
+            return result.get("content", "").strip()
+    except Exception as e:
+        print(f"[MEMORY] Summary generation failed: {e}")
+
+    return f"Session with {turn_count} turns using {adapter_name} (auto-summary failed)"
+
 
 # --------------- Main ---------------
 
@@ -163,6 +200,30 @@ def main():
     # Conversation history (multi-turn memory)
     conversation_history = []
     turn_count = 0
+
+    # Load past session memory from MEMORY.md and inject as system context
+    memory_file = PROJECT_ROOT / "memory" / "MEMORY.md"
+    if memory_file.exists():
+        memory_content = memory_file.read_text(encoding="utf-8")
+        # Only include the last ~2000 chars to save tokens
+        if len(memory_content) > 2000:
+            memory_content = "...(earlier sessions omitted)...\n" + memory_content[-2000:]
+        if memory_content.strip():
+            conversation_history.append({
+                "role": "system",
+                "content": (
+                    "You are a helpful assistant with access to tools. "
+                    "Below is the memory log from previous sessions. "
+                    "Use this context if the user refers to past conversations.\n\n"
+                    f"{memory_content}"
+                )
+            })
+            print("[MEMORY] Past session context loaded from MEMORY.md")
+    else:
+        conversation_history.append({
+            "role": "system",
+            "content": "You are a helpful assistant with access to tools."
+        })
 
     # Interactive loop
     print("\n--- Enter your request (type 'quit' to exit) ---")
@@ -227,10 +288,14 @@ def main():
     except KeyboardInterrupt:
         print("\n\nInterrupted by user.")
 
-    # End session -> sync to MEMORY.md
-    summary = f"Auto Agent session with {turn_count} turns using {active_adapter_name}"
+    # End session -> generate LLM summary then sync to MEMORY.md
+    print("\n[MEMORY] Generating conversation summary...")
+    summary = generate_session_summary(
+        active_adapter, active_adapter_name, conversation_history, turn_count
+    )
     session_mgr.end_session(session_id, summary)
-    print(f"\nSession saved to memory/MEMORY.md ({turn_count} turns recorded)")
+    print(f"\nSession saved to memory/MEMORY.md ({turn_count} turns)")
+    print(f"Summary: {summary}")
     print("Goodbye!")
 
 
