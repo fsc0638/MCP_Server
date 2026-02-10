@@ -1,4 +1,7 @@
-pyyaml
-pathlib
-argparse
-python-dotenv
+pyyaml>=6.0
+python-dotenv>=1.0.0
+fastapi>=0.100.0
+uvicorn>=0.20.0
+openai>=1.0.0
+google-generativeai>=0.3.0
+anthropic>=0.18.0

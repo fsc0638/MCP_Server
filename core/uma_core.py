@@ -1,4 +1,5 @@
 import os
+import json
 import yaml
 import hashlib
 from pathlib import Path
@@ -78,7 +79,7 @@ class SkillRegistry:
         """
         Parses SKILL.md and registers it into the registry.
         """
-        skill_name = skill_dir.name
+        skill_name = skill_dir.name.lower()  # Case-insensitive: cross-platform consistency
         skill_md_path = skill_dir / "SKILL.md"
 
         try:
@@ -150,7 +151,7 @@ class SkillRegistry:
         return hash_obj.hexdigest()
 
     def get_skill(self, skill_name: str) -> Optional[Dict[str, Any]]:
-        return self.skills.get(skill_name)
+        return self.skills.get(skill_name.lower())
 
     def list_tools_for_model(self, model_type: str) -> List[Dict[str, Any]]:
         """
