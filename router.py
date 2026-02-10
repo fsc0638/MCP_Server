@@ -1,27 +1,40 @@
-"""
-MCP Server - FastAPI Router (Phase 3)
-API endpoints for LLM tool interaction with Token-aware resource access.
-"""
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import logging
+import json
+import asyncio
+from sse_starlette.sse import EventSourceResponse
 
-from main import get_uma
+from main import get_uma, PROJECT_ROOT
 
 logger = logging.getLogger("MCP_Server.Router")
 
+# Reload trigger for PYTHONPATH & Shared Package fix
 app = FastAPI(
     title="MCP Skill Server",
     description="Unified Model Adapter — Bridges LLMs with GitHub Skills",
     version="0.1.0"
 )
 
+# --- Static File Serving (Decoupled UI) ---
+static_dir = PROJECT_ROOT / "static"
+if not static_dir.exists():
+    static_dir.mkdir()
+app.mount("/ui", StaticFiles(directory=str(static_dir)), name="static")
+
 
 # --- Request/Response Models ---
 class ExecuteRequest(BaseModel):
     skill_name: str
     arguments: Dict[str, Any] = {}
+
+
+class ChatRequest(BaseModel):
+    user_input: str
+    session_id: Optional[str] = "web_user"
+    model: Optional[str] = "openai"
 
 
 class SearchRequest(BaseModel):
@@ -95,6 +108,65 @@ def execute_tool(request: ExecuteRequest):
         requires_approval=result.get("requires_approval"),
         risk_description=result.get("risk_description")
     )
+
+
+@app.get("/chat")
+async def chat_stream(user_input: str, model: str = "openai", request: Request = None):
+    """
+    SSE Endpoint for real-time thought streaming.
+    Streams events: 'thought', 'tool_start', 'tool_result', 'response', 'memory_sync'.
+    """
+    uma = get_uma()
+    
+    # Lazy imports for adapters to keep router light
+    from adapters.openai_adapter import OpenAIAdapter
+    from adapters.gemini_adapter import GeminiAdapter
+    from adapters.claude_adapter import ClaudeAdapter
+    
+    async def event_generator():
+        try:
+            # 1. Initialize Adapter
+            if model == "openai":
+                adapter = OpenAIAdapter(uma)
+            elif model == "gemini":
+                adapter = GeminiAdapter(uma)
+            else:
+                adapter = ClaudeAdapter(uma)
+                
+            if not adapter.is_available:
+                yield {"event": "error", "data": f"Model {model} is not available (check API keys)"}
+                return
+
+            # 2. Start Thinking
+            yield {"event": "thought", "data": json.dumps({"message": f"Thinking about: {user_input}..."})}
+            await asyncio.sleep(0.5) # Slight delay for UI feel
+            
+            # 3. Process with Adapter (this part is currently sync in UMA core)
+            # In a real async system, adapter.chat would be async.
+            # For now we wrap it or just call it.
+            # To simulate "Thought Stream", the adapter itself would ideally yield events.
+            # Since UMA is sync, we'll emit a 'processing' event.
+            yield {"event": "status", "data": json.dumps({"status": "processing", "tool": "analyzing_intent"})}
+            
+            # Note: The current UMA adapters handle the tool-execution loop INTERNALLY.
+            # This makes streaming granular steps difficult without refactoring UMA.
+            # PROPOSAL: We'll wrap the executor to catch calls and emit events.
+            
+            result = adapter.chat(user_input)
+            
+            if result.get("status") == "success":
+                yield {"event": "response", "data": json.dumps({"content": result.get("content", "")})}
+            else:
+                yield {"event": "error", "data": json.dumps({"message": result.get("message", "Unknown error")})}
+
+            # 4. Final Memory Sync notification
+            yield {"event": "memory_sync", "data": json.dumps({"status": "synced"})}
+
+        except Exception as e:
+            logger.error(f"SSE Error: {e}")
+            yield {"event": "error", "data": str(e)}
+
+    return EventSourceResponse(event_generator())
 
 
 @app.get("/resources/{skill_name}/{file_name}")

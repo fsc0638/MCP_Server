@@ -37,7 +37,7 @@ class OpenAIAdapter:
     def is_available(self) -> bool:
         return self.client is not None
 
-    def get_tools(self, user_query: Optional[str] = None, max_tools: int = 10) -> List[Dict[str, Any]]:
+    def get_tools(self, user_query: Optional[str] = None, max_tools: int = 25) -> List[Dict[str, Any]]:
         """
         Get tool definitions in OpenAI format.
         If user_query is provided, uses dynamic tool injection.
@@ -50,13 +50,38 @@ class OpenAIAdapter:
 
         return all_tools
 
-    def chat(self, messages: List[Dict[str, str]], user_query: Optional[str] = None) -> Dict[str, Any]:
+    def chat(self, messages: Any, user_query: Optional[str] = None) -> Dict[str, Any]:
         """
         Send a chat completion request with tool calling support.
         Handles the tool call loop automatically.
+        Accepts either a list of messages or a single string (user query).
         """
         if not self.is_available:
             return {"status": "error", "message": "OpenAI adapter is not available"}
+
+        # 1. Prepare system context if missing
+        system_msg = {
+            "role": "system",
+            "content": (
+                "You are a high-performance Autonomous AI Agent (Hand-Brain pattern). "
+                "You HAVE access to the local system via specialized 'MCP Skills' (tools). "
+                "NEVER say you cannot execute code or access the local environment. "
+                "MANDATORY: When a user asks you to execute, verify, or calculate, you MUST use the corresponding tool. "
+                "For Python code, ALWAYS use 'mcp-python-executor'. Do not just provide code in text. "
+                "Output your thinking process clearly, then call the tool."
+            )
+        }
+
+        # Handle simple string input from router
+        if isinstance(messages, str):
+            user_query = messages
+            messages = [
+                system_msg,
+                {"role": "user", "content": messages}
+            ]
+        elif not any(m.get("role") == "system" for m in messages):
+            messages.insert(0, system_msg)
+            user_query = user_query or (messages[-1]["content"] if messages else None)
 
         tools = self.get_tools(user_query=user_query)
 

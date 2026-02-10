@@ -37,13 +37,14 @@ def startup():
     # 1. Load .env
     env_path = PROJECT_ROOT / ".env"
     if env_path.exists():
-        load_dotenv(env_path)
-        logger.info("Environment variables loaded from .env")
+        load_dotenv(env_path, override=True)
+        logger.info("Environment variables loaded from .env (with override)")
     else:
         logger.warning("No .env file found. Using system environment variables only.")
 
     # 2. Initialize UMA
-    skills_home = os.getenv("SKILLS_HOME", str(PROJECT_ROOT / "skills"))
+    # Default to the new Monorepo structure: Agent_skills/skills
+    skills_home = os.getenv("SKILLS_HOME", str(PROJECT_ROOT / "Agent_skills" / "skills"))
     logger.info(f"Initializing UMA with SKILLS_HOME: {skills_home}")
 
     uma = UMA(skills_home=skills_home)

@@ -88,6 +88,18 @@ class ExecutionEngine:
             # Inject standardized project variables
             current_env["SKILLS_HOME"] = str(self.skills_home)
             current_env["CURRENT_SKILL_DIR"] = str(skill_dir)
+            
+            # --- Monorepo PYTHONPATH Injection ---
+            # Inject Agent_skills parent of shared into PYTHONPATH so skills can 'import shared.xxx'
+            shared_path = str(self.skills_home.parent)
+            existing_pythonpath = current_env.get("PYTHONPATH", "")
+            if existing_pythonpath:
+                current_env["PYTHONPATH"] = f"{shared_path}{os.pathsep}{existing_pythonpath}"
+            else:
+                current_env["PYTHONPATH"] = shared_path
+
+            # Force UTF-8 output from Python child processes (crucial for Windows)
+            current_env["PYTHONIOENCODING"] = "utf-8"
 
             # 3. Execution (Subprocess with boundary awareness)
             # We use sys.executable to ensure we use the same Python environment (venv)
@@ -104,7 +116,8 @@ class ExecutionEngine:
                 stderr=subprocess.PIPE,
                 env=current_env,
                 text=True,
-                encoding='utf-8'
+                encoding='utf-8',
+                errors='replace'  # Robustness: replace characters that can't be decoded
             )
 
             try:

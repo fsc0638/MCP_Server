@@ -111,6 +111,11 @@ class SkillRegistry:
                 metadata["_env_ready"], metadata["_missing_deps"] = self._check_dependencies(
                     metadata.get("runtime_requirements", [])
                 )
+                
+                # 3. Tag Extraction for dynamic tool selection
+                from adapters import extract_tags
+                metadata["_tags"] = extract_tags(metadata.get("description", ""))
+                metadata["_description_raw"] = metadata.get("description", "")
 
                 self.skills[skill_name] = {
                     "path": skill_dir,

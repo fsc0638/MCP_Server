@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Agent Console v1</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <!-- Sidebar: Memory & Tools Statistics -->
+        <aside class="sidebar">
+            <div class="brand">
+                <span class="logo-icon">💠</span>
+                <h1 class="brand-name">MCP UMA</h1>
+            </div>
+            
+            <div class="stat-card memory-monitor" id="memoryMonitor">
+                <div class="card-header">
+                    <h3>Memory Monitor</h3>
+                    <span class="status-dot green pulse"></span>
+                </div>
+                <div class="memory-content" id="memorySummary">
+                    <p class="placeholder">Awaiting session...</p>
+                </div>
+            </div>
+
+            <div class="stat-card tool-registry">
+                <div class="card-header">
+                    <h3>Active Skills</h3>
+                    <span class="badge" id="skillCount">0</span>
+                </div>
+                <ul class="skill-list" id="skillList">
+                    <!-- Skills will be injected here -->
+                </ul>
+            </div>
+
+            <div class="footer-info">
+                <p>Version 1.0.0-UMA</p>
+                <div class="system-status">
+                    <span class="label">Backend:</span>
+                    <span class="val green">ONLINE</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <header class="top-nav">
+                <div class="session-info">
+                    <span class="label">Session:</span>
+                    <span class="session-id" id="sessionIdDisplay">WEB_CORE_001</span>
+                </div>
+                <div class="model-selector-container">
+                    <select id="modelSelector" class="modern-select">
+                        <option value="openai">OpenAI GPT-4o</option>
+                        <option value="gemini">Google Gemini 2.0</option>
+                        <option value="claude">Anthropic Claude 3.5</option>
+                    </select>
+                </div>
+            </header>
+
+            <section class="chat-viewport" id="chatViewport">
+                <div class="welcome-banner">
+                    <h2>Welcome to Agent Console</h2>
+                    <p>The decoupled UMA interface for high-performance agent interaction.</p>
+                </div>
+                <div id="messageContainer" class="message-container"></div>
+            </section>
+
+            <section class="input-area">
+                <div class="input-wrapper">
+                    <textarea id="userInput" placeholder="Ask your agent anything..." rows="1"></textarea>
+                    <button id="sendBtn" class="send-btn">
+                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                </div>
+            </section>
+        </main>
+
+        <!-- Right Panel: Thought Stream Monitor -->
+        <section class="monitor-panel">
+            <div class="panel-header">
+                <h2>Thought Stream</h2>
+                <div class="controls">
+                    <button class="icon-btn" id="clearLog" title="Clear Logs">🗑️</button>
+                    <button class="icon-btn toggle-lock" id="scrollLock" title="Scroll Lock Off">🔓</button>
+                </div>
+            </div>
+            <div class="thought-log" id="thoughtLog">
+                <div class="log-entry system">
+                    <span class="time">15:30:01</span>
+                    <span class="msg">System initialized. Awaiting user input.</span>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Modals -->
+    <div id="authModal" class="modal-overlay hidden">
+        <div class="modal auth-card highlight-red">
+            <div class="modal-header">
+                <span class="warning-icon">⚠️</span>
+                <h2>Authorization Required</h2>
+            </div>
+            <div class="modal-body">
+                <p class="risk-desc" id="riskDesc">Agent is requesting a high-risk operation.</p>
+                <div class="detail-box" id="authDetails"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn secondary" id="denyBtn">Deny</button>
+                <button class="btn primary red" id="approveBtn">Authorize Execution</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
