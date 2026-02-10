@@ -2,29 +2,19 @@
 name: mcp-my-first-tool
 provider: mcp
 version: 0.1.0
-runtime_requirements:
-  - # Add dependencies here (e.g. pandas, python-docx)
+runtime_requirements: []
 description: >
-  Provide a detailed description of the skill here. 
-  The LLM will use this to decide whether to trigger this skill.
+  A simple greeting and echo tool. Accepts a user's name and an optional message,
+  then returns a personalized greeting with the current timestamp.
+  Use this tool when users want to test the system or say hello.
 ---
 
-# Mcp My First Tool
+# MCP My First Tool
 
 ## Description
-[LLM Trigger Decider]
-This skill is designed to...
+A simple greeting tool for testing the UMA pipeline end-to-end.
 
 ## How to use (Strict Mode / Low Freedom)
-- This tool should be called using relative paths to the `Scripts/` directory.
-- Input parameters are restricted to:
-  - param1 (type): description
-
-## Execution Flow
-1. Read Metadata
-2. (Optional) Read References
-3. Execute Script
-4. Process Assets/Templates
-
-## Input Boundary Checking
-- [ ] Param check implemented in script
+- Input parameters:
+  - name (string): The user's name
+  - message (string, optional): A custom message to echo back

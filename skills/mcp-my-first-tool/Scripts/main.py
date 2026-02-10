@@ -1,16 +1,25 @@
 import sys
 import os
+import json
+from datetime import datetime
 
-# Input Boundary Checking Implementation
-def validate_input(args):
-    # Example: check if args exist or meet length requirements
-    if not args:
-        print("Error: Missing arguments")
-        sys.exit(1)
 
 def main():
-    # Relative path awareness is handled by the MCP Server
-    print("Skill executed successfully from Scripts layer")
+    name = os.getenv("SKILL_PARAM_NAME", "World")
+    message = os.getenv("SKILL_PARAM_MESSAGE", "")
+
+    greeting = f"Hello, {name}!"
+    if message:
+        greeting += f" You said: '{message}'"
+
+    result = {
+        "greeting": greeting,
+        "timestamp": datetime.now().isoformat(),
+        "status": "success"
+    }
+
+    print(json.dumps(result, ensure_ascii=False))
+
 
 if __name__ == "__main__":
     main()

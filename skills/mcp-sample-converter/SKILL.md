@@ -2,29 +2,20 @@
 name: mcp-sample-converter
 provider: mcp
 version: 0.1.0
-runtime_requirements:
-  - # Add dependencies here (e.g. pandas, python-docx)
+runtime_requirements: []
 description: >
-  Provide a detailed description of the skill here. 
-  The LLM will use this to decide whether to trigger this skill.
+  Convert text data between formats. Accepts an input string and a target format,
+  then returns the converted result. Supported conversions: text to uppercase,
+  text to lowercase, text to title case, and word count analysis.
+  Use this tool when users ask to transform, convert, or analyze text content.
 ---
 
-# Mcp Sample Converter
+# MCP Sample Converter
 
 ## Description
-[LLM Trigger Decider]
-This skill is designed to...
+This tool converts text between various formats and provides basic text analysis.
 
 ## How to use (Strict Mode / Low Freedom)
-- This tool should be called using relative paths to the `Scripts/` directory.
-- Input parameters are restricted to:
-  - param1 (type): description
-
-## Execution Flow
-1. Read Metadata
-2. (Optional) Read References
-3. Execute Script
-4. Process Assets/Templates
-
-## Input Boundary Checking
-- [ ] Param check implemented in script
+- Input parameters:
+  - input_text (string): The text content to process
+  - operation (string): One of "uppercase", "lowercase", "titlecase", "wordcount"

@@ -29,16 +29,25 @@ class UMA:
         """
         tools = []
         for skill_name, data in self.registry.skills.items():
+            meta = data["metadata"].copy()
             # Check dependency readiness
-            if not data["metadata"].get("_env_ready", False):
-                # Optionally skip or flag as unavailable in description
-                data["metadata"]["description"] += " [UNAVAILABLE: Missing dependencies]"
-            
+            if not meta.get("_env_ready", False):
+                meta["description"] = meta.get("description", "") + " [UNAVAILABLE: Missing dependencies]"
+
             if model_type.lower() == "openai":
-                tools.append(self.converter.to_openai(data["metadata"]))
+                tools.append(self.converter.to_openai(meta))
             elif model_type.lower() == "gemini":
-                tools.append(self.converter.to_gemini(data["metadata"]))
+                tools.append(self.converter.to_gemini(meta))
+            elif model_type.lower() == "claude":
+                tool_def = self.converter.to_openai(meta)
+                fn = tool_def.get("function", tool_def)
+                tools.append({
+                    "name": fn.get("name"),
+                    "description": fn.get("description"),
+                    "input_schema": fn.get("parameters", {"type": "object", "properties": {}})
+                })
         return tools
+
 
     def execute_tool_call(self, skill_name: str, arguments: str):
         """
