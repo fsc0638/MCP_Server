@@ -37,37 +37,51 @@ def extract_tags(description: str) -> List[str]:
 def select_relevant_tools(
     user_query: str,
     all_tools: List[Dict[str, Any]],
-    max_tools: int = 10
+    max_tools: int = 25
 ) -> List[Dict[str, Any]]:
     """
     Two-phase dynamic tool injection:
-    Phase 1 — Tag Matching: fast keyword-based filter
-    Phase 2 — Semantic Fallback: score remaining tools by word overlap
+    Phase 1 — Keyword Matching: match query words against tool name + description
+    Phase 2 — Fallback: score remaining tools by word overlap
+
+    Works with OpenAI tool format: {"type": "function", "function": {"name":..., "description":...}}
     """
     query_lower = user_query.lower()
     query_words = set(re.findall(r'[a-zA-Z\u4e00-\u9fff]{2,}', query_lower))
 
-    # Phase 1: Tag matching
-    tag_matched = []
+    def get_tool_text(tool: Dict[str, Any]) -> str:
+        """Extract searchable text from any tool format."""
+        # OpenAI format
+        if "function" in tool:
+            fn = tool["function"]
+            return f"{fn.get('name', '')} {fn.get('description', '')}".lower()
+        # Gemini format
+        if "name" in tool:
+            return f"{tool.get('name', '')} {tool.get('description', '')}".lower()
+        # Fallback: stringify
+        return str(tool).lower()
+
+    # Phase 1: Keyword matching on tool name + description
+    matched = []
     unmatched = []
     for tool in all_tools:
-        tags = tool.get("_tags", [])
-        if any(tag in query_lower for tag in tags):
-            tag_matched.append(tool)
+        tool_text = get_tool_text(tool)
+        if any(word in tool_text for word in query_words if len(word) > 2):
+            matched.append(tool)
         else:
             unmatched.append(tool)
 
-    if len(tag_matched) >= max_tools:
-        return tag_matched[:max_tools]
+    if len(matched) >= max_tools:
+        return matched[:max_tools]
 
     # Phase 2: Semantic fallback (word overlap scoring)
     scored = []
     for tool in unmatched:
-        desc = tool.get("_description_raw", "").lower()
-        desc_words = set(re.findall(r'[a-zA-Z\u4e00-\u9fff]{2,}', desc))
-        overlap = len(query_words & desc_words)
+        tool_text = get_tool_text(tool)
+        tool_words = set(re.findall(r'[a-zA-Z\u4e00-\u9fff]{2,}', tool_text))
+        overlap = len(query_words & tool_words)
         scored.append((overlap, tool))
 
     scored.sort(key=lambda x: x[0], reverse=True)
-    result = tag_matched + [t for _, t in scored]
+    result = matched + [t for _, t in scored]
     return result[:max_tools]

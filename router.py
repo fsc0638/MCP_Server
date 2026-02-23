@@ -11,7 +11,7 @@ from main import get_uma, PROJECT_ROOT
 
 logger = logging.getLogger("MCP_Server.Router")
 
-# Reload trigger for PYTHONPATH & Shared Package fix
+# Reload trigger for CIS Guideline update
 app = FastAPI(
     title="MCP Skill Server",
     description="Unified Model Adapter — Bridges LLMs with GitHub Skills",
