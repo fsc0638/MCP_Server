@@ -118,3 +118,46 @@ class GeminiAdapter:
         except Exception as e:
             logger.error(f"Gemini chat error: {e}")
             return {"status": "error", "message": str(e)}
+
+    def simple_chat(self, session_history: list) -> dict:
+        """
+        Pure LLM conversation — NO tools, NO skill schema injection.
+        Strictly isolated from skill execution.
+
+        Args:
+            session_history: List of {role, content} dicts.
+                             role must be 'user' or 'model' for Gemini.
+        Returns:
+            {status: 'success'|'error', content: str}
+        """
+        if not self.is_available:
+            return {"status": "error", "message": "Gemini adapter is not available. Check GEMINI_API_KEY."}
+
+        try:
+            # Convert OpenAI-style roles to Gemini roles
+            gemini_history = []
+            last_user_msg = ""
+            for msg in session_history:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role == "system":
+                    # Prepend system instructions to the first user message
+                    continue
+                elif role == "assistant":
+                    role = "model"
+                if content:
+                    gemini_history.append({"role": role, "parts": [content]})
+                    if role == "user":
+                        last_user_msg = content
+
+            model = genai.GenerativeModel(
+                model_name=self.model_name
+                # NOTE: No tools= passed — strictly isolated
+            )
+            chat = model.start_chat(history=gemini_history[:-1] if len(gemini_history) > 1 else [])
+            response = chat.send_message(last_user_msg)
+            return {"status": "success", "content": response.text}
+        except Exception as e:
+            logger.error(f"Gemini simple_chat error: {e}")
+            return {"status": "error", "message": str(e)}
+

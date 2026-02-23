@@ -1,123 +1,284 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-TW">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MCP Agent Console v1</title>
+    <title>MCP Agent Console — 研發組</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=Outfit:wght@400;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
-<body class="dark-theme">
-    <div class="app-container">
-        <!-- Sidebar: Memory & Tools Statistics -->
-        <aside class="sidebar">
-            <div class="brand">
-                <span class="logo-icon">💠</span>
-                <h1 class="brand-name">MCP UMA</h1>
+
+<body>
+
+    <!-- ===== TOP BAR ===== -->
+    <header class="top-bar">
+        <div class="top-bar-left">
+            <div class="brand-logo">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                    <rect x="2" y="2" width="9" height="9" rx="2" fill="#FF6600" />
+                    <rect x="13" y="2" width="9" height="9" rx="2" fill="rgba(255,255,255,0.6)" />
+                    <rect x="2" y="13" width="9" height="9" rx="2" fill="rgba(255,255,255,0.6)" />
+                    <rect x="13" y="13" width="9" height="9" rx="2" fill="#FF6600" opacity="0.5" />
+                </svg>
+                <span class="brand-text">MCP Agent Console</span>
             </div>
-            
-            <div class="stat-card memory-monitor" id="memoryMonitor">
-                <div class="card-header">
-                    <h3>Memory Monitor</h3>
-                    <span class="status-dot green pulse"></span>
-                </div>
-                <div class="memory-content" id="memorySummary">
-                    <p class="placeholder">Awaiting session...</p>
-                </div>
+        </div>
+        <div class="top-bar-center">
+            <span class="notebook-title">研發組 · UMA 工作台</span>
+        </div>
+        <div class="top-bar-right">
+            <select id="modelSelector" class="model-chip-select">
+                <option value="openai">⚡ OpenAI GPT-4o</option>
+                <option value="gemini">✦ Google Gemini 2.0</option>
+                <option value="claude">◆ Anthropic Claude 3.5</option>
+            </select>
+            <div class="user-avatar" title="研發組">R</div>
+        </div>
+    </header>
+
+    <!-- ===== MAIN BODY ===== -->
+    <div class="app-body">
+
+        <!-- LEFT PANEL: Skill Management -->
+        <aside class="panel panel-left">
+            <div class="panel-title-bar">
+                <span class="panel-icon">⚙</span>
+                <h2 class="panel-title">技能控管</h2>
+                <span class="badge skill-count" id="skillCount">0</span>
+                <button class="icon-btn" id="createSkillBtn" title="新增技能">+</button>
+                <button class="icon-btn" id="rescanBtn" title="重新掃描技能庫">↺</button>
             </div>
 
-            <div class="stat-card tool-registry">
-                <div class="card-header">
-                    <h3>Active Skills</h3>
-                    <span class="badge" id="skillCount">0</span>
-                </div>
-                <ul class="skill-list" id="skillList">
-                    <!-- Skills will be injected here -->
-                </ul>
+            <div class="source-status-row">
+                <span class="dot dot-grey pulse" id="statusDot"></span>
+                <span class="status-label" id="statusLabel">連線中...</span>
             </div>
 
-            <div class="footer-info">
-                <p>Version 1.0.0-UMA</p>
-                <div class="system-status">
-                    <span class="label">Backend:</span>
-                    <span class="val green">ONLINE</span>
-                </div>
+            <div class="source-divider">已載入技能</div>
+
+            <ul class="skill-list" id="skillList">
+                <li class="skill-item-placeholder">
+                    <div class="skeleton-line w70"></div>
+                    <div class="skeleton-line w40"></div>
+                </li>
+            </ul>
+
+            <div class="panel-footer">
+                <span class="footer-label">版本</span>
+                <span class="footer-val">2.0.0-UMA</span>
             </div>
         </aside>
 
-        <!-- Main Content Area -->
-        <main class="main-content">
-            <header class="top-nav">
-                <div class="session-info">
-                    <span class="label">Session:</span>
-                    <span class="session-id" id="sessionIdDisplay">WEB_CORE_001</span>
-                </div>
-                <div class="model-selector-container">
-                    <select id="modelSelector" class="modern-select">
-                        <option value="openai">OpenAI GPT-4o</option>
-                        <option value="gemini">Google Gemini 2.0</option>
-                        <option value="claude">Anthropic Claude 3.5</option>
-                    </select>
-                </div>
-            </header>
-
-            <section class="chat-viewport" id="chatViewport">
-                <div class="welcome-banner">
-                    <h2>Welcome to Agent Console</h2>
-                    <p>The decoupled UMA interface for high-performance agent interaction.</p>
+        <!-- CENTER PANEL: Pure Chat -->
+        <main class="panel panel-center">
+            <div class="chat-scroll-area" id="chatViewport">
+                <div class="welcome-block" id="welcomeBlock">
+                    <div class="welcome-icon-wrap">
+                        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                            <rect width="48" height="48" rx="12" fill="#003366" />
+                            <path d="M16 24h16M24 16v16" stroke="#FF6600" stroke-width="3" stroke-linecap="round" />
+                        </svg>
+                    </div>
+                    <h1 class="welcome-title">今天想聊什麼？</h1>
+                    <p class="welcome-sub">直接與 AI 對話，若需要技能輔助可從底部選單附加。</p>
+                    <div class="suggestion-chips">
+                        <button class="chip" onclick="insertSugg('說明 SKILL.md 的 YAML 格式規範')">📋 SKILL.md 格式說明</button>
+                        <button class="chip" onclick="insertSugg('如何新增一個 MCP Skill？')">➕ 如何新增 Skill</button>
+                        <button class="chip" onclick="insertSugg('解釋 UMA 架構的設計理念')">🏗 UMA 架構解說</button>
+                        <button class="chip" onclick="insertSugg('目前有哪些技能可以使用？')">🔍 技能總覽</button>
+                    </div>
                 </div>
                 <div id="messageContainer" class="message-container"></div>
-            </section>
+            </div>
 
-            <section class="input-area">
-                <div class="input-wrapper">
-                    <textarea id="userInput" placeholder="Ask your agent anything..." rows="1"></textarea>
-                    <button id="sendBtn" class="send-btn">
-                        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <!-- Attach Skill Bar -->
+            <div class="attach-skill-bar" id="attachSkillBar">
+                <span class="attach-label">附加技能：</span>
+                <select id="attachSkillSelect" class="attach-select">
+                    <option value="">無（純對話）</option>
+                </select>
+                <button class="attach-clear-btn" id="clearAttach" title="清除附加技能">✕</button>
+                <span class="attach-hint" id="attachHint"></span>
+            </div>
+
+            <!-- Input Bar -->
+            <div class="chat-input-bar">
+                <div class="input-wrapper" id="inputWrapper">
+                    <textarea id="userInput" placeholder="輸入訊息..." rows="1" disabled></textarea>
+                    <button id="sendBtn" class="send-btn" title="送出 (Enter)" disabled>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                            <path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
                     </button>
                 </div>
-            </section>
+                <div class="input-hint">
+                    <kbd>Enter</kbd> 送出 · <kbd>Shift+Enter</kbd> 換行 ·
+                    <button class="clear-chat-btn" id="clearChatBtn" title="清除對話紀錄">🗑 清除對話</button>
+                </div>
+            </div>
         </main>
 
-        <!-- Right Panel: Thought Stream Monitor -->
-        <section class="monitor-panel">
-            <div class="panel-header">
-                <h2>Thought Stream</h2>
-                <div class="controls">
-                    <button class="icon-btn" id="clearLog" title="Clear Logs">🗑️</button>
-                    <button class="icon-btn toggle-lock" id="scrollLock" title="Scroll Lock Off">🔓</button>
+        <!-- RIGHT PANEL: Thought Stream / Reasoning Log -->
+        <aside class="panel panel-right">
+            <div class="panel-title-bar">
+                <span class="panel-icon" id="rightPanelIcon">💬</span>
+                <h2 class="panel-title" id="rightPanelTitle">對話日誌</h2>
+                <div class="panel-controls">
+                    <button class="icon-btn" id="clearLog" title="清除日誌">🗑</button>
+                    <button class="icon-btn" id="scrollLock" title="捲動鎖定：關">🔓</button>
                 </div>
             </div>
+
             <div class="thought-log" id="thoughtLog">
                 <div class="log-entry system">
-                    <span class="time">15:30:01</span>
-                    <span class="msg">System initialized. Awaiting user input.</span>
+                    <span class="log-badge badge-sys">SYS</span>
+                    <div class="log-body">
+                        <span class="log-time" id="initTime"></span>
+                        <span class="log-msg">系統就緒，純對話模式啟用。</span>
+                    </div>
                 </div>
             </div>
-        </section>
+
+            <div class="studio-note">
+                <div class="studio-note-header">
+                    <span>💡</span>
+                    <span class="studio-title">隔離說明</span>
+                </div>
+                <p class="studio-desc">此對話面板與技能執行完全隔離。AI 僅接收對話內容，不存取技能庫。</p>
+            </div>
+        </aside>
     </div>
 
-    <!-- Modals -->
+    <!-- ===== SKILL DETAIL DRAWER ===== -->
+    <div class="drawer-overlay hidden" id="drawerOverlay"></div>
+    <aside class="skill-drawer hidden" id="skillDrawer">
+        <div class="drawer-header">
+            <div class="drawer-title-row">
+                <h2 class="drawer-title" id="drawerSkillName">技能詳情</h2>
+                <div class="drawer-badge-row">
+                    <span class="drawer-status-badge" id="drawerStatusBadge">—</span>
+                </div>
+            </div>
+            <div class="drawer-actions">
+                <button class="drawer-btn btn-view" id="drawerViewBtn">🔍 唯讀</button>
+                <button class="drawer-btn btn-edit" id="drawerEditBtn">✏️ 編輯</button>
+                <button class="icon-btn" id="drawerCloseBtn" title="關閉">✕</button>
+            </div>
+        </div>
+
+        <!-- Read-only view -->
+        <div class="drawer-section" id="drawerReadView">
+            <div class="drawer-meta" id="drawerMeta"></div>
+            <div class="drawer-skill-body" id="drawerBody"></div>
+            <div class="drawer-footer-actions">
+                <button class="action-btn btn-install hidden" id="installDepsBtn">⬇ 安裝缺失依賴</button>
+            </div>
+        </div>
+
+        <!-- Edit mode -->
+        <div class="drawer-section hidden" id="drawerEditView">
+            <div class="edit-toolbar">
+                <span class="edit-notice">⚠ 編輯前已自動備份 SKILL.md.bak</span>
+            </div>
+            <textarea id="skillEditor" class="skill-editor" spellcheck="false"></textarea>
+            <div class="yaml-error hidden" id="yamlError">
+                <span id="yamlErrorMsg"></span>
+            </div>
+            <div class="drawer-footer-actions">
+                <button class="action-btn btn-rollback hidden" id="rollbackBtn">↩ 回退版本</button>
+                <button class="action-btn btn-save" id="saveSkillBtn">💾 儲存</button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- ===== AUTH MODAL ===== -->
     <div id="authModal" class="modal-overlay hidden">
-        <div class="modal auth-card highlight-red">
-            <div class="modal-header">
-                <span class="warning-icon">⚠️</span>
-                <h2>Authorization Required</h2>
+        <div class="modal-card">
+            <div class="modal-card-header">
+                <div class="modal-warning-badge">⚠</div>
+                <div>
+                    <h2 class="modal-title">需要授權</h2>
+                    <p class="modal-subtitle">高風險操作請求</p>
+                </div>
             </div>
             <div class="modal-body">
-                <p class="risk-desc" id="riskDesc">Agent is requesting a high-risk operation.</p>
-                <div class="detail-box" id="authDetails"></div>
+                <p class="risk-text" id="riskDesc"></p>
+                <div class="detail-code" id="authDetails"></div>
             </div>
             <div class="modal-footer">
-                <button class="btn secondary" id="denyBtn">Deny</button>
-                <button class="btn primary red" id="approveBtn">Authorize Execution</button>
+                <button class="btn-secondary" id="denyBtn">拒絕</button>
+                <button class="btn-primary" id="approveBtn">授權執行</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ===== CREATE SKILL MODAL ===== -->
+    <div id="createSkillModal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-card-header">
+                <div>
+                    <h2 class="modal-title">新增技能</h2>
+                    <p class="modal-subtitle">建立一個新的 MCP Skill 模板</p>
+                </div>
+                <button class="icon-btn" id="closeCreateModalBtn" title="關閉">✕</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px;">
+                <div class="form-group">
+                    <label class="form-label"
+                        style="font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:4px; display:block;">技能識別碼
+                        (ID)*</label>
+                    <input type="text" id="newSkillId" placeholder="例如: web-scraper (只能英文/數字/連字號)" class="form-input"
+                        style="width:100%; padding:8px; border:1px solid var(--border-strong); border-radius:6px; font-family:var(--font-mono); font-size:13px;">
+                    <span style="font-size:11px; color:var(--text-muted); display:block; margin-top:4px;">自動加上 `mcp-`
+                        前綴，將成為資料夾名稱</span>
+                </div>
+                <div class="form-group">
+                    <label class="form-label"
+                        style="font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:4px; display:block;">顯示名稱*</label>
+                    <input type="text" id="newSkillName" placeholder="例如: 網頁爬蟲" class="form-input"
+                        style="width:100%; padding:8px; border:1px solid var(--border-strong); border-radius:6px; font-size:13px;">
+                </div>
+                <div class="form-group">
+                    <label class="form-label"
+                        style="font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:4px; display:block;">簡短描述*</label>
+                    <input type="text" id="newSkillDesc" placeholder="說明這個技能的功能..." class="form-input"
+                        style="width:100%; padding:8px; border:1px solid var(--border-strong); border-radius:6px; font-size:13px;">
+                </div>
+                <div class="form-group">
+                    <label class="form-label"
+                        style="font-size:12px; font-weight:600; color:var(--text-secondary); margin-bottom:4px; display:block;">分類</label>
+                    <select id="newSkillCatSelect" class="form-input"
+                        style="width:100%; padding:8px; border:1px solid var(--border-strong); border-radius:6px; font-size:13px; margin-bottom:4px; margin-top:0px;">
+                        <!-- Options will be populated via JS -->
+                    </select>
+                    <input type="text" id="newSkillCat" placeholder="請輸入新分類名稱..." class="form-input hidden"
+                        style="width:100%; padding:8px; border:1px solid var(--border-strong); border-radius:6px; font-size:13px;">
+                </div>
+                <div class="yaml-error hidden" id="createSkillError" style="margin-top: 8px;"></div>
+            </div>
+            <div class="modal-footer" style="justify-content: flex-end; gap: 8px;">
+                <button class="btn-secondary" id="cancelCreateBtn">取消</button>
+                <button class="btn-primary" id="confirmCreateBtn"
+                    style="background: var(--cis-blue); color: white; border: none; padding: 6px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;">建立</button>
             </div>
         </div>
     </div>
 
     <script src="app.js"></script>
+    <script>
+        document.getElementById('initTime').textContent =
+            new Date().toLocaleTimeString('zh-TW', { hour12: false }) + ' ';
+        function insertSugg(text) {
+            const el = document.getElementById('userInput');
+            el.value = text;
+            el.focus();
+        }
+    </script>
 </body>
+
 </html>

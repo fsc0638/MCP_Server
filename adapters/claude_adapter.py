@@ -131,3 +131,41 @@ class ClaudeAdapter:
         except Exception as e:
             logger.error(f"Claude chat error: {e}")
             return {"status": "error", "message": str(e)}
+
+    def simple_chat(self, session_history: list) -> dict:
+        """
+        Pure LLM conversation — NO tools, NO skill schema injection.
+        Strictly isolated from skill execution.
+
+        Args:
+            session_history: List of {role, content} dicts (OpenAI format).
+                             System messages are extracted automatically.
+        Returns:
+            {status: 'success'|'error', content: str}
+        """
+        if not self.is_available:
+            return {"status": "error", "message": "Claude adapter is not available. Check ANTHROPIC_API_KEY."}
+
+        try:
+            system_content = ""
+            messages = []
+            for msg in session_history:
+                role = msg.get("role")
+                content = msg.get("content", "")
+                if role == "system":
+                    system_content = content
+                elif role in ("user", "assistant") and content:
+                    messages.append({"role": role, "content": content})
+
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                system=system_content or "你是研發組的 AI 助理，請以繁體中文回覆。",
+                messages=messages
+                # NOTE: No tools= passed — strictly isolated
+            )
+            return {"status": "success", "content": response.content[0].text}
+        except Exception as e:
+            logger.error(f"Claude simple_chat error: {e}")
+            return {"status": "error", "message": str(e)}
+

@@ -1,61 +1,117 @@
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-from typing import Optional, Dict, Any, List
-import logging
+"""
+MCP Skill Server — Router (Redefined Architecture)
+
+Two strictly isolated layers:
+  1. /chat         → Pure LLM conversation (NO skill execution, NO tools injection)
+  2. /skills/*     → Skill management CRUD (read, update, validate, install deps)
+
+The agent-mode tool-calling endpoints (/execute, old SSE /chat) are preserved
+but kept separate and NOT connected to the chat panel.
+"""
+import os
+import sys
 import json
+import shutil
 import asyncio
+import logging
+import subprocess
+from pathlib import Path
+from datetime import datetime
+from typing import Optional, Dict, Any, List
+
+import yaml
+from fastapi import FastAPI, HTTPException, Query, Request, Body
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from main import get_uma, PROJECT_ROOT
 
 logger = logging.getLogger("MCP_Server.Router")
 
-# Reload trigger for CIS Guideline update
+MEMORY_PATH = PROJECT_ROOT / "memory" / "MEMORY.md"
+MEMORY_PATH.parent.mkdir(exist_ok=True)
+
 app = FastAPI(
-    title="MCP Skill Server",
-    description="Unified Model Adapter — Bridges LLMs with GitHub Skills",
-    version="0.1.0"
+    title="MCP Agent Console API",
+    description="Skill Management + Pure LLM Chat — Strictly Isolated",
+    version="2.0.0"
 )
 
-# --- Static File Serving (Decoupled UI) ---
 static_dir = PROJECT_ROOT / "static"
 if not static_dir.exists():
     static_dir.mkdir()
 app.mount("/ui", StaticFiles(directory=str(static_dir)), name="static")
 
 
-# --- Request/Response Models ---
-class ExecuteRequest(BaseModel):
-    skill_name: str
-    arguments: Dict[str, Any] = {}
+# ─── Session Store (in-memory, flushed to MEMORY.md on demand) ────────────────
 
+# session_id → list of {role, content}
+_sessions: Dict[str, List[Dict[str, Any]]] = {}
+
+SYSTEM_PROMPT = (
+    "你是研發組 MCP Agent Console 的 AI 助理。\n"
+    "你的職責是回答用戶關於技術、開發、管理或任何其他問題。\n"
+    "你沒有存取任何外部工具或技能執行的能力。\n"
+    "請以繁體中文回覆，保持專業、清晰、簡潔。"
+)
+
+
+def get_session(session_id: str) -> List[Dict[str, Any]]:
+    if session_id not in _sessions:
+        _sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    return _sessions[session_id]
+
+
+def flush_session_to_memory(session_id: str):
+    """Persist conversation history to MEMORY.md."""
+    history = _sessions.get(session_id, [])
+    if len(history) <= 1:  # Only system msg, nothing to save
+        return
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines = [f"\n## Session: {session_id} — {timestamp}\n"]
+        for msg in history:
+            if msg["role"] == "system":
+                continue
+            role_label = "👤 User" if msg["role"] == "user" else "🤖 Assistant"
+            lines.append(f"**{role_label}**: {msg['content']}\n\n")
+
+        with open(MEMORY_PATH, "a", encoding="utf-8") as f:
+            f.writelines(lines)
+        logger.info(f"Session {session_id} flushed to MEMORY.md")
+    except Exception as e:
+        logger.error(f"Failed to flush session to memory: {e}")
+
+
+# ─── Request / Response Models ────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     user_input: str
-    session_id: Optional[str] = "web_user"
+    session_id: Optional[str] = "default"
     model: Optional[str] = "openai"
+    injected_skill: Optional[str] = None  # For "Attach Skill" feature
+
+
+class SkillUpdateRequest(BaseModel):
+    yaml_content: str   # Raw YAML frontmatter string to validate + write
+
+
+class ExecuteRequest(BaseModel):
+    skill_name: str
+    arguments: Dict[str, Any] = {}
 
 
 class SearchRequest(BaseModel):
     query: str
 
 
-class ExecuteResponse(BaseModel):
-    status: str
-    output: Optional[str] = None
-    message: Optional[str] = None
-    stderr: Optional[str] = None
-    exit_code: Optional[int] = None
-    requires_approval: Optional[bool] = None
-    risk_description: Optional[str] = None
+# ─── Health ───────────────────────────────────────────────────────────────────
 
-
-# --- Routes ---
-
-@app.get("/health")
+@app.get("/health", tags=["System"])
 def health_check():
-    """System health check with dependency readiness overview."""
+    """System health: skill scan summary."""
     uma = get_uma()
     skills_status = {}
     for name, data in uma.registry.skills.items():
@@ -72,142 +128,422 @@ def health_check():
     }
 
 
-@app.get("/tools")
-def list_tools(model: str = Query("openai", description="Model type: openai, gemini, claude")):
-    """Returns all registered tool definitions for the specified model, with degraded markers."""
+# ─── PURE CHAT (Isolation Wall) ───────────────────────────────────────────────
+
+@app.post("/chat", tags=["Chat"])
+async def chat(req: ChatRequest):
+    """
+    Pure LLM conversation endpoint.
+    ISOLATION GUARANTEE:
+      - Does NOT scan or load skills_manifest.json
+      - Does NOT pass tools/schema to the LLM
+      - Maintains session history for multi-turn conversation
+      - Supports optional skill metadata injection (Attach Skill feature)
+    """
+    from adapters.openai_adapter import OpenAIAdapter
+    from adapters.gemini_adapter import GeminiAdapter
+    from adapters.claude_adapter import ClaudeAdapter
+
+    uma = get_uma()
+
+    # 1. Get or create session history
+    history = get_session(req.session_id)
+
+    # 2. Optional: inject skill metadata from "Attach Skill" feature
+    skill_context = ""
+    if req.injected_skill:
+        skill_data = uma.registry.get_skill(req.injected_skill)
+        if skill_data:
+            meta = skill_data["metadata"]
+            skill_context = (
+                f"\n\n[參考技能資訊 — {req.injected_skill}]\n"
+                f"描述：{meta.get('description', '無')}\n"
+                f"狀態：{'就緒' if meta.get('_env_ready') else '降級'}\n"
+                f"（注意：這僅是參考資訊，你不會執行此技能）"
+            )
+
+    # 3. Append user message (with optional skill context)
+    user_content = req.user_input + skill_context
+    history.append({"role": "user", "content": user_content})
+
+    # 4. Select adapter and call simple_chat (NO tools)
+    try:
+        if req.model == "openai":
+            adapter = OpenAIAdapter(uma)
+        elif req.model == "gemini":
+            adapter = GeminiAdapter(uma)
+        else:
+            adapter = ClaudeAdapter(uma)
+
+        if not adapter.is_available:
+            return JSONResponse(status_code=503, content={
+                "status": "error",
+                "message": f"模型 {req.model} 無法使用，請確認 API Key 是否設定於 .env"
+            })
+
+        result = adapter.simple_chat(history)
+
+    except Exception as e:
+        logger.error(f"Chat error: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
+
+    # 5. Append assistant reply to history
+    if result.get("status") == "success":
+        history.append({"role": "assistant", "content": result["content"]})
+        # Auto-flush every 20 messages to prevent memory loss
+        if len(history) % 20 == 0:
+            flush_session_to_memory(req.session_id)
+
+    return result
+
+
+@app.post("/chat/flush/{session_id}", tags=["Chat"])
+def flush_memory(session_id: str):
+    """Manually persist a session's conversation to MEMORY.md."""
+    flush_session_to_memory(session_id)
+    return {"status": "success", "message": f"Session '{session_id}' flushed to MEMORY.md"}
+
+
+@app.delete("/chat/session/{session_id}", tags=["Chat"])
+def clear_session(session_id: str):
+    """Clear a conversation session (reset context)."""
+    flush_session_to_memory(session_id)
+    _sessions.pop(session_id, None)
+    return {"status": "success", "message": f"Session '{session_id}' cleared"}
+
+
+# ─── SKILL MANAGEMENT ─────────────────────────────────────────────────────────
+
+@app.get("/skills/list", tags=["Skill Management"])
+def list_skills():
+    """Full skill list with metadata and dependency status."""
+    uma = get_uma()
+    skills = {}
+    for name, data in uma.registry.skills.items():
+        meta = data["metadata"]
+        skills[name] = {
+            "description": meta.get("description", ""),
+            "version": meta.get("version", "unknown"),
+            "ready": meta.get("_env_ready", False),
+            "missing_deps": meta.get("_missing_deps", []),
+            "path": str(data["path"])
+        }
+    return {"total": len(skills), "skills": skills}
+
+
+@app.get("/skills/{skill_name}", tags=["Skill Management"])
+def get_skill(skill_name: str):
+    """
+    Read a skill's SKILL.md raw content and backup status.
+    Returns both the YAML frontmatter and the markdown body.
+    """
+    uma = get_uma()
+    skill = uma.registry.get_skill(skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    skill_md_path = skill["path"] / "SKILL.md"
+    bak_path = skill["path"] / "SKILL.md.bak"
+
+    try:
+        content = skill_md_path.read_text(encoding="utf-8")
+        has_backup = bak_path.exists()
+        backup_time = None
+        if has_backup:
+            backup_time = datetime.fromtimestamp(bak_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+
+        return {
+            "skill_name": skill_name,
+            "raw_content": content,
+            "has_backup": has_backup,
+            "backup_modified": backup_time,
+            "metadata": {k: v for k, v in skill["metadata"].items() if not k.startswith("_")}
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/skills/{skill_name}", tags=["Skill Management"])
+def update_skill(skill_name: str, req: SkillUpdateRequest):
+    """
+    Update a skill's SKILL.md.
+    Safety measures:
+      1. Path sanitization — only writes within skills/ directory
+      2. YAML format validation — rejects malformed frontmatter
+      3. Auto-backup — saves SKILL.md.bak before overwriting
+    """
+    uma = get_uma()
+    skill = uma.registry.get_skill(skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    skill_path = skill["path"].resolve()
+    skills_home = uma.registry.skills_home.resolve()
+
+    # 1. Path sanitization
+    try:
+        skill_path.relative_to(skills_home)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path traversal denied: skill path is outside skills directory")
+
+    skill_md_path = skill_path / "SKILL.md"
+    bak_path = skill_path / "SKILL.md.bak"
+
+    # 2. YAML format validation
+    new_content = req.yaml_content
+    if not new_content.startswith("---"):
+        raise HTTPException(status_code=422, detail="YAML 格式錯誤：SKILL.md 必須以 '---' 開頭")
+    try:
+        parts = new_content.split("---")
+        if len(parts) < 3:
+            raise ValueError("Missing closing '---' for frontmatter")
+        yaml.safe_load(parts[1])  # Validate YAML
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=422, detail=f"YAML 格式錯誤：{str(e)}")
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    # 3. Backup original
+    try:
+        if skill_md_path.exists():
+            shutil.copy2(skill_md_path, bak_path)
+
+        skill_md_path.write_text(new_content, encoding="utf-8")
+
+        # Clear registry cache so next scan picks up changes
+        uma.registry.skills.pop(skill_name, None)
+
+        logger.info(f"Skill '{skill_name}' updated. Backup saved to SKILL.md.bak")
+        return {
+            "status": "success",
+            "message": f"技能 '{skill_name}' 已更新，原始備份已儲存至 SKILL.md.bak",
+            "backup_created": str(bak_path)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/skills/{skill_name}/rollback", tags=["Skill Management"])
+def rollback_skill(skill_name: str):
+    """
+    Rollback a skill's SKILL.md to its last backup (SKILL.md.bak).
+    """
+    uma = get_uma()
+    skill = uma.registry.get_skill(skill_name)
+
+    # Also check path directly even if not in registry
+    skills_home = uma.registry.skills_home
+    skill_path = skills_home / skill_name
+    if not skill_path.exists():
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    bak_path = skill_path / "SKILL.md.bak"
+    skill_md_path = skill_path / "SKILL.md"
+
+    if not bak_path.exists():
+        raise HTTPException(status_code=404, detail=f"找不到備份檔案 (SKILL.md.bak)，無法回退")
+
+    try:
+        shutil.copy2(bak_path, skill_md_path)
+        uma.registry.skills.pop(skill_name, None)
+        logger.info(f"Skill '{skill_name}' rolled back from SKILL.md.bak")
+        return {"status": "success", "message": f"技能 '{skill_name}' 已回退至上次備份版本"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/skills/{skill_name}/install", tags=["Skill Management"])
+def install_skill_deps(skill_name: str):
+    """
+    Trigger pip install for a degraded skill's missing dependencies.
+    Only installs packages listed in the skill's runtime_requirements.
+    """
+    uma = get_uma()
+    skill = uma.registry.get_skill(skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    missing = skill["metadata"].get("_missing_deps", [])
+    if not missing:
+        return {"status": "already_ready", "message": "此技能的依賴已全部就緒，無需安裝"}
+
+    results = []
+    for pkg in missing:
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pip", "install", pkg],
+                capture_output=True, text=True, timeout=120
+            )
+            if proc.returncode == 0:
+                results.append({"package": pkg, "status": "installed"})
+                logger.info(f"Installed {pkg} for skill '{skill_name}'")
+            else:
+                results.append({"package": pkg, "status": "failed", "error": proc.stderr[:300]})
+                logger.error(f"Failed to install {pkg}: {proc.stderr[:300]}")
+        except Exception as e:
+            results.append({"package": pkg, "status": "error", "error": str(e)})
+
+    # Force re-scan so registry refreshes
+    uma.registry.skills.pop(skill_name, None)
+
+    return {
+        "status": "done",
+        "message": "安裝完成，請點擊「重新掃描」刷新技能狀態",
+        "results": results
+    }
+
+
+@app.post("/skills/rescan", tags=["Skill Management"])
+def rescan_skills():
+    """Re-scan the skills directory and refresh the registry."""
+    uma = get_uma()
+    uma.registry.skills.clear()
+    uma.registry.validation_cache.clear()
+    uma.registry.scan_skills()
+    return {
+        "status": "success",
+        "total_skills": len(uma.registry.skills),
+        "message": "技能庫重新掃描完成"
+    }
+
+
+class CreateSkillRequest(BaseModel):
+    name: str           # Must be ASCII + hyphens only, e.g. "my-skill"
+    display_name: str   # Human-readable name (any language)
+    description: str    # Short description (any language)
+    version: str = "1.0.0"
+    category: str = ""  # Optional category tag
+
+
+import re as _re
+
+@app.post("/skills/create", tags=["Skill Management"])
+def create_skill(req: CreateSkillRequest):
+    """
+    Create a new skill directory with a SKILL.md template.
+    Safety:
+      - Name must match ^[a-zA-Z0-9-]+$ (LLM tool name compatibility)
+      - Name is auto-prefixed with 'mcp-' if not already
+      - Refuses to overwrite an existing skill
+    """
+    uma = get_uma()
+    skills_home = uma.registry.skills_home
+
+    # 1. Normalize and validate name
+    name = req.name.strip().lower().replace("_", "-")
+    if not name.startswith("mcp-"):
+        name = f"mcp-{name}"
+
+    if not _re.match(r'^[a-z0-9-]+$', name):
+        raise HTTPException(
+            status_code=422,
+            detail="技能識別碼只能包含英文小寫字母、數字和連字號（例：my-skill）"
+        )
+    if len(name) < 5 or len(name) > 60:
+        raise HTTPException(status_code=422, detail="技能識別碼長度需在 5–60 字元之間")
+
+    # 2. Check for duplicates
+    skill_path = (skills_home / name).resolve()
+    try:
+        skill_path.relative_to(skills_home.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="路徑不合法")
+
+    if skill_path.exists():
+        raise HTTPException(status_code=409, detail=f"技能「{name}」已存在，請使用其他識別碼")
+
+    # 3. Scaffold directory + SKILL.md template
+    try:
+        skill_path.mkdir(parents=True)
+        (skill_path / "scripts").mkdir()
+        (skill_path / "references").mkdir()
+
+        skill_md = f"""---
+name: {name}
+display_name: "{req.display_name}"
+description: "{req.description}"
+version: "{req.version}"
+category: "{req.category}"
+runtime_requirements: []
+risk_level: "low"
+---
+
+# {req.display_name}
+
+{req.description}
+
+## 使用方式
+
+說明此技能的使用方法、接受的輸入與回傳的輸出格式。
+
+## 注意事項
+
+- 此為新建技能，尚未設定執行腳本
+- 請在 `scripts/` 目錄下新增 `main.py` 以啟用執行功能
+"""
+        (skill_path / "SKILL.md").write_text(skill_md, encoding="utf-8")
+
+        # Auto-rescan so it shows up immediately
+        uma.registry.scan_skills()
+
+        logger.info(f"New skill created: {name}")
+        return {
+            "status": "success",
+            "skill_name": name,
+            "path": str(skill_path),
+            "message": f"技能「{name}」已建立，請在左側列表中查看"
+        }
+    except Exception as e:
+        # Cleanup on failure
+        if skill_path.exists():
+            shutil.rmtree(skill_path, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+# ─── LEGACY AGENT ENDPOINTS (preserved, not used by chat panel) ────────────────
+
+@app.post("/execute", tags=["Agent (Legacy)"])
+def execute_tool(request: ExecuteRequest):
+    """Execute a skill script directly (agent mode, not connected to chat panel)."""
+    uma = get_uma()
+    skill = uma.registry.get_skill(request.skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{request.skill_name}' not found")
+    if not skill["metadata"].get("_env_ready", False):
+        return {
+            "status": "unavailable",
+            "message": f"Skill '{request.skill_name}' is DEGRADED",
+            "missing": skill["metadata"].get("_missing_deps", [])
+        }
+    return uma.execute_tool_call(request.skill_name, request.arguments)
+
+
+@app.get("/tools", tags=["Agent (Legacy)"])
+def list_tools(model: str = Query("openai")):
+    """List tool definitions for agent mode (not used by chat panel)."""
     uma = get_uma()
     tools = uma.get_tools_for_model(model)
     return {"model": model, "tool_count": len(tools), "tools": tools}
 
 
-@app.post("/execute", response_model=ExecuteResponse)
-def execute_tool(request: ExecuteRequest):
-    """Executes a skill script. Supports Human-in-the-loop via requires_approval status."""
-    uma = get_uma()
-
-    # Verify skill exists
-    skill = uma.registry.get_skill(request.skill_name)
-    if not skill:
-        raise HTTPException(status_code=404, detail=f"Skill '{request.skill_name}' not found")
-
-    # Check if skill is in degraded mode
-    if not skill["metadata"].get("_env_ready", False):
-        return ExecuteResponse(
-            status="unavailable",
-            message=f"Skill '{request.skill_name}' is in DEGRADED mode. Missing: {skill['metadata'].get('_missing_deps', [])}"
-        )
-
-    result = uma.execute_tool_call(request.skill_name, request.arguments)
-
-    return ExecuteResponse(
-        status=result.get("status", "error"),
-        output=result.get("output"),
-        message=result.get("message"),
-        stderr=result.get("stderr"),
-        exit_code=result.get("exit_code"),
-        requires_approval=result.get("requires_approval"),
-        risk_description=result.get("risk_description")
-    )
-
-
-@app.get("/chat")
-async def chat_stream(user_input: str, model: str = "openai", request: Request = None):
-    """
-    SSE Endpoint for real-time thought streaming.
-    Streams events: 'thought', 'tool_start', 'tool_result', 'response', 'memory_sync'.
-    """
-    uma = get_uma()
-    
-    # Lazy imports for adapters to keep router light
-    from adapters.openai_adapter import OpenAIAdapter
-    from adapters.gemini_adapter import GeminiAdapter
-    from adapters.claude_adapter import ClaudeAdapter
-    
-    async def event_generator():
-        try:
-            # 1. Initialize Adapter
-            if model == "openai":
-                adapter = OpenAIAdapter(uma)
-            elif model == "gemini":
-                adapter = GeminiAdapter(uma)
-            else:
-                adapter = ClaudeAdapter(uma)
-                
-            if not adapter.is_available:
-                yield {"event": "error", "data": f"Model {model} is not available (check API keys)"}
-                return
-
-            # 2. Start Thinking
-            yield {"event": "thought", "data": json.dumps({"message": f"Thinking about: {user_input}..."})}
-            await asyncio.sleep(0.5) # Slight delay for UI feel
-            
-            # 3. Process with Adapter (this part is currently sync in UMA core)
-            # In a real async system, adapter.chat would be async.
-            # For now we wrap it or just call it.
-            # To simulate "Thought Stream", the adapter itself would ideally yield events.
-            # Since UMA is sync, we'll emit a 'processing' event.
-            yield {"event": "status", "data": json.dumps({"status": "processing", "tool": "analyzing_intent"})}
-            
-            # Note: The current UMA adapters handle the tool-execution loop INTERNALLY.
-            # This makes streaming granular steps difficult without refactoring UMA.
-            # PROPOSAL: We'll wrap the executor to catch calls and emit events.
-            
-            result = adapter.chat(user_input)
-            
-            if result.get("status") == "success":
-                yield {"event": "response", "data": json.dumps({"content": result.get("content", "")})}
-            else:
-                yield {"event": "error", "data": json.dumps({"message": result.get("message", "Unknown error")})}
-
-            # 4. Final Memory Sync notification
-            yield {"event": "memory_sync", "data": json.dumps({"status": "synced"})}
-
-        except Exception as e:
-            logger.error(f"SSE Error: {e}")
-            yield {"event": "error", "data": str(e)}
-
-    return EventSourceResponse(event_generator())
-
-
-@app.get("/resources/{skill_name}/{file_name}")
-def read_resource(
-    skill_name: str,
-    file_name: str,
-    limit: int = Query(500, description="Max characters to return. 0 = unlimited.", ge=0)
-):
-    """
-    Read a file from a skill's References/ directory.
-    Token-aware: defaults to 500 chars. Use limit=0 for full content.
-    """
+@app.get("/resources/{skill_name}/{file_name}", tags=["Resources"])
+def read_resource(skill_name: str, file_name: str, limit: int = Query(500, ge=0)):
     uma = get_uma()
     result = uma.executor.read_resource(skill_name, file_name)
-
     if result["status"] != "success":
-        raise HTTPException(status_code=404, detail=result.get("message", "Resource not found"))
-
+        raise HTTPException(status_code=404, detail=result.get("message"))
     content = result["content"]
-    truncated = False
-
-    if limit > 0 and len(content) > limit:
+    truncated = limit > 0 and len(content) > limit
+    if truncated:
         content = content[:limit]
-        truncated = True
-
-    return {
-        "status": "success",
-        "content": content,
-        "truncated": truncated,
-        "total_length": len(result["content"]),
-        "returned_length": len(content)
-    }
+    return {"status": "success", "content": content, "truncated": truncated}
 
 
-@app.post("/search/{skill_name}/{file_name}")
+@app.post("/search/{skill_name}/{file_name}", tags=["Resources"])
 def search_resource(skill_name: str, file_name: str, request: SearchRequest):
-    """Grep-like search within a skill's References/ directory. Max 50 matches."""
     uma = get_uma()
     result = uma.executor.search_resource(skill_name, file_name, request.query)
-
     if result["status"] != "success":
-        raise HTTPException(status_code=404, detail=result.get("message", "Resource not found"))
-
+        raise HTTPException(status_code=404, detail=result.get("message"))
     return result

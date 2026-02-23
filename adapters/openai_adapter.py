@@ -1,6 +1,9 @@
 """
-OpenAI Adapter (Phase 4)
-Handles communication with OpenAI GPT models using function calling.
+OpenAI Adapter
+Handles communication with OpenAI GPT models.
+Provides two modes:
+  - simple_chat(): Pure LLM conversation (no tools, for Agent Console chat panel)
+  - chat(): Full tool-calling agent mode (for future use)
 """
 import os
 import json
@@ -149,4 +152,30 @@ class OpenAIAdapter:
 
         except Exception as e:
             logger.error(f"OpenAI chat error: {e}")
+            return {"status": "error", "message": str(e)}
+
+    def simple_chat(self, session_history: list) -> dict:
+        """
+        Pure LLM conversation — NO tools, NO skill schema injection.
+        Strictly isolated from skill execution.
+
+        Args:
+            session_history: Full conversation so far as list of
+                             {role, content} dicts. Must include system msg.
+        Returns:
+            {status: 'success'|'error', content: str, message: str}
+        """
+        if not self.is_available:
+            return {"status": "error", "message": "OpenAI adapter is not available. Check OPENAI_API_KEY."}
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=session_history
+                # NOTE: No 'tools' or 'tool_choice' passed — strictly isolated
+            )
+            content = response.choices[0].message.content
+            return {"status": "success", "content": content}
+        except Exception as e:
+            logger.error(f"OpenAI simple_chat error: {e}")
             return {"status": "error", "message": str(e)}
