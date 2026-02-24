@@ -20,9 +20,9 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query, Request, Body
+from fastapi import FastAPI, HTTPException, Query, Request, Body, File, UploadFile
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -33,6 +33,9 @@ logger = logging.getLogger("MCP_Server.Router")
 MEMORY_PATH = PROJECT_ROOT / "memory" / "MEMORY.md"
 MEMORY_PATH.parent.mkdir(exist_ok=True)
 
+WORKSPACE_DIR = PROJECT_ROOT / "workspace"
+WORKSPACE_DIR.mkdir(exist_ok=True)
+
 app = FastAPI(
     title="MCP Agent Console API",
     description="Skill Management + Pure LLM Chat — Strictly Isolated",
@@ -42,7 +45,7 @@ app = FastAPI(
 static_dir = PROJECT_ROOT / "static"
 if not static_dir.exists():
     static_dir.mkdir()
-app.mount("/ui", StaticFiles(directory=str(static_dir)), name="static")
+app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="static")
 
 
 # ─── Session Store (in-memory, flushed to MEMORY.md on demand) ────────────────
@@ -92,6 +95,8 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = "default"
     model: Optional[str] = "openai"
     injected_skill: Optional[str] = None  # For "Attach Skill" feature
+    execute: Optional[bool] = False       # Switch to agent mode for executing skills
+    attached_file: Optional[str] = None   # Absolute path of uploaded workspace file
 
 
 class SkillUpdateRequest(BaseModel):
@@ -133,12 +138,12 @@ def health_check():
 @app.post("/chat", tags=["Chat"])
 async def chat(req: ChatRequest):
     """
-    Pure LLM conversation endpoint.
-    ISOLATION GUARANTEE:
-      - Does NOT scan or load skills_manifest.json
+    LLM conversation endpoint.
+    If req.execute is False -> PURE CHAT (Isolation Guarantee)
       - Does NOT pass tools/schema to the LLM
-      - Maintains session history for multi-turn conversation
-      - Supports optional skill metadata injection (Attach Skill feature)
+    If req.execute is True -> AGENT MODE
+      - Passes skill tools to the LLM to execute
+      - Can inject attached file path via System Prompt
     """
     from adapters.openai_adapter import OpenAIAdapter
     from adapters.gemini_adapter import GeminiAdapter
@@ -149,24 +154,41 @@ async def chat(req: ChatRequest):
     # 1. Get or create session history
     history = get_session(req.session_id)
 
-    # 2. Optional: inject skill metadata from "Attach Skill" feature
+    # 2. Dynamic execution context (File Attachment)
+    execution_context = ""
+    if req.execute and req.attached_file:
+        execution_context = f"\n\n[系統提醒：目前工作區已有檔案，其絕對路徑為 {req.attached_file}。請主動使用此檔案進行操作。]"
+
+    # 3. Skill context injection (Plan B: context only, AI gets ALL tools in execute mode)
     skill_context = ""
     if req.injected_skill:
         skill_data = uma.registry.get_skill(req.injected_skill)
         if skill_data:
             meta = skill_data["metadata"]
-            skill_context = (
-                f"\n\n[參考技能資訊 — {req.injected_skill}]\n"
-                f"描述：{meta.get('description', '無')}\n"
-                f"狀態：{'就緒' if meta.get('_env_ready') else '降級'}\n"
-                f"（注意：這僅是參考資訊，你不會執行此技能）"
-            )
+            if req.execute:
+                # In execute mode: inject skill as REFERENCE GUIDE, tell AI it has all tools
+                skill_context = (
+                    f"\n\n[參考技能知識庫 — {req.injected_skill}]\n"
+                    f"說明：{meta.get('description', '無')}\n"
+                    f"注意：在執行模式下，你可以使用所有可用的工具（包括 mcp-python-executor）來完成任務。"
+                    f"上方技能提供的是操作知識，請結合這些知識與可用工具真正執行任務。\n"
+                )
+            else:
+                # In pure chat mode: read-only reference
+                skill_context = (
+                    f"\n\n[參考技能資訊 — {req.injected_skill}]\n"
+                    f"描述：{meta.get('description', '無')}\n"
+                    f"狀態：{'就緒' if meta.get('_env_ready') else '降級'}\n"
+                    f"（注意：這僅是參考資訊，你不具有執行能力。）"
+                )
 
-    # 3. Append user message (with optional skill context)
-    user_content = req.user_input + skill_context
-    history.append({"role": "user", "content": user_content})
+    # 4. Append user message
+    user_content = req.user_input + execution_context + skill_context
+    # Don't duplicate message into history if testing agent execution immediately for Gemini/Claude
+    # For now, we always append user message to the conversational log:
+    history_to_pass = history + [{"role": "user", "content": user_content}]
 
-    # 4. Select adapter and call simple_chat (NO tools)
+    # 5. Select adapter and call appropriate mode (chat vs simple_chat)
     try:
         if req.model == "openai":
             adapter = OpenAIAdapter(uma)
@@ -181,7 +203,21 @@ async def chat(req: ChatRequest):
                 "message": f"模型 {req.model} 無法使用，請確認 API Key 是否設定於 .env"
             })
 
-        result = adapter.simple_chat(history)
+        history.append({"role": "user", "content": user_content})
+
+        if req.execute:
+            # Agent Mode -> full chat with tool calling
+            # CRITICAL: Strip the pure-chat system message so adapter can inject its own agent prompt
+            agent_history = [m for m in history_to_pass if m.get("role") != "system"]
+            if req.model == "openai":
+                result = adapter.chat(messages=agent_history, user_query=user_content)
+            elif req.model == "gemini":
+                result = adapter.chat(user_message=user_content)
+            else:
+                result = adapter.chat(user_message=user_content, system_prompt=SYSTEM_PROMPT)
+        else:
+            # Pure Chat Mode -> no tools
+            result = adapter.simple_chat(history)
 
     except Exception as e:
         logger.error(f"Chat error: {e}")
@@ -512,13 +548,90 @@ def execute_tool(request: ExecuteRequest):
         raise HTTPException(status_code=404, detail=f"Skill '{request.skill_name}' not found")
     if not skill["metadata"].get("_env_ready", False):
         return {
-            "status": "unavailable",
-            "message": f"Skill '{request.skill_name}' is DEGRADED",
-            "missing": skill["metadata"].get("_missing_deps", [])
+            "status": "error",
+            "message": f"Skill '{request.skill_name}' environment is not ready (missing dependencies)"
         }
-    return uma.execute_tool_call(request.skill_name, request.arguments)
+
+    try:
+        logger.info(f"Executing skill '{request.skill_name}' via legacy /execute")
+        result = uma.execute_tool_call(request.skill_name, request.arguments)
+        return {"status": "success", "result": result}
+    except Exception as e:
+        logger.error(f"Error executing skill {request.skill_name}: {e}")
+        return {"status": "error", "message": str(e)}
+
+# ─── WORKSPACE (Skill Testing Sandbox) ────────────────────────────────────────
+
+import re
+
+def sanitize_filename(filename: str) -> str:
+    """Preserve Unicode/CJK filenames while removing path-traversal and Windows-illegal chars."""
+    filename = os.path.basename(filename)
+    # Windows illegal filename characters (explicit set, NOT regex to avoid stripping Unicode)
+    ILLEGAL_CHARS = {'\\', '/', ':', '*', '?', '"', '<', '>', '|', '\x00'}
+    filename = ''.join('_' if c in ILLEGAL_CHARS else c for c in filename)
+    filename = filename.strip('. ').strip()
+    if not filename:
+        filename = 'uploaded_file'
+    return filename
+
+@app.post("/workspace/upload", tags=["Workspace"])
+async def upload_file(file: UploadFile = File(...)):
+    """Upload a file to the workspace directory to test tools."""
+    try:
+        raw_name = file.filename
+        logger.info(f"[UPLOAD] Raw filename from browser (repr): {repr(raw_name)}")
+        safe_name = sanitize_filename(raw_name)
+        logger.info(f"[UPLOAD] After sanitize_filename: {repr(safe_name)}")
+        dest_path = WORKSPACE_DIR / safe_name
+        
+        # Append timestamp if duplicate (to not override test data)
+        if dest_path.exists():
+            logger.info(f"[UPLOAD] File exists, adding timestamp")
+            base, ext = os.path.splitext(safe_name)
+            safe_name = f"{base}_{int(datetime.now().timestamp())}{ext}"
+            dest_path = WORKSPACE_DIR / safe_name
+
+        with open(dest_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        logger.info(f"[UPLOAD] Saved to: {dest_path}")
+        return {
+            "status": "success",
+            "filename": dest_path.name,
+            "filepath": str(dest_path.resolve()).replace('\\', '/')
+        }
+    except Exception as e:
+        logger.error(f"[UPLOAD] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/workspace/download/{filename}", tags=["Workspace"])
+def download_file(filename: str):
+    """Download a file generated by a tool in the workspace."""
+    try:
+        safe_name = sanitize_filename(filename)
+        target_path = WORKSPACE_DIR / safe_name
+        
+        # Path traversal guard using strict commonpath validation
+        abs_workspace = os.path.abspath(str(WORKSPACE_DIR))
+        abs_target = os.path.abspath(str(target_path))
+        if os.path.commonpath([abs_workspace, abs_target]) != abs_workspace:
+            raise HTTPException(status_code=403, detail="Invalid path access pattern")
+
+        if not target_path.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {safe_name}")
+
+        return FileResponse(
+            path=target_path,
+            filename=safe_name,
+            media_type='application/octet-stream'
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Workspace download error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 @app.get("/tools", tags=["Agent (Legacy)"])
 def list_tools(model: str = Query("openai")):
     """List tool definitions for agent mode (not used by chat panel)."""

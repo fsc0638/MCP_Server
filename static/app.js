@@ -26,6 +26,85 @@ document.addEventListener('DOMContentLoaded', () => {
         const attachHint = document.getElementById('attachHint');
         const clearAttach = document.getElementById('clearAttach');
 
+        // New Sandbox DOM elements
+        const executeSwitchWrapper = document.getElementById('executeSwitchWrapper');
+        const executeSkillSwitch = document.getElementById('executeSkillSwitch');
+        const fileChipContainer = document.getElementById('fileChipContainer');
+        const attachedFileName = document.getElementById('attachedFileName');
+        const uploadProgressBar = document.getElementById('uploadProgressBar');
+        const uploadProgressFill = document.getElementById('uploadProgressFill');
+        const removeFileBtn = document.getElementById('removeFileBtn');
+        const workspaceFileInput = document.getElementById('workspaceFileInput');
+        const attachFileBtn = document.getElementById('attachFileBtn');
+
+        let attachedFilePath = null;
+        let isUploading = false;
+
+        function escapeHtml(s) {
+            if (!s) return '';
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        window.previewWorkspaceFile = async (filename) => {
+            try {
+                const url = `/workspace/download/${filename}`;
+                const lowerName = filename.toLowerCase();
+                let contentHtml = '';
+                if (lowerName.endsWith('.png') || lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg') || lowerName.endsWith('.webp') || lowerName.endsWith('.gif')) {
+                    contentHtml = `<img src="${url}" class="preview-image">`;
+                } else {
+                    const res = await fetch(url);
+                    const text = await res.text();
+                    contentHtml = `<pre class="preview-text">${escapeHtml(text)}</pre>`;
+                }
+
+                const modal = document.createElement('div');
+                modal.className = 'modal-overlay';
+                modal.style.zIndex = '9999';
+                modal.innerHTML = `
+                    <div class="modal-card" style="max-width: 800px; width: 90%;">
+                        <div class="modal-card-header">
+                            <h3>檔案預覽：${filename}</h3>
+                            <button class="icon-btn" onclick="this.closest('.modal-overlay').remove()">✕</button>
+                        </div>
+                        <div class="modal-card-body">
+                            <div class="preview-content">
+                                ${contentHtml}
+                            </div>
+                        </div>
+                    </div>
+                `;
+                document.body.appendChild(modal);
+            } catch (e) {
+                alert('預覽失敗: ' + e.message);
+            }
+        };
+
+        function processWorkspaceLinks(htmlText) {
+            // Regex to match "workspace/filename.ext" paths in the output text
+            // We want to replace it with a nice card UI
+            return htmlText.replace(/(?:file:\/\/\/.*?\/)?workspace\/([a-zA-Z0-9.\-_]+)/g, (match, filename) => {
+                const lowerName = filename.toLowerCase();
+                const isPreviewable = lowerName.endsWith('.txt') || lowerName.endsWith('.md') || lowerName.endsWith('.json') ||
+                    lowerName.endsWith('.png') || lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg') || lowerName.endsWith('.webp');
+
+                let previewBtnStr = '';
+                if (isPreviewable) {
+                    previewBtnStr = `<button class="action-btn preview-btn" onclick="previewWorkspaceFile('${filename}')">👁️ 預覽</button>`;
+                }
+
+                return `
+                <div class="workspace-file-card">
+                    <span class="file-icon">📄</span>
+                    <span class="file-name" title="${filename}">${filename}</span>
+                    <div class="workspace-file-actions">
+                        ${previewBtnStr}
+                        <a href="/workspace/download/${filename}" class="action-btn download-btn" download="${filename}" target="_blank">⬇️ 下載</a>
+                    </div>
+                </div>`;
+            });
+        }
+
         const sessionId = 'web-' + Math.random().toString(36).slice(2, 8);
 
         function appendMessage(role, text) {
@@ -33,12 +112,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const div = document.createElement('div');
             div.className = `message ${role}`;
             if (role === 'assistant') {
-                div.innerHTML = marked.parse(text);
+                let html = marked.parse(text);
+                html = processWorkspaceLinks(html);
+                div.innerHTML = html;
             } else {
                 div.textContent = text;
             }
             msgContainer.appendChild(div);
-            chatViewport.scrollTop = chatViewport.scrollHeight;
+            // Add a small delay for dom render to scroll accurately
+            setTimeout(() => { chatViewport.scrollTop = chatViewport.scrollHeight; }, 50);
         }
 
         function appendErrorMsg(text) {
@@ -75,24 +157,43 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const model = modelSelector.value;
             const attachedSkill = attachSelect.value || null;
+            const executeMode = executeSkillSwitch.checked;
 
             userInput.disabled = true;
             sendBtn.disabled = true;
+            if (executeMode) {
+                sendBtn.innerHTML = '<span style="font-size:11px; white-space:nowrap;">腳本執行中...</span>';
+                sendBtn.style.width = 'auto';
+                sendBtn.style.padding = '0 12px';
+                sendBtn.style.borderRadius = '16px';
+            }
             showTypingIndicator();
 
             try {
+                const payload = {
+                    user_input: text,
+                    session_id: sessionId,
+                    model: model,
+                    injected_skill: attachedSkill,
+                    execute: executeMode,
+                    attached_file: attachedFilePath
+                };
+                console.log('[CHAT] Sending payload:', JSON.stringify(payload, null, 2));
+                logModule.addLog('SYS', `發送模式: execute=${executeMode}, 檔案=${attachedFilePath ? attachedFilePath.split('/').pop() : '無'}`);
+
                 const res = await fetch('/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user_input: text,
-                        session_id: sessionId,
-                        model: model,
-                        injected_skill: attachedSkill
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 removeTypingIndicator();
+
+                // Reset send button UI
+                sendBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+                sendBtn.style.width = '36px';
+                sendBtn.style.padding = '0';
+                sendBtn.style.borderRadius = '50%';
 
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({ message: `HTTP ${res.status}` }));
@@ -100,6 +201,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 const data = await res.json();
+                console.log('[CHAT] Response data:', data);
+                logModule.addLog('SYS', `AI 回覆: status=${data.status}`);
 
                 if (data.status === 'success') {
                     appendMessage('assistant', data.content);
@@ -134,15 +237,86 @@ document.addEventListener('DOMContentLoaded', () => {
             logModule.addLog('SYS', '對話已清除，記憶已儲存至 MEMORY.md');
         }
 
-        // Attach Skill select → show hint
+        // Attach Skill select → show hint and toggle wrapper
         attachSelect.onchange = () => {
             const v = attachSelect.value;
-            attachHint.textContent = v ? `下一輪對話將包含「${v}」的技能描述（僅參考，不執行）` : '';
+            attachHint.textContent = v ? `準備載入「${v}」的相關資訊` : '';
+            if (v) {
+                executeSwitchWrapper.classList.remove('hidden');
+            } else {
+                executeSwitchWrapper.classList.add('hidden');
+                executeSkillSwitch.checked = false;
+            }
         };
         clearAttach.onclick = () => {
             attachSelect.value = '';
             attachHint.textContent = '';
+            executeSwitchWrapper.classList.add('hidden');
+            executeSkillSwitch.checked = false;
         };
+
+        // Workspace Attach File Logic
+        attachFileBtn.onclick = () => {
+            if (isUploading) return;
+            workspaceFileInput.click();
+        };
+
+        workspaceFileInput.onchange = () => {
+            const file = workspaceFileInput.files[0];
+            if (!file) return;
+
+            // Reset UI for upload
+            fileChipContainer.classList.remove('hidden');
+            attachedFileName.textContent = file.name;
+            uploadProgressBar.classList.remove('hidden');
+            uploadProgressFill.style.width = '0%';
+            isUploading = true;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/workspace/upload', true);
+
+            xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                    const percent = Math.round((e.loaded / e.total) * 100);
+                    uploadProgressFill.style.width = percent + '%';
+                }
+            };
+
+            xhr.onload = () => {
+                isUploading = false;
+                uploadProgressBar.classList.add('hidden');
+                if (xhr.status === 200) {
+                    const res = JSON.parse(xhr.responseText);
+                    attachedFilePath = res.filepath;
+                    attachedFileName.textContent = res.filename;
+                    logModule.addLog('SYS', `工作區檔案上傳成功: ${res.filename}`);
+                } else {
+                    alert('上傳失敗');
+                    clearAttachedFile();
+                }
+                workspaceFileInput.value = '';
+            };
+
+            xhr.onerror = () => {
+                isUploading = false;
+                alert('網路錯誤導致上傳失敗');
+                clearAttachedFile();
+                workspaceFileInput.value = '';
+            };
+
+            xhr.send(formData);
+        };
+
+        function clearAttachedFile() {
+            attachedFilePath = null;
+            fileChipContainer.classList.add('hidden');
+            uploadProgressBar.classList.add('hidden');
+        }
+
+        removeFileBtn.onclick = clearAttachedFile;
 
         // Event listeners
         sendBtn.onclick = sendMessage;

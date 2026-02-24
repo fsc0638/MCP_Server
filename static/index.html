@@ -101,13 +101,34 @@
                 <select id="attachSkillSelect" class="attach-select">
                     <option value="">無（純對話）</option>
                 </select>
+                <div class="execute-switch-wrapper hidden" id="executeSwitchWrapper">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="executeSkillSwitch">
+                        <span class="slider"></span>
+                    </label>
+                    <span class="switch-label">🚀 啟用執行模式</span>
+                </div>
                 <button class="attach-clear-btn" id="clearAttach" title="清除附加技能">✕</button>
                 <span class="attach-hint" id="attachHint"></span>
             </div>
 
             <!-- Input Bar -->
             <div class="chat-input-bar">
+                <div class="file-chip-container hidden" id="fileChipContainer">
+                    <div class="file-chip">
+                        <span class="file-icon">📄</span>
+                        <div class="file-info-wrap">
+                            <span class="file-name" id="attachedFileName">example.pdf</span>
+                            <div class="upload-progress-bar hidden" id="uploadProgressBar">
+                                <div class="progress-fill" id="uploadProgressFill"></div>
+                            </div>
+                        </div>
+                        <button class="remove-file-btn" id="removeFileBtn" title="移除檔案">✕</button>
+                    </div>
+                </div>
                 <div class="input-wrapper" id="inputWrapper">
+                    <input type="file" id="workspaceFileInput" class="hidden">
+                    <button class="attach-text-btn" id="attachFileBtn" title="上傳檔案至工作區">➕ 附加</button>
                     <textarea id="userInput" placeholder="輸入訊息..." rows="1" disabled></textarea>
                     <button id="sendBtn" class="send-btn" title="送出 (Enter)" disabled>
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none">

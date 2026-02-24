@@ -93,66 +93,70 @@ class OpenAIAdapter:
             user_query = user_query or (messages[-1]["content"] if messages else None)
 
         tools = self.get_tools(user_query=user_query)
+        tool_calls_made = 0
+        MAX_ITERATIONS = 10  # Safety cap
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                tools=tools if tools else None,
-                tool_choice="auto" if tools else None
-            )
-
-            choice = response.choices[0]
-
-            # If the model wants to call tools
-            if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
-                tool_results = []
-                for tool_call in choice.message.tool_calls:
-                    fn_name = tool_call.function.name
-                    fn_args = tool_call.function.arguments
-
-                    logger.info(f"OpenAI tool call: {fn_name}({fn_args})")
-                    result = self.uma.execute_tool_call(fn_name, fn_args)
-
-                    # Check for human-in-the-loop
-                    if result.get("status") == "requires_approval":
-                        return {
-                            "status": "requires_approval",
-                            "tool_name": fn_name,
-                            "risk_description": result.get("risk_description", "High-risk operation detected"),
-                            "pending_args": fn_args
-                        }
-
-                    tool_results.append({
-                        "tool_call_id": tool_call.id,
-                        "role": "tool",
-                        "content": json.dumps(result, ensure_ascii=False)
-                    })
-
-                # Send tool results back to model
-                messages.append(choice.message)
-                messages.extend(tool_results)
-
-                final_response = self.client.chat.completions.create(
+            for _ in range(MAX_ITERATIONS):
+                response = self.client.chat.completions.create(
                     model=self.model,
-                    messages=messages
+                    messages=messages,
+                    tools=tools if tools else None,
+                    tool_choice="auto" if tools else None
                 )
 
-                return {
-                    "status": "success",
-                    "content": final_response.choices[0].message.content,
-                    "tool_calls_made": len(tool_results)
-                }
-            else:
-                return {
-                    "status": "success",
-                    "content": choice.message.content,
-                    "tool_calls_made": 0
-                }
+                choice = response.choices[0]
+
+                # If the model wants to call tools
+                if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
+                    tool_results = []
+                    for tool_call in choice.message.tool_calls:
+                        fn_name = tool_call.function.name
+                        fn_args = tool_call.function.arguments
+
+                        logger.info(f"OpenAI tool call: {fn_name}({fn_args})")
+                        result = self.uma.execute_tool_call(fn_name, fn_args)
+
+                        # Check for human-in-the-loop
+                        if result.get("status") == "requires_approval":
+                            return {
+                                "status": "requires_approval",
+                                "tool_name": fn_name,
+                                "risk_description": result.get("risk_description", "High-risk operation detected"),
+                                "pending_args": fn_args
+                            }
+
+                        tool_results.append({
+                            "tool_call_id": tool_call.id,
+                            "role": "tool",
+                            "content": json.dumps(result, ensure_ascii=False)
+                        })
+                        tool_calls_made += 1
+
+                    # Append assistant's tool call message AND tool results, then loop
+                    messages.append(choice.message)
+                    messages.extend(tool_results)
+                    # Continue loop — AI may want to call more tools
+
+                else:
+                    # Model finished — return the final text response
+                    return {
+                        "status": "success",
+                        "content": choice.message.content,
+                        "tool_calls_made": tool_calls_made
+                    }
+
+            # Safety: exceeded max iterations
+            return {
+                "status": "success",
+                "content": f"(已達最大工具呼叫次數 {MAX_ITERATIONS} 輪，強制結束)",
+                "tool_calls_made": tool_calls_made
+            }
 
         except Exception as e:
             logger.error(f"OpenAI chat error: {e}")
             return {"status": "error", "message": str(e)}
+
 
     def simple_chat(self, session_history: list) -> dict:
         """

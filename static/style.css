@@ -1460,3 +1460,239 @@ textarea::placeholder {
     border-top: 1px solid var(--border-light);
     display: flex;
 }
+
+/* ==========================================================================
+   Execution Sandbox UI (Switch, File Chip, Download Card)
+   ========================================================================== */
+
+/* Toggle Switch */
+.execute-switch-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+}
+
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 22px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-color: var(--border-strong);
+    transition: .3s;
+    border-radius: 22px;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 16px;
+    width: 16px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: .3s;
+    border-radius: 50%;
+    box-shadow: var(--shadow-sm);
+}
+
+input:checked + .slider {
+    background-color: var(--cis-orange);
+}
+
+input:checked + .slider:before {
+    transform: translateX(18px);
+}
+
+.switch-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+input:checked ~ .switch-label {
+    color: var(--cis-orange);
+    font-weight: 600;
+}
+
+/* File Chip Container */
+.file-chip-container {
+    padding: 0 12px 10px;
+}
+
+.file-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 6px 12px;
+    box-shadow: var(--shadow-sm);
+    font-size: 12px;
+}
+
+.file-icon {
+    font-size: 14px;
+}
+
+.file-info-wrap {
+    display: flex;
+    flex-direction: column;
+    min-width: 120px;
+}
+
+.file-name {
+    color: var(--text-primary);
+    font-weight: 500;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.upload-progress-bar {
+    height: 4px;
+    background: var(--surface-bg);
+    border-radius: 2px;
+    margin-top: 4px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: var(--cis-blue);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.remove-file-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px;
+    border-radius: 50%;
+}
+.remove-file-btn:hover {
+    color: var(--red);
+    background: #fee2e2;
+}
+
+/* Attach Text Button */
+.attach-text-btn {
+    background: var(--surface-bg);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 6px 12px;
+    border-radius: 16px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.2s;
+}
+
+.attach-text-btn:hover {
+    background: var(--cis-blue-light);
+    color: var(--cis-blue);
+    border-color: var(--cis-blue);
+}
+
+/* Download / Preview Cards inside chat */
+.workspace-file-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 14px;
+    margin-top: 8px;
+    box-shadow: var(--shadow-sm);
+}
+
+.workspace-file-card .file-name {
+    font-weight: 600;
+    color: var(--text-primary);
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workspace-file-actions {
+    display: flex;
+    gap: 6px;
+    margin-left: 12px;
+}
+
+.action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+}
+
+.download-btn {
+    background: var(--green-light);
+    color: var(--green);
+}
+.download-btn:hover {
+    background: var(--green);
+    color: white;
+}
+
+.preview-btn {
+    background: var(--cis-blue-light);
+    color: var(--cis-blue);
+}
+.preview-btn:hover {
+    background: var(--cis-blue);
+    color: white;
+}
+
+/* Preview Modal Content */
+.preview-content {
+    width: 100%;
+    height: 60vh;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-bg);
+    overflow: auto;
+}
+.preview-image {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+    margin: 0 auto;
+}
+.preview-text {
+    padding: 16px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+}

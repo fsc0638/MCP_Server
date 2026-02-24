@@ -52,14 +52,42 @@ class UMA:
     def execute_tool_call(self, skill_name: str, arguments: str):
         """
         Executes a script based on model tool call arguments.
+        
+        - If the skill has a Scripts/main.py, execute it (execution-type skill).
+        - If NO script exists (knowledge-type skill), return the SKILL.md content as a
+          reference guide. The AI can then use another tool (e.g. mcp-python-executor)
+          to actually perform the task using the knowledge retrieved.
         """
         # Parse 'arguments' string if needed, or assume it's a dict
         try:
             arg_dict = json.loads(arguments) if isinstance(arguments, str) else arguments
         except:
             arg_dict = {"raw": arguments}
-            
-        return self.executor.run_script(skill_name, "main.py", arg_dict)
+        
+        # Check if a runnable script exists for this skill
+        script_path = (self.executor.skills_home / skill_name / "Scripts" / "main.py")
+        if script_path.exists():
+            # Execution-type skill: run the script
+            return self.executor.run_script(skill_name, "main.py", arg_dict)
+        else:
+            # Knowledge-type skill: return SKILL.md as a reference guide
+            skill_md_path = self.executor.skills_home / skill_name / "SKILL.md"
+            if skill_md_path.exists():
+                content = skill_md_path.read_text(encoding="utf-8", errors="replace")
+                return {
+                    "status": "success",
+                    "type": "knowledge_guide",
+                    "skill": skill_name,
+                    "message": (
+                        f"This is a knowledge-type skill. No executable script found. "
+                        f"Use the following guide to complete the task, then use an "
+                        f"execution tool (e.g. mcp-python-executor) to run code if needed."
+                    ),
+                    "guide": content
+                }
+            else:
+                return {"status": "error", "message": f"Skill '{skill_name}' not found."}
+
 
 class SkillRegistry:
     """
