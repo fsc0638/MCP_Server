@@ -14,7 +14,8 @@ logger = logging.getLogger("MCP_Server.Session")
 
 class SessionManager:
     """
-    Manages individual user sessions with cleanup and memory sync.
+    D-07: Unified session manager for both Web Console and CLI.
+    Manages conversation history, cleanup, and MEMORY.md persistence.
     """
 
     def __init__(self, project_root: str):
@@ -23,6 +24,9 @@ class SessionManager:
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.temp_dir = self.project_root / "temp"
         self.active_sessions: Dict[str, Dict[str, Any]] = {}
+
+        # D-07: Conversation history store (session_id → list of {role, content})
+        self._conversations: Dict[str, list] = {}
 
         # Ensure directories exist
         self.memory_dir.mkdir(exist_ok=True)
@@ -36,6 +40,49 @@ class SessionManager:
                 "---\n\n",
                 encoding="utf-8"
             )
+
+    # ─── Conversation History (D-07: for Web Console) ─────────────────────────
+
+    def get_or_create_conversation(self, session_id: str, system_prompt: str = "") -> list:
+        """Get or create a conversation history list for a session."""
+        if session_id not in self._conversations:
+            history = []
+            if system_prompt:
+                history.append({"role": "system", "content": system_prompt})
+            self._conversations[session_id] = history
+        return self._conversations[session_id]
+
+    def append_message(self, session_id: str, role: str, content: str):
+        """Append a message to a session's conversation history."""
+        history = self._conversations.get(session_id, [])
+        history.append({"role": role, "content": content})
+
+    def flush_conversation_to_memory(self, session_id: str):
+        """Persist a web session's conversation history to MEMORY.md."""
+        history = self._conversations.get(session_id, [])
+        if len(history) <= 1:  # Only system msg or empty
+            return
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            lines = [f"\n## Session: {session_id} — {timestamp}\n"]
+            for msg in history:
+                if msg["role"] == "system":
+                    continue
+                role_label = "👤 User" if msg["role"] == "user" else "🤖 Assistant"
+                lines.append(f"**{role_label}**: {msg['content']}\n\n")
+
+            with open(self.memory_file, "a", encoding="utf-8") as f:
+                f.writelines(lines)
+            logger.info(f"Session {session_id} conversation flushed to MEMORY.md")
+        except Exception as e:
+            logger.error(f"Failed to flush conversation to memory: {e}")
+
+    def clear_conversation(self, session_id: str):
+        """Clear a conversation session (flush first, then remove)."""
+        self.flush_conversation_to_memory(session_id)
+        self._conversations.pop(session_id, None)
+
+    # ─── CLI Session Lifecycle ────────────────────────────────────────────────
 
     def create_session(self, user_id: str = "default") -> str:
         """Creates a new session and returns the session ID."""

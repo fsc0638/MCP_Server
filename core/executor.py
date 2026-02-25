@@ -30,7 +30,7 @@ class ExecutionEngine:
         Reads a file from the References/ directory.
         """
         try:
-            res_path = self.sanitize_path(Path(skill_name) / "References" / resource_name)
+            res_path = self.sanitize_path(Path(skill_name) / "references" / resource_name)
             if not res_path.exists():
                 return {"status": "error", "message": f"Resource not found: {resource_name}"}
             
@@ -44,7 +44,7 @@ class ExecutionEngine:
         Searches for a query string in a resource file (Grep-like).
         """
         try:
-            res_path = self.sanitize_path(Path(skill_name) / "References" / resource_name)
+            res_path = self.sanitize_path(Path(skill_name) / "references" / resource_name)
             if not res_path.exists():
                 return {"status": "error", "message": f"Resource not found: {resource_name}"}
 
@@ -71,11 +71,18 @@ class ExecutionEngine:
     def run_script(self, skill_name: str, script_relative_path: str, args: Dict[str, Any], env_vars: Optional[Dict[str, str]] = None):
         """
         Executes a script within a skill bundle.
+        D-04: Supports three parameter passing channels:
+          1. Environment variables (SKILL_PARAM_*) — backward compatible, for simple values
+          2. STDIN JSON — for large/complex payloads, piped to the script's stdin
+          3. Temp JSON file (SKILL_PARAM_FILE) — fallback for scripts that prefer file I/O
         """
+        import tempfile
+        temp_param_file = None
+
         # 1. Sanitize the skill directory and script path
         try:
             skill_dir = self.sanitize_path(skill_name)
-            script_path = self.sanitize_path(Path(skill_name) / "Scripts" / script_relative_path)
+            script_path = self.sanitize_path(Path(skill_name) / "scripts" / script_relative_path)
             
             if not script_path.exists():
                 return {"status": "error", "message": f"Script not found: {script_relative_path}"}
@@ -90,7 +97,6 @@ class ExecutionEngine:
             current_env["CURRENT_SKILL_DIR"] = str(skill_dir)
             
             # --- Monorepo PYTHONPATH Injection ---
-            # Inject Agent_skills parent of shared into PYTHONPATH so skills can 'import shared.xxx'
             shared_path = str(self.skills_home.parent)
             existing_pythonpath = current_env.get("PYTHONPATH", "")
             if existing_pythonpath:
@@ -101,27 +107,41 @@ class ExecutionEngine:
             # Force UTF-8 output from Python child processes (crucial for Windows)
             current_env["PYTHONIOENCODING"] = "utf-8"
 
-            # 3. Execution (Subprocess with boundary awareness)
-            # We use sys.executable to ensure we use the same Python environment (venv)
-            cmd = [sys.executable, str(script_path)]
-            
-            # Convert args to CLI arguments or pass via env/stdin if needed.
-            # For simplicity in this initial version, we pass them as environment variables starting with SKILL_PARAM_
+            # 3. D-04: Multi-channel parameter passing
+            import json as _json
+            args_json = _json.dumps(args, ensure_ascii=False)
+
+            # Channel 1: Environment variables (backward compatible, simple values only)
             for key, val in args.items():
                 current_env[f"SKILL_PARAM_{key.upper()}"] = str(val)
 
+            # Channel 3: Temp JSON file (for scripts that prefer file I/O)
+            temp_param_file = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", prefix="skill_params_",
+                dir=str(self.skills_home.parent / "temp" if (self.skills_home.parent / "temp").exists() else tempfile.gettempdir()),
+                delete=False, encoding="utf-8"
+            )
+            temp_param_file.write(args_json)
+            temp_param_file.close()
+            current_env["SKILL_PARAM_FILE"] = temp_param_file.name
+
+            # 4. Execution — pipe args_json via STDIN (Channel 2)
+            cmd = [sys.executable, str(script_path)]
+
             process = subprocess.Popen(
                 cmd,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=current_env,
                 text=True,
                 encoding='utf-8',
-                errors='replace'  # Robustness: replace characters that can't be decoded
+                errors='replace'
             )
 
             try:
-                stdout, stderr = process.communicate(timeout=30) # Default 30s timeout
+                # Channel 2: STDIN JSON — piped directly to the script
+                stdout, stderr = process.communicate(input=args_json, timeout=30)
                 
                 if process.returncode == 0:
                     return {
@@ -146,6 +166,13 @@ class ExecutionEngine:
             return {"status": "security_violation", "message": str(e)}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+        finally:
+            # Cleanup temp param file
+            if temp_param_file and os.path.exists(temp_param_file.name):
+                try:
+                    os.unlink(temp_param_file.name)
+                except Exception:
+                    pass
 
 if __name__ == "__main__":
     # Internal test core

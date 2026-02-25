@@ -158,7 +158,7 @@ def main():
     print("=" * 60)
 
     # Initialize UMA
-    uma = UMA(skills_home=os.getenv("SKILLS_HOME", "./skills"))
+    uma = UMA(skills_home=os.getenv("SKILLS_HOME", str(PROJECT_ROOT / "Agent_skills" / "skills")))
     uma.initialize()
 
     # Initialize Session Manager

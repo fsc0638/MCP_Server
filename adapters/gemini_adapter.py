@@ -47,14 +47,33 @@ class GeminiAdapter:
 
         return all_tools
 
-    def chat(self, user_message: str) -> Dict[str, Any]:
+    def chat(self, messages: Any = None, user_query: Optional[str] = None, user_message: Optional[str] = None) -> Dict[str, Any]:
         """
         Send a chat request with function calling support.
+        D-09: Supports multi-turn tool calls (up to MAX_ITERATIONS).
+        D-12: Unified interface — accepts messages list + user_query.
         """
         if not self.is_available:
             return {"status": "error", "message": "Gemini adapter is not available"}
 
-        tools = self.get_tools(user_query=user_message)
+        # Handle both unified interface (messages+user_query) and legacy (user_message)
+        if user_message and not user_query:
+            user_query = user_message
+        if isinstance(messages, str):
+            user_query = messages
+            messages = None
+
+        # Extract the latest user query from messages if not provided
+        if not user_query and messages:
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    user_query = msg["content"]
+                    break
+
+        if not user_query:
+            return {"status": "error", "message": "No user query provided"}
+
+        tools = self.get_tools(user_query=user_query)
 
         try:
             # Build Gemini tool declarations
@@ -76,43 +95,53 @@ class GeminiAdapter:
             )
 
             chat = model.start_chat()
-            response = chat.send_message(user_message)
+            response = chat.send_message(user_query)
 
-            # Check for function calls
-            if response.candidates[0].content.parts:
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, "function_call") and part.function_call:
-                        fn_call = part.function_call
-                        fn_name = fn_call.name
-                        fn_args = dict(fn_call.args) if fn_call.args else {}
+            tool_calls_made = 0
+            MAX_ITERATIONS = 10
 
-                        logger.info(f"Gemini function call: {fn_name}({fn_args})")
-                        result = self.uma.execute_tool_call(fn_name, fn_args)
+            for _ in range(MAX_ITERATIONS):
+                has_function_call = False
+                if response.candidates[0].content.parts:
+                    for part in response.candidates[0].content.parts:
+                        if hasattr(part, "function_call") and part.function_call:
+                            has_function_call = True
+                            fn_call = part.function_call
+                            fn_name = fn_call.name
+                            fn_args = dict(fn_call.args) if fn_call.args else {}
 
-                        if result.get("status") == "requires_approval":
-                            return {
-                                "status": "requires_approval",
-                                "tool_name": fn_name,
-                                "risk_description": result.get("risk_description", "High-risk operation detected"),
-                                "pending_args": fn_args
-                            }
+                            logger.info(f"Gemini function call: {fn_name}({fn_args})")
+                            result = self.uma.execute_tool_call(fn_name, fn_args)
 
-                        # Send function result back
-                        response = chat.send_message(
-                            genai.protos.Content(
-                                parts=[genai.protos.Part(
-                                    function_response=genai.protos.FunctionResponse(
-                                        name=fn_name,
-                                        response={"result": result}
-                                    )
-                                )]
+                            if result.get("status") == "requires_approval":
+                                return {
+                                    "status": "requires_approval",
+                                    "tool_name": fn_name,
+                                    "risk_description": result.get("risk_description", "High-risk operation detected"),
+                                    "pending_args": fn_args
+                                }
+
+                            # Send function result back and continue loop
+                            response = chat.send_message(
+                                genai.protos.Content(
+                                    parts=[genai.protos.Part(
+                                        function_response=genai.protos.FunctionResponse(
+                                            name=fn_name,
+                                            response={"result": result}
+                                        )
+                                    )]
+                                )
                             )
-                        )
+                            tool_calls_made += 1
+                            break  # Re-check the new response for more tool calls
+
+                if not has_function_call:
+                    break  # No more tool calls, exit loop
 
             return {
                 "status": "success",
                 "content": response.text if hasattr(response, "text") else str(response),
-                "tool_calls_made": 1
+                "tool_calls_made": tool_calls_made
             }
 
         except Exception as e:

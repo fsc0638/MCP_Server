@@ -25,11 +25,18 @@ class UMA:
 
     def get_tools_for_model(self, model_type: str) -> List[Dict[str, Any]]:
         """
-        Returns all registered skills as model-specific tool definitions.
+        Returns executable skills (those with defined parameters) as model-specific tool definitions.
+        Knowledge-type skills (no parameters/scripts) are NOT registered as tools.
+        They are injected as context via get_skill_knowledge() instead.
         """
         tools = []
         for skill_name, data in self.registry.skills.items():
             meta = data["metadata"].copy()
+            # D-02: Skip knowledge-type skills (no parameters defined)
+            params = meta.get("parameters", {})
+            if not params or params == {} or not params.get("properties"):
+                continue
+
             # Check dependency readiness
             if not meta.get("_env_ready", False):
                 meta["description"] = meta.get("description", "") + " [UNAVAILABLE: Missing dependencies]"
@@ -48,6 +55,20 @@ class UMA:
                 })
         return tools
 
+    def get_skill_knowledge(self, skill_name: str) -> Optional[str]:
+        """
+        D-11: Returns the full SKILL.md content for a skill.
+        Used to inject complete skill knowledge into the LLM context/prompt,
+        enabling 'skill definition becomes the prompt' per design principle #2.
+        """
+        skill = self.registry.get_skill(skill_name)
+        if not skill:
+            return None
+        skill_md_path = skill["path"] / "SKILL.md"
+        if skill_md_path.exists():
+            return skill_md_path.read_text(encoding="utf-8", errors="replace")
+        return None
+
 
     def execute_tool_call(self, skill_name: str, arguments: str):
         """
@@ -65,7 +86,8 @@ class UMA:
             arg_dict = {"raw": arguments}
         
         # Check if a runnable script exists for this skill
-        script_path = (self.executor.skills_home / skill_name / "Scripts" / "main.py")
+        # D-03: Use lowercase 'scripts/' for cross-platform compatibility
+        script_path = (self.executor.skills_home / skill_name / "scripts" / "main.py")
         if script_path.exists():
             # Execution-type skill: run the script
             return self.executor.run_script(skill_name, "main.py", arg_dict)
@@ -102,6 +124,7 @@ class SkillRegistry:
     def scan_skills(self):
         """
         Scans the skills_home directory for valid Skill Bundles.
+        D-01/D-13: Auto-regenerates skills_manifest.json after scanning.
         """
         if not self.skills_home.exists():
             return
@@ -111,6 +134,9 @@ class SkillRegistry:
                 skill_md = skill_dir / "SKILL.md"
                 if skill_md.exists():
                     self._register_skill(skill_dir)
+
+        # D-01/D-13: Keep manifest in sync as SSOT
+        self._regenerate_manifest()
 
     def _register_skill(self, skill_dir: Path):
         """
@@ -191,6 +217,33 @@ class SkillRegistry:
                 except:
                     pass
         return hash_obj.hexdigest()
+
+    def _regenerate_manifest(self):
+        """
+        D-01/D-13: Auto-regenerate skills_manifest.json after scanning.
+        This ensures the manifest always reflects the current Registry state (SSOT).
+        External systems (LINE Bridge, CLI, etc.) can read this file for up-to-date skill info.
+        """
+        import json as _json
+        manifest = {"version": "1.0.0", "skills": []}
+        for skill_name, data in self.skills.items():
+            meta = data["metadata"]
+            manifest["skills"].append({
+                "id": skill_name,
+                "name": meta.get("name", skill_name),
+                "version": meta.get("version", "1.0.0"),
+                "description": meta.get("description", "").strip(),
+                "runtime_requirements": meta.get("runtime_requirements", []),
+                "estimated_tokens": meta.get("estimated_tokens", 500),
+                "requires_venv": meta.get("requires_venv", False),
+                "parameters": meta.get("parameters", {})
+            })
+        manifest_path = self.skills_home.parent / "skills_manifest.json"
+        try:
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                _json.dump(manifest, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass  # Non-critical: don't crash startup if manifest write fails
 
     def get_skill(self, skill_name: str) -> Optional[Dict[str, Any]]:
         return self.skills.get(skill_name.lower())

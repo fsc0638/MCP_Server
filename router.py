@@ -30,9 +30,6 @@ from main import get_uma, PROJECT_ROOT
 
 logger = logging.getLogger("MCP_Server.Router")
 
-MEMORY_PATH = PROJECT_ROOT / "memory" / "MEMORY.md"
-MEMORY_PATH.parent.mkdir(exist_ok=True)
-
 WORKSPACE_DIR = PROJECT_ROOT / "workspace"
 WORKSPACE_DIR.mkdir(exist_ok=True)
 
@@ -48,10 +45,11 @@ if not static_dir.exists():
 app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="static")
 
 
-# ─── Session Store (in-memory, flushed to MEMORY.md on demand) ────────────────
+# ─── D-07: Unified Session Management ─────────────────────────────────────────
 
-# session_id → list of {role, content}
-_sessions: Dict[str, List[Dict[str, Any]]] = {}
+from core.session import SessionManager
+
+_session_mgr = SessionManager(str(PROJECT_ROOT))
 
 SYSTEM_PROMPT = (
     "你是研發組 MCP Agent Console 的 AI 助理。\n"
@@ -62,30 +60,12 @@ SYSTEM_PROMPT = (
 
 
 def get_session(session_id: str) -> List[Dict[str, Any]]:
-    if session_id not in _sessions:
-        _sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
-    return _sessions[session_id]
+    return _session_mgr.get_or_create_conversation(session_id, SYSTEM_PROMPT)
 
 
 def flush_session_to_memory(session_id: str):
-    """Persist conversation history to MEMORY.md."""
-    history = _sessions.get(session_id, [])
-    if len(history) <= 1:  # Only system msg, nothing to save
-        return
-    try:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        lines = [f"\n## Session: {session_id} — {timestamp}\n"]
-        for msg in history:
-            if msg["role"] == "system":
-                continue
-            role_label = "👤 User" if msg["role"] == "user" else "🤖 Assistant"
-            lines.append(f"**{role_label}**: {msg['content']}\n\n")
-
-        with open(MEMORY_PATH, "a", encoding="utf-8") as f:
-            f.writelines(lines)
-        logger.info(f"Session {session_id} flushed to MEMORY.md")
-    except Exception as e:
-        logger.error(f"Failed to flush session to memory: {e}")
+    """Persist conversation history to MEMORY.md via SessionManager."""
+    _session_mgr.flush_conversation_to_memory(session_id)
 
 
 # ─── Request / Response Models ────────────────────────────────────────────────
@@ -159,33 +139,38 @@ async def chat(req: ChatRequest):
     if req.execute and req.attached_file:
         execution_context = f"\n\n[系統提醒：目前工作區已有檔案，其絕對路徑為 {req.attached_file}。請主動使用此檔案進行操作。]"
 
-    # 3. Skill context injection (Plan B: context only, AI gets ALL tools in execute mode)
+    # 3. D-11: Skill knowledge injection — load FULL SKILL.md content as prompt/context
+    #    Design Principle #2: "觸發 skill 時，參照 skill 定義，成為提示詞去執行任務"
     skill_context = ""
     if req.injected_skill:
+        # Load the complete SKILL.md content (not just description)
+        full_skill_md = uma.get_skill_knowledge(req.injected_skill)
         skill_data = uma.registry.get_skill(req.injected_skill)
-        if skill_data:
+        if full_skill_md and skill_data:
             meta = skill_data["metadata"]
             if req.execute:
-                # In execute mode: inject skill as REFERENCE GUIDE, tell AI it has all tools
+                # Execute mode: SKILL.md becomes the operational guide
                 skill_context = (
-                    f"\n\n[參考技能知識庫 — {req.injected_skill}]\n"
-                    f"說明：{meta.get('description', '無')}\n"
-                    f"注意：在執行模式下，你可以使用所有可用的工具（包括 mcp-python-executor）來完成任務。"
-                    f"上方技能提供的是操作知識，請結合這些知識與可用工具真正執行任務。\n"
+                    f"\n\n[技能操作指引 — {req.injected_skill}]\n"
+                    f"以下是該技能的完整定義與操作說明，請嚴格依照此指引完成任務。\n"
+                    f"你可以使用提供的工具來執行程式碼或操作檔案。\n\n"
+                    f"---\n{full_skill_md}\n---\n"
                 )
             else:
-                # In pure chat mode: read-only reference
+                # Pure chat mode: SKILL.md becomes knowledge reference
                 skill_context = (
-                    f"\n\n[參考技能資訊 — {req.injected_skill}]\n"
-                    f"描述：{meta.get('description', '無')}\n"
-                    f"狀態：{'就緒' if meta.get('_env_ready') else '降級'}\n"
-                    f"（注意：這僅是參考資訊，你不具有執行能力。）"
+                    f"\n\n[技能知識參考 — {req.injected_skill}]\n"
+                    f"以下是該技能的完整定義與操作說明，請以此知識為基礎回答問題。\n"
+                    f"注意：你目前處於純對話模式，不具有執行工具的能力。\n\n"
+                    f"---\n{full_skill_md}\n---\n"
                 )
+        elif skill_data:
+            # Fallback: if SKILL.md not readable, use description
+            meta = skill_data["metadata"]
+            skill_context = f"\n\n[技能參考 — {req.injected_skill}] {meta.get('description', '無描述')}"
 
     # 4. Append user message
     user_content = req.user_input + execution_context + skill_context
-    # Don't duplicate message into history if testing agent execution immediately for Gemini/Claude
-    # For now, we always append user message to the conversational log:
     history_to_pass = history + [{"role": "user", "content": user_content}]
 
     # 5. Select adapter and call appropriate mode (chat vs simple_chat)
@@ -207,14 +192,9 @@ async def chat(req: ChatRequest):
 
         if req.execute:
             # Agent Mode -> full chat with tool calling
-            # CRITICAL: Strip the pure-chat system message so adapter can inject its own agent prompt
+            # D-12: Unified interface — all adapters receive agent_history + user_query
             agent_history = [m for m in history_to_pass if m.get("role") != "system"]
-            if req.model == "openai":
-                result = adapter.chat(messages=agent_history, user_query=user_content)
-            elif req.model == "gemini":
-                result = adapter.chat(user_message=user_content)
-            else:
-                result = adapter.chat(user_message=user_content, system_prompt=SYSTEM_PROMPT)
+            result = adapter.chat(messages=agent_history, user_query=user_content)
         else:
             # Pure Chat Mode -> no tools
             result = adapter.simple_chat(history)
@@ -223,7 +203,7 @@ async def chat(req: ChatRequest):
         logger.error(f"Chat error: {e}")
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
-    # 5. Append assistant reply to history
+    # 6. Append assistant reply to history
     if result.get("status") == "success":
         history.append({"role": "assistant", "content": result["content"]})
         # Auto-flush every 20 messages to prevent memory loss
@@ -243,8 +223,7 @@ def flush_memory(session_id: str):
 @app.delete("/chat/session/{session_id}", tags=["Chat"])
 def clear_session(session_id: str):
     """Clear a conversation session (reset context)."""
-    flush_session_to_memory(session_id)
-    _sessions.pop(session_id, None)
+    _session_mgr.clear_conversation(session_id)
     return {"status": "success", "message": f"Session '{session_id}' cleared"}
 
 

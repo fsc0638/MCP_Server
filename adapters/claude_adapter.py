@@ -60,73 +60,97 @@ class ClaudeAdapter:
             })
         return claude_tools
 
-    def chat(self, user_message: str, system_prompt: str = "") -> Dict[str, Any]:
+    def chat(self, messages: Any = None, user_query: Optional[str] = None,
+             user_message: Optional[str] = None, system_prompt: str = "") -> Dict[str, Any]:
         """
         Send a message to Claude with tool use support.
+        D-10: Supports multi-turn tool calls (up to MAX_ITERATIONS).
+        D-12: Unified interface — accepts messages list + user_query.
         """
         if not self.is_available:
             return {"status": "error", "message": "Claude adapter is not available"}
 
-        tools = self.get_tools(user_query=user_message)
+        # Handle both unified interface (messages+user_query) and legacy (user_message)
+        if user_message and not user_query:
+            user_query = user_message
+        if isinstance(messages, str):
+            user_query = messages
+            messages = None
+
+        # Extract latest user query from messages if not provided
+        if not user_query and messages:
+            for msg in reversed(messages):
+                if msg.get("role") == "user":
+                    user_query = msg["content"]
+                    break
+
+        if not user_query:
+            return {"status": "error", "message": "No user query provided"}
+
+        tools = self.get_tools(user_query=user_query)
+
+        # D-12: Use agent system prompt (not the pure-chat one)
+        agent_system = system_prompt or (
+            "You are a helpful AI assistant with access to tools. "
+            "Use the provided tools to complete tasks. 請以繁體中文回覆。"
+        )
 
         try:
-            messages = [{"role": "user", "content": user_message}]
+            claude_messages = [{"role": "user", "content": user_query}]
+            tool_calls_made = 0
+            MAX_ITERATIONS = 10
 
-            response = self.client.messages.create(
-                model=self.model,
-                max_tokens=4096,
-                system=system_prompt or "You are a helpful assistant with access to tools.",
-                messages=messages,
-                tools=tools if tools else []
-            )
-
-            # Check for tool use
-            if response.stop_reason == "tool_use":
-                tool_results = []
-                for block in response.content:
-                    if block.type == "tool_use":
-                        fn_name = block.name
-                        fn_args = block.input
-
-                        logger.info(f"Claude tool call: {fn_name}({fn_args})")
-                        result = self.uma.execute_tool_call(fn_name, fn_args)
-
-                        if result.get("status") == "requires_approval":
-                            return {
-                                "status": "requires_approval",
-                                "tool_name": fn_name,
-                                "risk_description": result.get("risk_description", "High-risk operation detected"),
-                                "pending_args": fn_args
-                            }
-
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": json.dumps(result, ensure_ascii=False)
-                        })
-
-                # Send results back
-                messages.append({"role": "assistant", "content": response.content})
-                messages.append({"role": "user", "content": tool_results})
-
-                final_response = self.client.messages.create(
+            for _ in range(MAX_ITERATIONS):
+                response = self.client.messages.create(
                     model=self.model,
                     max_tokens=4096,
-                    system=system_prompt or "You are a helpful assistant with access to tools.",
-                    messages=messages
+                    system=agent_system,
+                    messages=claude_messages,
+                    tools=tools if tools else []
                 )
 
-                return {
-                    "status": "success",
-                    "content": final_response.content[0].text,
-                    "tool_calls_made": len(tool_results)
-                }
-            else:
-                return {
-                    "status": "success",
-                    "content": response.content[0].text,
-                    "tool_calls_made": 0
-                }
+                if response.stop_reason == "tool_use":
+                    tool_results = []
+                    for block in response.content:
+                        if block.type == "tool_use":
+                            fn_name = block.name
+                            fn_args = block.input
+
+                            logger.info(f"Claude tool call: {fn_name}({fn_args})")
+                            result = self.uma.execute_tool_call(fn_name, fn_args)
+
+                            if result.get("status") == "requires_approval":
+                                return {
+                                    "status": "requires_approval",
+                                    "tool_name": fn_name,
+                                    "risk_description": result.get("risk_description", "High-risk operation detected"),
+                                    "pending_args": fn_args
+                                }
+
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": json.dumps(result, ensure_ascii=False)
+                            })
+                            tool_calls_made += 1
+
+                    # Append assistant + tool results, then loop for more
+                    claude_messages.append({"role": "assistant", "content": response.content})
+                    claude_messages.append({"role": "user", "content": tool_results})
+                else:
+                    # No more tool calls — return final text
+                    return {
+                        "status": "success",
+                        "content": response.content[0].text,
+                        "tool_calls_made": tool_calls_made
+                    }
+
+            # Safety: exceeded max iterations
+            return {
+                "status": "success",
+                "content": f"(已達最大工具呼叫次數 {MAX_ITERATIONS} 輪，強制結束)",
+                "tool_calls_made": tool_calls_made
+            }
 
         except Exception as e:
             logger.error(f"Claude chat error: {e}")
