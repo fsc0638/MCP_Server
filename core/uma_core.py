@@ -166,9 +166,12 @@ class SkillRegistry:
                     metadata.get("runtime_requirements", [])
                 )
                 
-                # 3. Tag Extraction for dynamic tool selection
+                # 3. Tag Extraction for dynamic tool selection (multilingual + weighted)
                 from adapters import extract_tags
-                metadata["_tags"] = extract_tags(metadata.get("description", ""))
+                metadata["_tags"] = extract_tags(
+                    metadata.get("description", ""),
+                    name=metadata.get("name", skill_name)
+                )
                 metadata["_description_raw"] = metadata.get("description", "")
 
                 self.skills[skill_name] = {
@@ -233,6 +236,7 @@ class SkillRegistry:
                 "name": meta.get("name", skill_name),
                 "version": meta.get("version", "1.0.0"),
                 "description": meta.get("description", "").strip(),
+                "tags": meta.get("_tags", []),
                 "runtime_requirements": meta.get("runtime_requirements", []),
                 "estimated_tokens": meta.get("estimated_tokens", 500),
                 "requires_venv": meta.get("requires_venv", False),
