@@ -276,7 +276,7 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('file', file);
 
             const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/workspace/upload', true);
+            xhr.open('POST', '/api/documents/upload', true); // Changed endpoint to match Sprint 1 backend
 
             xhr.upload.onprogress = (e) => {
                 if (e.lengthComputable) {
@@ -290,11 +290,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 uploadProgressBar.classList.add('hidden');
                 if (xhr.status === 200) {
                     const res = JSON.parse(xhr.responseText);
-                    attachedFilePath = res.filepath;
-                    attachedFileName.textContent = res.filename;
-                    logModule.addLog('SYS', `工作區檔案上傳成功: ${res.filename}`);
+                    attachedFilePath = res.path;     // Backend now returns 'path'
+                    attachedFileName.textContent = res.original_filename; // Display original file name
+                    logModule.addLog('SYS', `檔案上傳成功: ${res.original_filename}`);
                 } else {
-                    alert('上傳失敗');
+                    const errRes = JSON.parse(xhr.responseText || '{}');
+                    alert(`上傳失敗: ${errRes.detail || '未知錯誤'}`);
                     clearAttachedFile();
                 }
                 workspaceFileInput.value = '';

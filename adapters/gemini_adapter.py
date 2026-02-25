@@ -24,6 +24,7 @@ class GeminiAdapter:
         self.uma = uma
         self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
         self.model = None
+        self._uploaded_files_cache = {}
 
         if GEMINI_AVAILABLE:
             api_key = os.getenv("GEMINI_API_KEY")
@@ -37,6 +38,39 @@ class GeminiAdapter:
     def is_available(self) -> bool:
         return GEMINI_AVAILABLE and os.getenv("GEMINI_API_KEY") is not None
 
+    def _handle_attached_file(self, attached_file: Optional[str], session_id: Optional[str]) -> list:
+        """Uploads file to Google AI (or uses cached) and returns parts list."""
+        if not attached_file or not session_id or not GEMINI_AVAILABLE:
+            return []
+
+        # Check cache
+        cache_key = f"{session_id}_{attached_file}"
+        cached_file = self._uploaded_files_cache.get(cache_key)
+
+        if not cached_file:
+            import mimetypes
+            mime_type, _ = mimetypes.guess_type(attached_file)
+            if not mime_type:
+                mime_type = "text/plain"
+
+            logger.info(f"Uploading {attached_file} to Gemini ({mime_type})...")
+            try:
+                uploaded_file = genai.upload_file(path=attached_file, mime_type=mime_type)
+                self._uploaded_files_cache[cache_key] = uploaded_file
+                cached_file = uploaded_file
+            except Exception as e:
+                logger.error(f"Failed to upload file to Gemini: {e}")
+                return []
+
+        parts = [cached_file]
+        
+        # Proactively inject prompt if it's an image
+        lower_path = attached_file.lower()
+        if lower_path.endswith(('.png', '.jpg', '.jpeg', '.webp')):
+            parts.append("請仔細觀察上述圖片並詳盡描述內容，然後根據圖片內容對應並呼叫合適的 Skills 進行處理。")
+            
+        return parts
+
     def get_tools(self, user_query: Optional[str] = None, max_tools: int = 10) -> List[Dict[str, Any]]:
         """Get tool definitions in Gemini FunctionDeclaration format."""
         from adapters import select_relevant_tools
@@ -47,7 +81,7 @@ class GeminiAdapter:
 
         return all_tools
 
-    def chat(self, messages: Any = None, user_query: Optional[str] = None, user_message: Optional[str] = None) -> Dict[str, Any]:
+    def chat(self, messages: Any = None, user_query: Optional[str] = None, user_message: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None) -> Dict[str, Any]:
         """
         Send a chat request with function calling support.
         D-09: Supports multi-turn tool calls (up to MAX_ITERATIONS).
@@ -95,7 +129,13 @@ class GeminiAdapter:
             )
 
             chat = model.start_chat()
-            response = chat.send_message(user_query)
+            
+            upload_parts = self._handle_attached_file(attached_file, session_id)
+            if upload_parts:
+                message_parts = upload_parts + [user_query]
+                response = chat.send_message(message_parts)
+            else:
+                response = chat.send_message(user_query)
 
             tool_calls_made = 0
             MAX_ITERATIONS = 10
@@ -148,7 +188,7 @@ class GeminiAdapter:
             logger.error(f"Gemini chat error: {e}")
             return {"status": "error", "message": str(e)}
 
-    def simple_chat(self, session_history: list) -> dict:
+    def simple_chat(self, session_history: list, session_id: Optional[str] = None, attached_file: Optional[str] = None) -> dict:
         """
         Pure LLM conversation — NO tools, NO skill schema injection.
         Strictly isolated from skill execution.
@@ -184,7 +224,14 @@ class GeminiAdapter:
                 # NOTE: No tools= passed — strictly isolated
             )
             chat = model.start_chat(history=gemini_history[:-1] if len(gemini_history) > 1 else [])
-            response = chat.send_message(last_user_msg)
+            
+            upload_parts = self._handle_attached_file(attached_file, session_id)
+            if upload_parts:
+                message_parts = upload_parts + [last_user_msg]
+                response = chat.send_message(message_parts)
+            else:
+                response = chat.send_message(last_user_msg)
+                
             return {"status": "success", "content": response.text}
         except Exception as e:
             logger.error(f"Gemini simple_chat error: {e}")

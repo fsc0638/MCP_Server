@@ -53,9 +53,63 @@ class SessionManager:
         return self._conversations[session_id]
 
     def append_message(self, session_id: str, role: str, content: str):
-        """Append a message to a session's conversation history."""
+        """Append a message to a session's conversation history with auto-compression trigger."""
         history = self._conversations.get(session_id, [])
         history.append({"role": role, "content": content})
+        self._check_and_compress(session_id)
+
+    def _check_and_compress(self, session_id: str):
+        """
+        Adaptive Memory Compression Framework.
+        Monitors conversation length (estimated by rounds).
+        Triggers summarization framework when approaching limits.
+        """
+        history = self._conversations.get(session_id, [])
+        
+        # Threshold: > 40 messages (20 rounds)
+        MAX_MESSAGES = 40
+        if len(history) > MAX_MESSAGES:
+            logger.info(f"Session {session_id} exceeded {MAX_MESSAGES} messages. Triggering adaptive compression.")
+            self._compress_history(session_id)
+
+    def _compress_history(self, session_id: str):
+        """
+        Performs the compression. Prepared for LLM-based abstractive summarization.
+        Currently retains global system prompts, compresses the older 50% into a summary token,
+        and keeps the most recent 50% intact.
+        """
+        history = self._conversations.get(session_id, [])
+        if len(history) <= 4:
+            return
+
+        system_msgs = [m for m in history if m["role"] == "system"]
+        chat_msgs = [m for m in history if m["role"] != "system"]
+
+        # 50% division
+        midpoint = max(1, len(chat_msgs) // 2)
+        old_msgs = chat_msgs[:midpoint]
+        new_msgs = chat_msgs[midpoint:]
+
+        # FUTURE(LLM Summarization): Pass `old_msgs` to an adapter for dense summarization.
+        summary_content = f"[System Memory: Previously discussed {len(old_msgs)} messages. Context compressed to preserve token head room.]"
+        
+        compressed_history = system_msgs + [{"role": "system", "content": summary_content}] + new_msgs
+        self._conversations[session_id] = compressed_history
+        
+        # Flush the summary node to persistent MEMORY.md
+        self._log_compression_event(session_id, summary_content)
+
+    def _log_compression_event(self, session_id: str, summary: str):
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            lines = [
+                f"\n## Session {session_id} (Memory Compressed) — {timestamp}\n",
+                f"**Engine**: {summary}\n\n"
+            ]
+            with open(self.memory_file, "a", encoding="utf-8") as f:
+                f.writelines(lines)
+        except Exception as e:
+            logger.error(f"Failed to log compression event: {e}")
 
     def flush_conversation_to_memory(self, session_id: str):
         """Persist a web session's conversation history to MEMORY.md."""

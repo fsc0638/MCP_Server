@@ -15,6 +15,7 @@ import shutil
 import asyncio
 import logging
 import subprocess
+import hashlib
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List
@@ -113,6 +114,55 @@ def health_check():
     }
 
 
+# ─── UBER FILE UPLOAD MGR ─────────────────────────────────────────────────────
+
+@app.post("/api/documents/upload", tags=["Documents"])
+async def upload_document(file: UploadFile = File(...)):
+    """
+    Handle document uploads, check hash for deduplication, and sanitize path.
+    """
+    try:
+        # 1. Sanitize filename to prevent directory traversal
+        filename = file.filename or "unknown_file"
+        safe_path = (WORKSPACE_DIR / filename).resolve()
+        if not str(safe_path).startswith(str(WORKSPACE_DIR.resolve())):
+            raise HTTPException(status_code=400, detail="Invalid filename (Directory Traversal Detected)")
+
+        # 2. Read content and compute SHA-256 hash
+        content = await file.read()
+        file_hash = hashlib.sha256(content).hexdigest()
+        
+        # 3. Check extensions & Create extension-preserved hashed filename
+        extension = Path(filename).suffix.lower()
+        allowed_exts = {".jpg", ".jpeg", ".png", ".pdf", ".txt", ".md", ".csv", ".xlsx", ".docx", ".webm", ".wav", ".mp3", ".mp4"}
+        if extension not in allowed_exts:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {extension}")
+            
+        hashed_filename = f"{file_hash[:16]}{extension}"
+        final_path = (WORKSPACE_DIR / hashed_filename).resolve()
+        
+        # 4. Save file if it doesn't exist
+        if not final_path.exists():
+            final_path.write_bytes(content)
+            logger.info(f"File saved: {final_path.name} (Original: {filename})")
+        else:
+            logger.info(f"File already exists (Hash match): {final_path.name} (Original: {filename})")
+            
+        return {
+            "status": "success",
+            "filename": hashed_filename,
+            "original_filename": filename,
+            "hash": file_hash,
+            "path": str(final_path)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 # ─── PURE CHAT (Isolation Wall) ───────────────────────────────────────────────
 
 @app.post("/chat", tags=["Chat"])
@@ -190,14 +240,19 @@ async def chat(req: ChatRequest):
 
         history.append({"role": "user", "content": user_content})
 
+        kwargs = {}
+        if req.model == "gemini":
+            kwargs["session_id"] = req.session_id
+            kwargs["attached_file"] = req.attached_file
+
         if req.execute:
             # Agent Mode -> full chat with tool calling
             # D-12: Unified interface — all adapters receive agent_history + user_query
             agent_history = [m for m in history_to_pass if m.get("role") != "system"]
-            result = adapter.chat(messages=agent_history, user_query=user_content)
+            result = adapter.chat(messages=agent_history, user_query=user_content, **kwargs)
         else:
             # Pure Chat Mode -> no tools
-            result = adapter.simple_chat(history)
+            result = adapter.simple_chat(history, **kwargs)
 
     except Exception as e:
         logger.error(f"Chat error: {e}")
