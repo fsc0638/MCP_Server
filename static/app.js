@@ -148,12 +148,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         async function sendMessage() {
             const text = userInput.value.trim();
-            if (!text) return;
+            if (!text && !attachedFilePath) return;
 
             userInput.value = '';
             userInput.style.height = 'auto';
-            appendMessage('user', text);
-            logModule.addLog('USER', `發送：${text}`);
+
+            const displayMsg = text || `[附加檔案: ${attachedFileName.textContent}]`;
+            appendMessage('user', displayMsg);
+            logModule.addLog('USER', `發送：${displayMsg}`);
 
             const model = modelSelector.value;
             const attachedSkill = attachSelect.value || null;

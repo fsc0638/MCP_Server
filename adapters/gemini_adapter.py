@@ -22,7 +22,7 @@ class GeminiAdapter:
 
     def __init__(self, uma):
         self.uma = uma
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         self.model = None
         self._uploaded_files_cache = {}
 
