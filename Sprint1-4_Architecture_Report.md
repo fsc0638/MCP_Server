@@ -28,31 +28,31 @@ graph TD
     classDef model fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px;
     classDef data fill:#E8F5E9,stroke:#388E3C,stroke-width:2px;
 
-    UI[前端 UI<br/>(Vanilla JS)]:::ui -->|HTTP/API| Router[HTTP Router<br/>(FastAPI)]:::router
+    UI["前端 UI (Vanilla JS)"]:::ui -->|HTTP/API| Router["HTTP Router (FastAPI)"]:::router
     
     subgraph 核心模組 (Core Engine)
-        Router --> UMA[UMA 核心總線<br/>(Unified Model Adapter)]:::core
-        Router -.-> SessionManager[Session Manager<br/>(記憶管理)]:::data
-        Router -.-> Retriever[文件檢索<br/>(Retriever)]:::data
+        Router --> UMA["UMA 核心總線 (Unified Model Adapter)"]:::core
+        Router -.-> SessionManager["Session Manager (記憶管理)"]:::data
+        Router -.-> Retriever["文件檢索 (Retriever)"]:::data
         
-        UMA --> Registry[技能註冊表]:::core
-        UMA --> Converter[規格轉換器]:::core
-        UMA --> Executor[執行引擎]:::core
+        UMA --> Registry["技能註冊表"]:::core
+        UMA --> Converter["規格轉換器"]:::core
+        UMA --> Executor["執行引擎"]:::core
     end
     
     subgraph 知識叢 (Knowledge & Memory)
-        Watcher[Watcher 即時守衛]:::data -.->|Hot Reload| FAISS[(FAISS 向量庫)]:::data
+        Watcher["Watcher 即時守衛"]:::data -.->|Hot Reload| FAISS["FAISS 向量庫"]:::data
         Retriever --> FAISS
-        SessionManager --> Memory[(MEMORY.md)]:::data
+        SessionManager --> Memory["MEMORY.md"]:::data
     end
     
     subgraph 大腦層 (Adapters)
-        UMA --> OpenAI[OpenAI Adapter]:::model
-        UMA --> Gemini[Gemini Adapter]:::model
-        UMA --> Claude[Claude Adapter]:::model
+        UMA --> OpenAI["OpenAI Adapter"]:::model
+        UMA --> Gemini["Gemini Adapter"]:::model
+        UMA --> Claude["Claude Adapter"]:::model
     end
 
-    Executor --> Scripts[腳本運行]:::core
+    Executor --> Scripts["腳本運行"]:::core
     OpenAI -.->|Tool Call| Executor
     Gemini -.->|Tool Call| Executor
 ```
@@ -95,11 +95,11 @@ UMA 是整個 Agent 系統的心臟，隱蔽了不同模型的底層差異，統
 ```mermaid
 sequenceDiagram
     autonumber
-    participant U as 使用者 (UI)
-    participant R as Router & 檢索器
-    participant F as FAISS 向量庫
-    participant A as UMA & 大腦模型
-    participant M as Session & MEMORY
+    participant U as "使用者 (UI)"
+    participant R as "Router & 檢索器"
+    participant F as "FAISS 向量庫"
+    participant A as "UMA & 大腦模型"
+    participant M as "Session & MEMORY"
     
     U->>R: 一、上傳文件 或 送出提問
     R->>F: 二、切塊抽取 Keyword 存入，或檢索最相似片段 (Top-K)
@@ -120,10 +120,10 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant U as 使用者 (UI)
-    participant A as 大腦模型 (LLM)
-    participant C as Converter (規格轉換)
-    participant E as 本地沙盒 (Executor)
+    participant U as "使用者 (UI)"
+    participant A as "大腦模型 (LLM)"
+    participant C as "Converter (規格轉換)"
+    participant E as "本地沙盒 (Executor)"
     
     U->>A: 1. 發出任務請求 (同時掛載多個系統 Tools)
     A-->>C: 2. 評估可用技能，決策發出 tool_calls 中斷
