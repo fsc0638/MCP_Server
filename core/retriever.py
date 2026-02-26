@@ -81,6 +81,13 @@ class DocumentRetriever:
                 loader = CSVLoader(str(safe_path), encoding="utf-8")
                 docs = loader.load()
                 text = "\n".join([doc.page_content for doc in docs])
+            elif ext == ".docx":
+                try:
+                    import docx2txt
+                    text = docx2txt.process(str(safe_path))
+                except ImportError:
+                    logger.error("docx2txt not installed. Cannot parse DOCX files.")
+                    return False
             else:
                 logger.warning(f"Unsupported file type for retriever: {ext}")
                 return False

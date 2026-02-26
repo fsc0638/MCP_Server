@@ -7,8 +7,10 @@
     <title>MCP Agent Console — 研發組</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="style.css?v=12">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 
@@ -50,10 +52,13 @@
                 <span class="panel-icon">⚙</span>
                 <h2 class="accordion-title">技能控管</h2>
                 <span class="badge skill-count" id="skillCount">0</span>
-                <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
             </div>
             <div class="accordion-content active" id="skillAccordionContent">
-                <div class="panel-toolbar" style="display:flex; gap:8px; padding:10px 16px; border-bottom:1px solid var(--border); align-items:center;">
+                <div class="panel-toolbar"
+                    style="display:flex; gap:8px; padding:10px 16px; border-bottom:1px solid var(--border); align-items:center;">
                     <button class="icon-btn" id="createSkillBtn" title="新增技能">+</button>
                     <button class="icon-btn" id="rescanBtn" title="重新掃描技能庫">↺</button>
                     <div class="source-status-row" style="margin-left:auto;">
@@ -75,15 +80,24 @@
                 <span class="panel-icon">📂</span>
                 <h2 class="accordion-title">知識庫文件</h2>
                 <span class="badge doc-count" id="docCount" style="margin-left: 4px;">0</span>
-                <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
             </div>
-            <div class="accordion-content active" id="docAccordionContent" style="display:flex; flex-direction:column; overflow:hidden;">
+            <div class="accordion-content active" id="docAccordionContent"
+                style="display:flex; flex-direction:column; overflow:hidden;">
                 <ul class="skill-list" id="docList" style="flex:1; overflow-y:auto; padding:8px 0;">
                     <!-- Documents injected here via JS -->
                 </ul>
             </div>
 
-            <div class="panel-footer" style="margin-top:auto;">
+            <div class="add-source-container" style="padding: 16px; border-top: 1px solid var(--border);">
+                <button class="add-source-pill-btn" id="openAddSourceBtn">
+                    <span class="plus-icon">+</span> 新增來源
+                </button>
+            </div>
+
+            <div class="panel-footer">
                 <span class="footer-label">版本</span>
                 <span class="footer-val">2.0.0-UMA</span>
             </div>
@@ -144,20 +158,22 @@
                 </div>
                 <div class="input-wrapper" id="inputWrapper">
                     <input type="file" id="workspaceFileInput" class="hidden">
-<!-- File attaching temporarily removed -->
                     <textarea id="userInput" placeholder="開始輸入..." rows="1" disabled></textarea>
-                    
-                    <div class="input-right-actions">
-                        <span class="source-count-hint hidden" id="sourceCountHint">0 個來源</span>
-                        <button id="sendBtn" class="send-btn" title="送出 (Enter)" disabled>
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
-                        </button>
-                    </div>
                 </div>
-                <div class="input-hint">
-                    <kbd>Enter</kbd> 送出 · <kbd>Shift+Enter</kbd> 換行 ·
-                    <button class="clear-chat-btn" id="clearChatBtn" title="清除對話紀錄">🗑 清除對話</button>
+                <div class="input-right-actions">
+                    <span class="source-count-hint hidden" id="sourceCountHint">0 個來源</span>
+                    <button id="sendBtn" class="send-btn" title="送出 (Enter)" disabled>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                            <polyline points="12 5 19 12 12 19"></polyline>
+                        </svg>
+                    </button>
                 </div>
+            </div>
+            <div class="input-hint">
+                <kbd>Enter</kbd> 送出 · <kbd>Shift+Enter</kbd> 換行 ·
+                <button class="clear-chat-btn" id="clearChatBtn" title="清除對話紀錄">🗑 清除對話</button>
             </div>
         </main>
 
@@ -307,7 +323,84 @@
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <!-- ADD SOURCE MODAL (NotebookLM Style) -->
+    <div class="modal-overlay hidden" id="addSourceModalOverlay">
+        <div class="modal-container source-modal" id="addSourceModal">
+            <div class="modal-header">
+                <h3 class="modal-title">新增來源</h3>
+                <button class="modal-close" id="closeAddSourceBtn">&times;</button>
+            </div>
+
+            <div class="modal-body">
+                <div class="source-search-wrap">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" class="source-search-input" id="webSearchInput" placeholder="在網路上搜尋新來源">
+                    <button class="source-search-go" id="webSearchGoBtn">→</button>
+                </div>
+
+                <div class="source-actions-grid">
+                    <button class="source-action-card" id="uploadFileBtnAction">
+                        <span class="card-icon">📤</span>
+                        <span class="card-label">上傳檔案</span>
+                    </button>
+                    <button class="source-action-card" id="addUrlBtnAction">
+                        <span class="card-icon">🔗</span>
+                        <span class="card-label">連結網站</span>
+                    </button>
+                    <button class="source-action-card" id="googleDriveBtnAction">
+                        <span class="card-icon">📁</span>
+                        <span class="card-label">雲端硬碟</span>
+                    </button>
+                    <button class="source-action-card" id="copyPasteBtnAction">
+                        <span class="card-icon">📋</span>
+                        <span class="card-label">複製文字</span>
+                    </button>
+                </div>
+
+                <div class="source-drop-zone" id="sourceDropZone">
+                    <p class="drop-text">或者在此放置文件</p>
+                    <p class="drop-hint">PDF、Word、TXT、Markdown 等格式</p>
+                </div>
+
+                <div class="source-limit-row">
+                    <div class="limit-bar-bg">
+                        <div class="limit-bar-fill" id="sourceLimitFill" style="width: 0%;"></div>
+                    </div>
+                    <span class="limit-text" id="sourceLimitText">0 / 50</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <input type="file" id="sourceFileInput" style="display:none" multiple accept=".pdf,.docx,.txt,.md">
+
+    <div class="modal-overlay" id="addUrlModalOverlay" style="z-index: 1001;">
+        <div class="modal-container small-modal">
+            <div class="modal-header">
+                <h3>連結網站</h3><button class="modal-close" id="closeAddUrlBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="url" id="sourceUrlInput" placeholder="輸入網址 (https://...)" class="modal-input">
+                <button class="modal-action-btn" id="confirmAddUrlBtn">新增來源</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="addTextModalOverlay" style="z-index: 1001;">
+        <div class="modal-container">
+            <div class="modal-header">
+                <h3>新增文字來源</h3><button class="modal-close" id="closeAddTextBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="text" id="sourceTextName" placeholder="來源名稱" class="modal-input"
+                    style="margin-bottom:12px;">
+                <textarea id="sourceTextContent" placeholder="在此貼上文字內容..." class="modal-input"></textarea>
+                <button class="modal-action-btn" id="confirmAddTextBtn" style="margin-top:12px;">新增來源</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js?v=12"></script>
     <script>
         document.getElementById('initTime').textContent =
             new Date().toLocaleTimeString('zh-TW', { hour12: false }) + ' ';

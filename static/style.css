@@ -65,8 +65,15 @@
     box-sizing: border-box;
 }
 
-body {
+body,
+button,
+input,
+select,
+textarea {
     font-family: var(--font-ui);
+}
+
+body {
     background: var(--surface-bg);
     color: var(--text-primary);
     height: 100vh;
@@ -236,9 +243,7 @@ body {
     display: flex;
 }
 
-    background: var(--surface-panel);
-    border-right: 1px solid var(--border);
-}
+/* Left Panel styling already handled above in .panel-left context */
 
 .panel-title-bar {
     display: flex;
@@ -721,6 +726,7 @@ textarea::placeholder {
     cursor: not-allowed;
     transform: none;
 }
+
 .input-hint {
     text-align: center;
     font-size: 11px;
@@ -1576,7 +1582,10 @@ textarea::placeholder {
 .slider {
     position: absolute;
     cursor: pointer;
-    top: 0; left: 0; right: 0; bottom: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
     background-color: var(--border-strong);
     transition: .3s;
     border-radius: 22px;
@@ -1595,11 +1604,11 @@ textarea::placeholder {
     box-shadow: var(--shadow-sm);
 }
 
-input:checked + .slider {
+input:checked+.slider {
     background-color: var(--cis-orange);
 }
 
-input:checked + .slider:before {
+input:checked+.slider:before {
     transform: translateX(18px);
 }
 
@@ -1609,7 +1618,7 @@ input:checked + .slider:before {
     font-weight: 500;
 }
 
-input:checked ~ .switch-label {
+input:checked~.switch-label {
     color: var(--cis-orange);
     font-weight: 600;
 }
@@ -1674,6 +1683,7 @@ input:checked ~ .switch-label {
     padding: 2px;
     border-radius: 50%;
 }
+
 .remove-file-btn:hover {
     color: var(--red);
     background: #fee2e2;
@@ -1745,6 +1755,7 @@ input:checked ~ .switch-label {
     background: var(--green-light);
     color: var(--green);
 }
+
 .download-btn:hover {
     background: var(--green);
     color: white;
@@ -1754,6 +1765,7 @@ input:checked ~ .switch-label {
     background: var(--cis-blue-light);
     color: var(--cis-blue);
 }
+
 .preview-btn:hover {
     background: var(--cis-blue);
     color: white;
@@ -1768,6 +1780,7 @@ input:checked ~ .switch-label {
     background: var(--surface-bg);
     overflow: auto;
 }
+
 .preview-image {
     max-width: 100%;
     max-height: 100%;
@@ -1775,6 +1788,7 @@ input:checked ~ .switch-label {
     display: block;
     margin: 0 auto;
 }
+
 .preview-text {
     padding: 16px;
     font-family: var(--font-mono);
@@ -1782,4 +1796,240 @@ input:checked ~ .switch-label {
     white-space: pre-wrap;
     word-break: break-all;
     margin: 0;
+}
+
+/* --- Add Source UI (NotebookLM Style) --- */
+
+.panel-left {
+    display: flex;
+    flex-direction: column;
+}
+
+.add-source-container {
+    padding: 16px;
+    border-top: 1px solid var(--border);
+    background: var(--surface-bg);
+    margin-top: auto;
+}
+
+.add-source-pill-btn {
+    width: 100%;
+    padding: 10px 20px;
+    border-radius: 25px;
+    border: 1px solid var(--border-strong);
+    background: #ffffff;
+    color: var(--text-secondary);
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    box-shadow: var(--shadow-sm);
+}
+
+.add-source-pill-btn:hover {
+    border-color: var(--cis-blue);
+    background: var(--cis-blue-light);
+    color: var(--cis-blue);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+}
+
+.add-source-pill-btn .plus-icon {
+    font-size: 18px;
+    font-weight: 400;
+}
+
+/* Modal Content Styling */
+.source-modal {
+    max-width: 600px;
+    width: 90%;
+    border-radius: 12px;
+}
+
+.source-search-wrap {
+    display: flex;
+    align-items: center;
+    background: #f1f3f4;
+    border-radius: 24px;
+    padding: 8px 16px;
+    margin-bottom: 24px;
+    border: 1px solid transparent;
+    transition: all 0.2s;
+}
+
+.source-search-wrap:focus-within {
+    background: #ffffff;
+    border-color: var(--cis-blue);
+    box-shadow: 0 0 0 4px rgba(0, 51, 102, 0.1);
+}
+
+.source-search-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    padding: 8px;
+    font-size: 16px;
+    outline: none;
+    color: var(--text-primary);
+}
+
+.source-search-go {
+    background: none;
+    border: none;
+    font-size: 20px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+}
+
+.source-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+}
+
+.source-action-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 16px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #ffffff;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.source-action-card:hover {
+    background: var(--surface-bg);
+    border-color: var(--cis-blue);
+    transform: translateY(-2px);
+}
+
+.source-action-card .card-icon {
+    font-size: 24px;
+}
+
+.source-action-card .card-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.source-drop-zone {
+    border: 2px dashed var(--border-strong);
+    border-radius: 12px;
+    padding: 40px 20px;
+    text-align: center;
+    background: #fafafa;
+    margin-bottom: 20px;
+    transition: all 0.2s;
+}
+
+.source-drop-zone.dragover {
+    background: var(--cis-blue-light);
+    border-color: var(--cis-blue);
+}
+
+.drop-text {
+    font-size: 18px;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.drop-hint {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.source-limit-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.limit-bar-bg {
+    flex: 1;
+    height: 4px;
+    background: #e0e0e0;
+    border-radius: 2px;
+}
+
+.limit-bar-fill {
+    height: 100%;
+    background: var(--cis-blue);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+}
+
+.limit-text {
+    font-size: 13px;
+    color: var(--text-secondary);
+    min-width: 45px;
+}
+
+/* Small Modals */
+.small-modal {
+    max-width: 400px;
+}
+
+.modal-input {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+}
+
+.modal-input:focus {
+    border-color: var(--cis-blue);
+}
+
+.modal-action-btn {
+    width: 100%;
+    margin-top: 16px;
+    padding: 12px;
+    background: var(--cis-blue);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.modal-action-btn:hover {
+    background: var(--cis-blue-hover);
+}
+
+/* --- Modal Overlay & Utility --- */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.65);
+    display: none;
+    /* Hidden by default */
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    backdrop-filter: blur(4px);
+}
+
+.modal-overlay.active {
+    display: flex;
+}
+
+.hidden {
+    display: none !important;
 }

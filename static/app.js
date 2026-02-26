@@ -114,6 +114,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (role === 'assistant') {
                 let html = marked.parse(text);
                 html = processWorkspaceLinks(html);
+
+                // Citation rendering: [1] or [FileName#chunk_x]
+                html = html.replace(/\[(\d+)\]/g, '<span class="citation" title="檢視來源">$1</span>');
+                html = html.replace(/\[([a-zA-Z0-9.\-_]+)#chunk_\d+\]/g, (match, filename) => {
+                    return `<span class="citation-file" onclick="window.previewWorkspaceFile('${filename}')" title="開啟檔案: ${filename}">[來源: ${filename}]</span>`;
+                });
+
                 div.innerHTML = html;
             } else {
                 div.textContent = text;
@@ -240,7 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Attach Skill select → show hint and toggle wrapper
-        attachSelect.onchange = () => {
+        if (attachSelect) attachSelect.onchange = () => {
             const v = attachSelect.value;
             attachHint.textContent = v ? `準備載入「${v}」的相關資訊` : '';
             if (v) {
@@ -250,7 +257,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 executeSkillSwitch.checked = false;
             }
         };
-        clearAttach.onclick = () => {
+        if (clearAttach) clearAttach.onclick = () => {
             attachSelect.value = '';
             attachHint.textContent = '';
             executeSwitchWrapper.classList.add('hidden');
@@ -258,12 +265,14 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         // Workspace Attach File Logic
-        attachFileBtn.onclick = () => {
-            if (isUploading) return;
-            workspaceFileInput.click();
-        };
+        if (attachFileBtn) {
+            attachFileBtn.onclick = () => {
+                if (isUploading) return;
+                workspaceFileInput.click();
+            };
+        }
 
-        workspaceFileInput.onchange = () => {
+        if (workspaceFileInput) workspaceFileInput.onchange = () => {
             const file = workspaceFileInput.files[0];
             if (!file) return;
 
@@ -329,7 +338,7 @@ document.addEventListener('DOMContentLoaded', () => {
             uploadProgressBar.classList.add('hidden');
         }
 
-        removeFileBtn.onclick = clearAttachedFile;
+        if (removeFileBtn) removeFileBtn.onclick = clearAttachedFile;
 
         // Event listeners
         sendBtn.onclick = sendMessage;
@@ -348,7 +357,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const opt = document.createElement('option');
                 opt.value = name;
                 opt.textContent = name;
-                attachSelect.appendChild(opt);
+                if (attachSelect) attachSelect.appendChild(opt);
             }
         };
     })();
@@ -553,7 +562,7 @@ document.addEventListener('DOMContentLoaded', () => {
         function populateAttachSelect(skills) {
             // Clear old options except the first (none)
             const sel = document.getElementById('attachSkillSelect');
-            while (sel.options.length > 1) sel.remove(1);
+            if (sel) { while (sel.options.length > 1) sel.remove(1); }
             Object.keys(skills).sort().forEach(name => {
                 chatModule.addSkillOption(name);
             });
@@ -856,6 +865,173 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     // =========================================================================
+    // MODULE D: SOURCE INTEGRATION (Add Source Modal)
+    // =========================================================================
+    const sourceModule = (() => {
+        const modalOverlay = document.getElementById('addSourceModalOverlay');
+        const openBtn = document.getElementById('openAddSourceBtn');
+        const closeBtn = document.getElementById('closeAddSourceBtn');
+        const dropZone = document.getElementById('sourceDropZone');
+        const fileInput = document.getElementById('sourceFileInput');
+
+        // Action buttons
+        const uploadBtn = document.getElementById('uploadFileBtnAction');
+        const urlBtn = document.getElementById('addUrlBtnAction');
+        const textBtn = document.getElementById('copyPasteBtnAction');
+        const searchInput = document.getElementById('webSearchInput');
+        const searchGo = document.getElementById('webSearchGoBtn');
+
+        // Sub-modals
+        const urlOverlay = document.getElementById('addUrlModalOverlay');
+        const confirmUrl = document.getElementById('confirmAddUrlBtn');
+        const closeUrl = document.getElementById('closeAddUrlBtn');
+        const urlInput = document.getElementById('sourceUrlInput');
+
+        const textOverlay = document.getElementById('addTextModalOverlay');
+        const confirmText = document.getElementById('confirmAddTextBtn');
+        const closeText = document.getElementById('closeAddTextBtn');
+        const textNameInput = document.getElementById('sourceTextName');
+        const textContentInput = document.getElementById('sourceTextContent');
+
+        function openModal() { modalOverlay.classList.add('active'); }
+        function closeModal() { modalOverlay.classList.remove('active'); }
+
+        // --- URL sourcing ---
+        async function submitUrl() {
+            const url = urlInput.value.trim();
+            if (!url) return;
+            confirmUrl.disabled = true;
+            confirmUrl.textContent = '擷取中...';
+            try {
+                const res = await fetch('/api/documents/url', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || '擷取失敗');
+                logModule.addLog('SYS', `成功擷取網頁來源: ${data.title}`);
+                urlOverlay.classList.remove('active');
+                urlInput.value = '';
+                docModule.loadDocuments();
+            } catch (e) {
+                alert(e.message);
+            } finally {
+                confirmUrl.disabled = false;
+                confirmUrl.textContent = '新增來源';
+            }
+        }
+
+        // --- Text sourcing ---
+        async function submitText() {
+            const name = textNameInput.value.trim();
+            const content = textContentInput.value.trim();
+            if (!content) return;
+            confirmText.disabled = true;
+            confirmText.textContent = '儲存中...';
+            try {
+                const res = await fetch('/api/documents/text', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, content })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || '儲存失敗');
+                logModule.addLog('SYS', `成功新增文字來源: ${name}`);
+                textOverlay.classList.remove('active');
+                textNameInput.value = '';
+                textContentInput.value = '';
+                docModule.loadDocuments();
+            } catch (e) {
+                alert(e.message);
+            } finally {
+                confirmText.disabled = false;
+                confirmText.textContent = '新增來源';
+            }
+        }
+
+        // --- File Upload Logic (Reuse existing but in modal context) ---
+        function handleFiles(files) {
+            Array.from(files).forEach(file => {
+                const formData = new FormData();
+                formData.append('file', file);
+                logModule.addLog('SYS', `準備上傳檔案: ${file.name}`);
+
+                fetch('/api/documents/upload', {
+                    method: 'POST',
+                    body: formData
+                }).then(res => res.json()).then(data => {
+                    logModule.addLog('SYS', `檔案上傳完成: ${file.name}`);
+                    docModule.loadDocuments();
+                }).catch(e => {
+                    logModule.addLog('ERR', `上傳失敗: ${file.name}`, 'error');
+                });
+            });
+        }
+
+        // Wiring
+        if (openBtn) openBtn.onclick = openModal;
+        if (closeBtn) closeBtn.onclick = closeModal;
+
+        if (uploadBtn) uploadBtn.onclick = () => fileInput.click();
+        if (fileInput) fileInput.onchange = () => handleFiles(fileInput.files);
+
+        if (urlBtn) urlBtn.onclick = () => urlOverlay.classList.add('active');
+        if (closeUrl) closeUrl.onclick = () => urlOverlay.classList.remove('active');
+        if (confirmUrl) confirmUrl.onclick = submitUrl;
+
+        if (textBtn) textBtn.onclick = () => textOverlay.classList.add('active');
+        if (closeText) closeText.onclick = () => textOverlay.classList.remove('active');
+        if (confirmText) confirmText.onclick = submitText;
+
+        // Drag & Drop
+        if (dropZone) {
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
+                dropZone.addEventListener(evt, e => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                });
+            });
+            dropZone.addEventListener('dragover', () => dropZone.classList.add('dragover'));
+            dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+            dropZone.addEventListener('drop', e => {
+                dropZone.classList.remove('dragover');
+                handleFiles(e.dataTransfer.files);
+            });
+        }
+
+        // Search logic (Dummy trigger)
+        if (searchGo) {
+            searchGo.onclick = () => {
+                const q = searchInput.value.trim();
+                if (q) {
+                    logModule.addLog('SYS', `觸發網路搜尋來源: ${q}`);
+                    // Trigger a system message in chat
+                    chatModule.enable(); // Ensure chat is ready
+                    document.getElementById('userInput').value = `幫我搜尋關於「${q}」的資訊並整理成參考來源。`;
+                    closeModal();
+                    // Optionally trigger the send button programmatically if desired
+                }
+            };
+        }
+
+        return {
+            updateProgress: (count) => {
+                const fill = document.getElementById('sourceLimitFill');
+                const text = document.getElementById('sourceLimitText');
+                if (fill && text) {
+                    const pct = Math.min((count / 50) * 100, 100);
+                    fill.style.width = pct + '%';
+                    text.textContent = `${count} / 50`;
+                    if (count >= 50) fill.style.background = 'var(--red)';
+                    else fill.style.background = 'var(--cis-blue)';
+                }
+            }
+        };
+    })();
+
+
+    // =========================================================================
     // MODULE C: DOCUMENTS (File Management)
     // =========================================================================
     const docModule = (() => {
@@ -867,6 +1043,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const res = await fetch('/api/documents/list');
                 const data = await res.json();
                 renderDocList(data.files, data.total);
+                if (window.sourceModule) sourceModule.updateProgress(data.total);
             } catch (e) {
                 console.error('Failed to load documents:', e);
             }
@@ -874,24 +1051,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         function renderDocList(files, total) {
             docCount.textContent = total;
-        const sourceHint = document.getElementById('sourceCountHint');
-        if (sourceHint) {
-            if (total > 0) {
-                sourceHint.textContent = `${total} 個來源`;
-                sourceHint.classList.remove('hidden');
-            } else {
-                sourceHint.classList.add('hidden');
+            const sourceHint = document.getElementById('sourceCountHint');
+            if (sourceHint) {
+                if (total > 0) {
+                    sourceHint.textContent = `${total} 個來源`;
+                    sourceHint.classList.remove('hidden');
+                } else {
+                    sourceHint.classList.add('hidden');
+                }
             }
-        }
-        const sourceHint = document.getElementById('sourceCountHint');
-        if (sourceHint) {
-            if (total > 0) {
-                sourceHint.textContent = `${total} 個來源`;
-                sourceHint.classList.remove('hidden');
-            } else {
-                sourceHint.classList.add('hidden');
-            }
-        }
             docList.innerHTML = '';
 
             if (total === 0) {

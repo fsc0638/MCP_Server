@@ -123,6 +123,13 @@ class ExecuteRequest(BaseModel):
 class SearchRequest(BaseModel):
     query: str
 
+class UrlSourcingRequest(BaseModel):
+    url: str
+
+class TextSourcingRequest(BaseModel):
+    name: str
+    content: str
+
 
 # ─── Health ───────────────────────────────────────────────────────────────────
 
@@ -195,6 +202,97 @@ async def upload_document(file: UploadFile = File(...), background_tasks: Backgr
         raise
     except Exception as e:
         logger.error(f"Error uploading file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/documents/url", tags=["Documents"])
+async def add_url_source(req: UrlSourcingRequest):
+    """
+    Scrape a URL, extract title/text, and save as a .md file in workspace/.
+    """
+    import httpx
+    from bs4 import BeautifulSoup
+    
+    url = req.url
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            
+        soup = BeautifulSoup(resp.text, "html.parser")
+        
+        # Remove scripts and styles
+        for s in soup(["script", "style"]):
+            s.decompose()
+            
+        title = soup.title.string.strip() if soup.title else "Scraped_Content"
+        # Sanitize title for filename
+        safe_title = sanitize_filename(title)
+        if len(safe_title) > 50: safe_title = safe_title[:50]
+        
+        text_content = soup.get_text(separator="\n\n").strip()
+        
+        if not text_content:
+            raise HTTPException(status_code=400, detail="Could not extract text from URL")
+            
+        # Wrap in Markdown
+        md_content = f"# {title}\n\nSource: {url}\n\n---\n\n{text_content}"
+        
+        # Save to workspace
+        file_hash = hashlib.sha256(md_content.encode()).hexdigest()
+        filename = f"url_{file_hash[:12]}.md"
+        final_path = WORKSPACE_DIR / filename
+        
+        final_path.write_text(md_content, encoding="utf-8")
+        
+        return {
+            "status": "success",
+            "filename": filename,
+            "title": title,
+            "url": url,
+            "vectorized": "pending"
+        }
+        
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP Error scraping URL {url}: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {str(e)}")
+    except Exception as e:
+        logger.error(f"Scraping error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/documents/text", tags=["Documents"])
+async def add_text_source(req: TextSourcingRequest):
+    """
+    Save manually pasted text as a .txt file in workspace/.
+    """
+    try:
+        name = req.name.strip() or "Pasted_Text"
+        content = req.content.strip()
+        
+        if not content:
+            raise HTTPException(status_code=400, detail="Content cannot be empty")
+            
+        # Save to workspace
+        file_hash = hashlib.sha256(content.encode()).hexdigest()
+        safe_name = sanitize_filename(name)
+        filename = f"text_{file_hash[:12]}.txt"
+        final_path = WORKSPACE_DIR / filename
+        
+        final_path.write_text(content, encoding="utf-8")
+        
+        return {
+            "status": "success",
+            "filename": filename,
+            "original_name": name,
+            "size": len(content),
+            "vectorized": "pending"
+        }
+    except Exception as e:
+        logger.error(f"Error saving text source: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
