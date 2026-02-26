@@ -410,8 +410,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const skillModule = (() => {
         const skillList = document.getElementById('skillList');
         const skillCount = document.getElementById('skillCount');
-        const skillCountTab = document.getElementById('skillCountTab');
-        if(skillCountTab) skillCountTab.textContent = cnt;
         const statusDot = document.getElementById('statusDot');
         const statusLabel = document.getElementById('statusLabel');
         const rescanBtn = document.getElementById('rescanBtn');
@@ -876,8 +874,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         function renderDocList(files, total) {
             docCount.textContent = total;
-        const docCountTab = document.getElementById('docCountTab');
-        if(docCountTab) docCountTab.textContent = total;
+        const sourceHint = document.getElementById('sourceCountHint');
+        if (sourceHint) {
+            if (total > 0) {
+                sourceHint.textContent = `${total} 個來源`;
+                sourceHint.classList.remove('hidden');
+            } else {
+                sourceHint.classList.add('hidden');
+            }
+        }
         const sourceHint = document.getElementById('sourceCountHint');
         if (sourceHint) {
             if (total > 0) {
@@ -950,25 +955,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 }); // end DOMContentLoaded
 
-// Register tab switching logic
-const tabSkillBtn = document.getElementById('tabSkillBtn');
-const tabDocBtn = document.getElementById('tabDocBtn');
-const contentSkill = document.getElementById('contentSkill');
-const contentDoc = document.getElementById('contentDoc');
-
-if (tabSkillBtn) {
-    tabSkillBtn.addEventListener('click', () => {
-        tabSkillBtn.classList.add('active');
-        tabDocBtn.classList.remove('active');
-        contentSkill.classList.add('active');
-        contentDoc.classList.remove('active');
-    });
-}
-if (tabDocBtn) {
-    tabDocBtn.addEventListener('click', () => {
-        tabDocBtn.classList.add('active');
-        tabSkillBtn.classList.remove('active');
-        contentDoc.classList.add('active');
-        contentSkill.classList.remove('active');
-    });
-}
+// Accordion Logic
+['skill', 'doc'].forEach(prefix => {
+    const btn = document.getElementById(prefix + 'AccordionBtn');
+    const content = document.getElementById(prefix + 'AccordionContent');
+    if (btn && content) {
+        btn.addEventListener('click', () => {
+            btn.classList.toggle('active');
+            content.classList.toggle('active');
+        });
+    }
+});

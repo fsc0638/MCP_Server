@@ -184,57 +184,58 @@ body {
 }
 
 /* ===== LEFT PANEL (Sources) ===== */
-/* ===== SIDE TABS ===== */
-.side-tabs {
-    display: flex;
-    border-bottom: 1px solid var(--border);
+.panel-left {
     background: var(--surface-bg);
+    border-right: 1px solid var(--border);
 }
 
-.side-tab {
-    flex: 1;
-    background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
-    padding: 12px 0;
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all 0.2s;
-    font-family: var(--font-ui);
+/* ===== ACCORDION (LEFT PANEL) ===== */
+.accordion-header {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 8px;
+    padding: 16px;
+    background: var(--surface-bg);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
 }
 
-.side-tab:hover {
-    color: var(--cis-blue);
+.accordion-header:hover {
+    background: var(--cis-blue-light);
 }
 
-.side-tab.active {
-    color: var(--cis-blue);
-    border-bottom-color: var(--cis-blue);
+.accordion-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+    flex: 1;
+    margin-left: 8px;
 }
 
-.side-tab .badge {
-    font-size: 11px;
-    padding: 2px 6px;
+.chevron-icon {
+    width: 18px;
+    height: 18px;
+    color: var(--text-muted);
+    transition: transform 0.3s;
+    margin-left: 8px;
 }
 
-.tab-content {
+.accordion-header.active .chevron-icon {
+    transform: rotate(180deg);
+}
+
+.accordion-content {
     display: none;
     flex-direction: column;
-    flex: 1;
     overflow: hidden;
+    background: var(--surface-panel);
 }
 
-.tab-content.active {
+.accordion-content.active {
     display: flex;
 }
 
-.panel-left {
     background: var(--surface-panel);
     border-right: 1px solid var(--border);
 }
@@ -1390,7 +1391,8 @@ textarea::placeholder {
     display: flex;
     gap: 8px;
     justify-content: flex-end;
-    padding-top: 8px;
+    padding-top: 0px;
+    margin: auto 0;
     flex-shrink: 0;
 }
 

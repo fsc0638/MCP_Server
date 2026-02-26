@@ -45,29 +45,24 @@
 
         <!-- LEFT PANEL: Skill & Doc Management -->
         <aside class="panel panel-left">
-            <div class="side-tabs">
-                <button class="side-tab active" id="tabSkillBtn">技能控管 <span class="badge" id="skillCountTab">0</span></button>
-                <button class="side-tab" id="tabDocBtn">知識庫文件 <span class="badge" id="docCountTab">0</span></button>
+            <!-- SECTION 1: Skills -->
+            <div class="accordion-header active" id="skillAccordionBtn">
+                <span class="panel-icon">⚙</span>
+                <h2 class="accordion-title">技能控管</h2>
+                <span class="badge skill-count" id="skillCount">0</span>
+                <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
             </div>
-
-            <!-- SKILL CONTENT -->
-            <div class="tab-content active" id="contentSkill">
-                <div class="panel-title-bar" style="border-bottom: none; padding-top: 10px;">
-                    <span class="panel-icon">⚙</span>
-                    <h2 class="panel-title">技能控管</h2>
-                    <span class="badge skill-count" id="skillCount" style="display:none;">0</span>
+            <div class="accordion-content active" id="skillAccordionContent">
+                <div class="panel-toolbar" style="display:flex; gap:8px; padding:10px 16px; border-bottom:1px solid var(--border); align-items:center;">
                     <button class="icon-btn" id="createSkillBtn" title="新增技能">+</button>
                     <button class="icon-btn" id="rescanBtn" title="重新掃描技能庫">↺</button>
+                    <div class="source-status-row" style="margin-left:auto;">
+                        <span class="dot dot-grey pulse" id="statusDot"></span>
+                        <span class="status-label" id="statusLabel">連線中...</span>
+                    </div>
                 </div>
-                
-                <div class="source-status-row">
-                    <span class="dot dot-grey pulse" id="statusDot"></span>
-                    <span class="status-label" id="statusLabel">連線中...</span>
-                </div>
-                
                 <div class="source-divider">已載入技能</div>
-                
-                <ul class="skill-list" id="skillList">
+                <ul class="skill-list" id="skillList" style="flex:1; overflow-y:auto;">
                     <li class="skill-item-placeholder">
                         <div class="skeleton-line w70"></div>
                         <div class="skeleton-line w40"></div>
@@ -75,24 +70,20 @@
                 </ul>
             </div>
 
-            <!-- DOC CONTENT -->
-            <div class="tab-content" id="contentDoc">
-                <div class="panel-title-bar" style="border-bottom: none; padding-top: 10px;">
-                    <span class="panel-icon">📂</span>
-                    <h2 class="panel-title">知識庫文件</h2>
-                    <span class="badge doc-count" id="docCount" style="display:none;">0</span>
-                </div>
-                
-                <div style="padding: 10px 16px; font-size: 13px; color: var(--text-secondary);">
-                    可以直接將文件 (PDF/MD/TXT) 拖曳到對話視窗上傳哦！
-                </div>
-                
-                <ul class="skill-list" id="docList">
+            <!-- SECTION 2: Docs -->
+            <div class="accordion-header active" id="docAccordionBtn">
+                <span class="panel-icon">📂</span>
+                <h2 class="accordion-title">知識庫文件</h2>
+                <span class="badge doc-count" id="docCount" style="margin-left: 4px;">0</span>
+                <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </div>
+            <div class="accordion-content active" id="docAccordionContent" style="display:flex; flex-direction:column; overflow:hidden;">
+                <ul class="skill-list" id="docList" style="flex:1; overflow-y:auto; padding:8px 0;">
                     <!-- Documents injected here via JS -->
                 </ul>
             </div>
 
-            <div class="panel-footer">
+            <div class="panel-footer" style="margin-top:auto;">
                 <span class="footer-label">版本</span>
                 <span class="footer-val">2.0.0-UMA</span>
             </div>
@@ -153,7 +144,7 @@
                 </div>
                 <div class="input-wrapper" id="inputWrapper">
                     <input type="file" id="workspaceFileInput" class="hidden">
-<!-- File attaching moved out -->
+<!-- File attaching temporarily removed -->
                     <textarea id="userInput" placeholder="開始輸入..." rows="1" disabled></textarea>
                     
                     <div class="input-right-actions">
