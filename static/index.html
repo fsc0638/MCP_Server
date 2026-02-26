@@ -43,34 +43,54 @@
     <!-- ===== MAIN BODY ===== -->
     <div class="app-body">
 
-        <!-- LEFT PANEL: Skill Management -->
+        <!-- LEFT PANEL: Skill & Doc Management -->
         <aside class="panel panel-left">
-            <div class="panel-title-bar">
-                <span class="panel-icon">⚙</span>
-                <h2 class="panel-title">技能控管</h2>
-                <span class="badge skill-count" id="skillCount">0</span>
-                <button class="icon-btn" id="createSkillBtn" title="新增技能">+</button>
-                <button class="icon-btn" id="rescanBtn" title="重新掃描技能庫">↺</button>
+            <div class="side-tabs">
+                <button class="side-tab active" id="tabSkillBtn">技能控管 <span class="badge" id="skillCountTab">0</span></button>
+                <button class="side-tab" id="tabDocBtn">知識庫文件 <span class="badge" id="docCountTab">0</span></button>
             </div>
 
-            <div class="source-status-row">
-                <span class="dot dot-grey pulse" id="statusDot"></span>
-                <span class="status-label" id="statusLabel">連線中...</span>
+            <!-- SKILL CONTENT -->
+            <div class="tab-content active" id="contentSkill">
+                <div class="panel-title-bar" style="border-bottom: none; padding-top: 10px;">
+                    <span class="panel-icon">⚙</span>
+                    <h2 class="panel-title">技能控管</h2>
+                    <span class="badge skill-count" id="skillCount" style="display:none;">0</span>
+                    <button class="icon-btn" id="createSkillBtn" title="新增技能">+</button>
+                    <button class="icon-btn" id="rescanBtn" title="重新掃描技能庫">↺</button>
+                </div>
+                
+                <div class="source-status-row">
+                    <span class="dot dot-grey pulse" id="statusDot"></span>
+                    <span class="status-label" id="statusLabel">連線中...</span>
+                </div>
+                
+                <div class="source-divider">已載入技能</div>
+                
+                <ul class="skill-list" id="skillList">
+                    <li class="skill-item-placeholder">
+                        <div class="skeleton-line w70"></div>
+                        <div class="skeleton-line w40"></div>
+                    </li>
+                </ul>
             </div>
 
-            <div class="source-divider">已載入技能</div>
-
-            <ul class="skill-list" id="skillList">
-                <li class="skill-item-placeholder">
-                    <div class="skeleton-line w70"></div>
-                    <div class="skeleton-line w40"></div>
-                </li>
-            </ul>
-
-            <div class="source-divider">📂 知識庫文件 <span class="badge doc-count" id="docCount" style="margin-left: 8px; font-weight: normal; font-size: 0.9rem;">0</span></div>
-            <ul class="skill-list" id="docList">
-                <!-- Documents injected here via JS -->
-            </ul>
+            <!-- DOC CONTENT -->
+            <div class="tab-content" id="contentDoc">
+                <div class="panel-title-bar" style="border-bottom: none; padding-top: 10px;">
+                    <span class="panel-icon">📂</span>
+                    <h2 class="panel-title">知識庫文件</h2>
+                    <span class="badge doc-count" id="docCount" style="display:none;">0</span>
+                </div>
+                
+                <div style="padding: 10px 16px; font-size: 13px; color: var(--text-secondary);">
+                    可以直接將文件 (PDF/MD/TXT) 拖曳到對話視窗上傳哦！
+                </div>
+                
+                <ul class="skill-list" id="docList">
+                    <!-- Documents injected here via JS -->
+                </ul>
+            </div>
 
             <div class="panel-footer">
                 <span class="footer-label">版本</span>
@@ -133,9 +153,7 @@
                 </div>
                 <div class="input-wrapper" id="inputWrapper">
                     <input type="file" id="workspaceFileInput" class="hidden">
-                    <button class="icon-btn attach-file-btn" id="attachFileBtn" title="上傳檔案">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
-                    </button>
+<!-- File attaching moved out -->
                     <textarea id="userInput" placeholder="開始輸入..." rows="1" disabled></textarea>
                     
                     <div class="input-right-actions">
