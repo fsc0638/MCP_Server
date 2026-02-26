@@ -293,8 +293,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (xhr.status === 200) {
                     const res = JSON.parse(xhr.responseText);
                     attachedFilePath = res.path;     // Backend now returns 'path'
-                    attachedFileName.textContent = res.original_filename; // Display original file name
-                    logModule.addLog('SYS', `檔案上傳成功: ${res.original_filename}`);
+
+                    if (res.vectorized === 'pending') {
+                        attachedFileName.textContent = `${res.original_filename} (索引建立中...)`;
+                        logModule.addLog('SYS', `檔案上傳成功: ${res.original_filename}，系統正在背景建立索引...`);
+                    } else {
+                        attachedFileName.textContent = res.original_filename;
+                        logModule.addLog('SYS', `檔案上傳成功: ${res.original_filename}`);
+                    }
+
+                    // Refresh document list if docModule is active
+                    if (window.docModule) window.docModule.loadDocuments();
+
                 } else {
                     const errRes = JSON.parse(xhr.responseText || '{}');
                     alert(`上傳失敗: ${errRes.detail || '未知錯誤'}`);
@@ -846,8 +856,83 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     // =========================================================================
+    // MODULE C: DOCUMENTS (File Management)
+    // =========================================================================
+    const docModule = (() => {
+        const docList = document.getElementById('docList');
+        const docCount = document.getElementById('docCount');
+
+        async function loadDocuments() {
+            try {
+                const res = await fetch('/api/documents/list');
+                const data = await res.json();
+                renderDocList(data.files, data.total);
+            } catch (e) {
+                console.error('Failed to load documents:', e);
+            }
+        }
+
+        function renderDocList(files, total) {
+            docCount.textContent = total;
+            docList.innerHTML = '';
+
+            if (total === 0) {
+                docList.innerHTML = '<li class="skill-item-placeholder" style="color: #666; font-size: 0.9rem; padding: 12px;">無上傳文件</li>';
+                return;
+            }
+
+            files.forEach(f => {
+                const li = document.createElement('li');
+                li.className = 'skill-item';
+
+                // Format size
+                const sizeKB = (f.size / 1024).toFixed(1);
+
+                // Indexed status dot
+                const dotClass = f.indexed ? 'dot-green' : 'dot-grey';
+                const dotTitle = f.indexed ? '已加入知識庫' : '未建立索引/不支援';
+
+                // escape function is in chatModule scope, so we redefine a simple one here
+                const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+                li.innerHTML = `
+                    <div class="skill-item-left">
+                        <div class="skill-item-header">
+                            <span class="dot ${dotClass}" title="${dotTitle}"></span>
+                            <span class="skill-name" style="font-size: 0.9rem; word-break: break-all;" title="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</span>
+                        </div>
+                        <div class="skill-item-desc" style="font-size: 0.8rem">${sizeKB} KB</div>
+                    </div>
+                    <div class="skill-item-actions">
+                        <button class="action-btn" style="background: none; border: none; font-size: 1.1rem; cursor:pointer;" title="刪除檔案" onclick="window.docModule.deleteDocument('${f.filename}')">🗑️</button>
+                    </div>
+                `;
+                docList.appendChild(li);
+            });
+        }
+
+        async function deleteDocument(filename) {
+            if (!confirm(`確定要刪除文件 '${filename}' 嗎？\n這也會將它從知識庫中永久移除。`)) return;
+            try {
+                const res = await fetch(`/api/documents/${filename}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || data.message || '刪除失敗');
+                logModule.addLog('SYS', `已刪除文件: ${filename}`);
+                loadDocuments();
+            } catch (e) {
+                alert(e.message);
+            }
+        }
+
+        return { loadDocuments, deleteDocument };
+    })();
+    window.docModule = docModule;
+
+
+    // =========================================================================
     // INIT
     // =========================================================================
     skillModule.loadSkills();
+    docModule.loadDocuments();
 
 }); // end DOMContentLoaded

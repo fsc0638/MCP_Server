@@ -112,3 +112,11 @@ This file records summaries of past sessions for Agent continuity.
 
 ---
 
+
+## Session manual_test (Memory Compressed) — 2026-02-26 10:34:25
+**Engine**: Citation Grounding: Agent 記憶了文獻來源 `qxyz_overview.md` (內容: Key Facts)
+
+
+## Session web-qackpo (Memory Compressed) — 2026-02-26 13:44:45
+**Engine**: Citation Grounding: Agent 記憶了文獻來源 `a18f28c15f390bed.pdf` (Offset: chunk_0) (內容: 人工智慧行為分析, 概要, 特徵)
+

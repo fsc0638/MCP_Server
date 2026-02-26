@@ -54,8 +54,24 @@ class SessionManager:
 
     def append_message(self, session_id: str, role: str, content: str):
         """Append a message to a session's conversation history with auto-compression trigger."""
+        import re
         history = self._conversations.get(session_id, [])
         history.append({"role": role, "content": content})
+        
+        # Sprint 2: 記憶持久化：攔截引用標籤並同步寫入 MEMORY.md
+        # Sprint 2/4: Memory persistence with Chunk Offsets for Vector RAG
+        if role == "assistant" or role == "model":
+            # Match formats like: [filename#chunk_0: snippet] or [filename: snippet]
+            citations = re.findall(r'\[\s*(.+?\.[a-zA-Z0-9]+)(?:#chunk_(\d+))?\s*:\s*(.+?)\s*\]', content)
+            if citations:
+                unique_citations = set(citations)
+                for filename, chunk_idx, snippet in unique_citations:
+                    snip = snippet.strip()[:60] + "..." if len(snippet.strip()) > 60 else snippet.strip()
+                    offset_str = f" (Offset: chunk_{chunk_idx})" if chunk_idx else ""
+                    msg = f"Citation Grounding: Agent 記憶了文獻來源 `{filename}`{offset_str} (內容: {snip})"
+                    self._log_compression_event(session_id, msg)
+                    logger.info(f"Persisted citation memory: {filename}{offset_str}")
+
         self._check_and_compress(session_id)
 
     def _check_and_compress(self, session_id: str):

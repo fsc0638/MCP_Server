@@ -107,6 +107,23 @@ class GeminiAdapter:
         if not user_query:
             return {"status": "error", "message": "No user query provided"}
 
+        # Dynamic RAG Context Retrieval
+        from core.retriever import retriever
+        retrieved_context = retriever.search_context(user_query)
+        
+        if retrieved_context:
+            augmented_query = f"""[System Instruction]
+請務必根據下方提供的參考資料來回答問題。在回答時，若有引用資料片斷，請嚴格遵守標示出處格式，例如 "[文件名稱#chunk_0:片段]"。
+若參考資料未能解答問題，請老實回答不知道或根據您的既有知識依現狀客觀回答。
+
+[Reference Documents]
+{retrieved_context}
+
+[User Question]
+{user_query}"""
+        else:
+            augmented_query = user_query
+
         tools = self.get_tools(user_query=user_query)
 
         try:
@@ -132,10 +149,10 @@ class GeminiAdapter:
             
             upload_parts = self._handle_attached_file(attached_file, session_id)
             if upload_parts:
-                message_parts = upload_parts + [user_query]
+                message_parts = upload_parts + [augmented_query]
                 response = chat.send_message(message_parts)
             else:
-                response = chat.send_message(user_query)
+                response = chat.send_message(augmented_query)
 
             tool_calls_made = 0
             MAX_ITERATIONS = 10
@@ -225,12 +242,29 @@ class GeminiAdapter:
             )
             chat = model.start_chat(history=gemini_history[:-1] if len(gemini_history) > 1 else [])
             
+            # Dynamic RAG Context Retrieval
+            from core.retriever import retriever
+            retrieved_context = retriever.search_context(last_user_msg) if last_user_msg else ""
+            
+            if retrieved_context:
+                augmented_msg = f"""[System Instruction]
+請務必根據下方提供的參考資料來回答問題。在回答時，若有引用資料片斷，請嚴格遵守標示出處格式，例如 "[文件名稱#chunk_0:片段]"。
+若參考資料未能解答問題，請老實回答不知道。
+
+[Reference Documents]
+{retrieved_context}
+
+[User Question]
+{last_user_msg}"""
+            else:
+                augmented_msg = last_user_msg
+
             upload_parts = self._handle_attached_file(attached_file, session_id)
             if upload_parts:
-                message_parts = upload_parts + [last_user_msg]
+                message_parts = upload_parts + [augmented_msg]
                 response = chat.send_message(message_parts)
             else:
-                response = chat.send_message(last_user_msg)
+                response = chat.send_message(augmented_msg)
                 
             return {"status": "success", "content": response.text}
         except Exception as e:

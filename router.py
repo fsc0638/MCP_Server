@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query, Request, Body, File, UploadFile
+from fastapi import FastAPI, HTTPException, Query, Request, Body, File, UploadFile, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
@@ -44,6 +44,37 @@ static_dir = PROJECT_ROOT / "static"
 if not static_dir.exists():
     static_dir.mkdir()
 app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="static")
+
+@app.on_event("startup")
+async def index_all_skills():
+    """Sprint 3/4: Index all skills and start directory watcher."""
+    from main import get_uma
+    from core.retriever import retriever
+    from core.watcher import DirectoryWatcher
+    try:
+        uma = get_uma()
+        count = 0
+        for skill_name, skill_data in uma.registry.skills.items():
+            skill_md = skill_data["path"] / "SKILL.md"
+            if skill_md.exists():
+                retriever.ingest_skill(skill_name, str(skill_md))
+                count += 1
+        logger.info(f"Startup SKILL indexing complete. Indexed {count} skills.")
+
+        # Start Watchdog
+        global __watcher
+        __watcher = DirectoryWatcher(str(WORKSPACE_DIR), str(uma.registry.skills_home), retriever)
+        __watcher.start()
+
+    except Exception as e:
+        logger.error(f"Failed to start indexing or watcher on startup: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_system():
+    global __watcher
+    if '__watcher' in globals() and __watcher is not None:
+        __watcher.stop()
+
 
 
 # ─── D-07: Unified Session Management ─────────────────────────────────────────
@@ -117,7 +148,7 @@ def health_check():
 # ─── UBER FILE UPLOAD MGR ─────────────────────────────────────────────────────
 
 @app.post("/api/documents/upload", tags=["Documents"])
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(file: UploadFile = File(...), background_tasks: BackgroundTasks = BackgroundTasks()):
     """
     Handle document uploads, check hash for deduplication, and sanitize path.
     """
@@ -148,18 +179,68 @@ async def upload_document(file: UploadFile = File(...)):
         else:
             logger.info(f"File already exists (Hash match): {final_path.name} (Original: {filename})")
             
+        # 5. Background vectorization is now fully handled by the Watchdog in core/watcher.py
+        # no manual background_tasks.add_task needed here.
+        vectorized_status = "pending" if extension in {".txt", ".md", ".pdf", ".csv"} else "unsupported"
+            
         return {
             "status": "success",
             "filename": hashed_filename,
             "original_filename": filename,
             "hash": file_hash,
-            "path": str(final_path)
+            "path": str(final_path),
+            "vectorized": vectorized_status
         }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error uploading file: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/documents/list", tags=["Documents"])
+def list_documents():
+    """
+    List all uploaded files in workspace/.
+    Also reports which files are currently indexed in FAISS.
+    """
+    from core.retriever import retriever
+    indexed = set(retriever.list_indexed_files())
+    files = []
+    for f in sorted(WORKSPACE_DIR.iterdir()):
+        if f.is_file() and not f.name.startswith("."):
+            files.append({
+                "filename": f.name,
+                "size": f.stat().st_size,
+                "indexed": f.name in indexed
+            })
+    return {"total": len(files), "files": files}
+
+
+@app.delete("/api/documents/{filename}", tags=["Documents"])
+def delete_document_endpoint(filename: str):
+    """
+    Delete an uploaded file and remove its FAISS index chunks.
+    """
+    from core.retriever import retriever
+    # Security: only allow plain filenames (no path traversal)
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    target = (WORKSPACE_DIR / filename).resolve()
+    if not str(target).startswith(str(WORKSPACE_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="Path traversal denied")
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"File '{filename}' not found")
+
+    # Remove from FAISS
+    retriever.delete_document(filename)
+
+    # Remove from disk
+    target.unlink()
+    logger.info(f"Deleted file and FAISS index: {filename}")
+    return {"status": "success", "message": f"'{filename}' 已刪除"}
 
 
 
@@ -261,6 +342,9 @@ async def chat(req: ChatRequest):
     # 6. Append assistant reply to history
     if result.get("status") == "success":
         history.append({"role": "assistant", "content": result["content"]})
+        # Sprint 2: Notify SessionManager to record messages and extract citations
+        _session_mgr.append_message(req.session_id, "user", req.user_input)
+        _session_mgr.append_message(req.session_id, "assistant", result["content"])
         # Auto-flush every 20 messages to prevent memory loss
         if len(history) % 20 == 0:
             flush_session_to_memory(req.session_id)
@@ -416,6 +500,7 @@ def rollback_skill(skill_name: str):
     try:
         shutil.copy2(bak_path, skill_md_path)
         uma.registry.skills.pop(skill_name, None)
+
         logger.info(f"Skill '{skill_name}' rolled back from SKILL.md.bak")
         return {"status": "success", "message": f"技能 '{skill_name}' 已回退至上次備份版本"}
     except Exception as e:
