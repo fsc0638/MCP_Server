@@ -53,7 +53,37 @@ class OpenAIAdapter:
 
         return all_tools
 
-    def chat(self, messages: Any, user_query: Optional[str] = None) -> Dict[str, Any]:
+    def _handle_attached_file(self, attached_file: Optional[str]) -> Optional[Dict[str, Any]]:
+        """
+        Multimodal Parity: Read file and convert to Base64 for OpenAI Vision.
+        Currently supports images.
+        """
+        if not attached_file:
+            return None
+
+        import mimetypes
+        import base64
+        
+        mime_type, _ = mimetypes.guess_type(attached_file)
+        if not mime_type:
+            return None
+
+        if mime_type.startswith("image/"):
+            try:
+                with open(attached_file, "rb") as f:
+                    base64_img = base64.b64encode(f.read()).decode('utf-8')
+                return {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{base64_img}"
+                    }
+                }
+            except Exception as e:
+                logger.error(f"Failed to read and encode image for OpenAI: {e}")
+                return None
+        return None
+
+    def chat(self, messages: Any, user_query: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None) -> Dict[str, Any]:
         """
         Send a chat completion request with tool calling support.
         Handles the tool call loop automatically.
@@ -91,6 +121,20 @@ class OpenAIAdapter:
             messages.insert(0, system_msg)
             user_query = user_query or (messages[-1]["content"] if messages else None)
 
+        img_part = self._handle_attached_file(attached_file)
+        if img_part:
+            for i in reversed(range(len(messages))):
+                if messages[i].get("role") == "user":
+                    orig_text = messages[i]["content"]
+                    if isinstance(orig_text, str):
+                        messages[i]["content"] = [
+                            {"type": "text", "text": orig_text},
+                            img_part
+                        ]
+                    elif isinstance(orig_text, list):
+                        messages[i]["content"].append(img_part)
+                    break
+
         tools = self.get_tools(user_query=user_query)
         tool_calls_made = 0
         MAX_ITERATIONS = 10  # Safety cap
@@ -111,7 +155,13 @@ class OpenAIAdapter:
                     tool_results = []
                     for tool_call in choice.message.tool_calls:
                         fn_name = tool_call.function.name
-                        fn_args = tool_call.function.arguments
+                        
+                        import json
+                        try:
+                            fn_args = json.loads(tool_call.function.arguments) if tool_call.function.arguments else {}
+                        except json.JSONDecodeError:
+                            logger.error(f"Failed to parse OpenAI tool arguments: {tool_call.function.arguments}")
+                            fn_args = {}
 
                         logger.info(f"OpenAI tool call: {fn_name}({fn_args})")
                         result = self.uma.execute_tool_call(fn_name, fn_args)
@@ -157,7 +207,7 @@ class OpenAIAdapter:
             return {"status": "error", "message": str(e)}
 
 
-    def simple_chat(self, session_history: list) -> dict:
+    def simple_chat(self, session_history: list, **kwargs) -> dict:
         """
         Pure LLM conversation — NO tools, NO skill schema injection.
         Strictly isolated from skill execution.
@@ -165,6 +215,7 @@ class OpenAIAdapter:
         Args:
             session_history: Full conversation so far as list of
                              {role, content} dicts. Must include system msg.
+            kwargs: Accepts session_id and attached_file for compatibility.
         Returns:
             {status: 'success'|'error', content: str, message: str}
         """

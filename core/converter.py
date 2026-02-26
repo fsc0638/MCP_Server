@@ -18,23 +18,43 @@ class SchemaConverter:
             return description
         return description[:limit-50] + "... [Content Pruned for Token Economy]"
 
+    def _strict_json_schema(self, params: Any) -> Any:
+        """Recursively convert types to lowercase for strict standard JSON Schema compatibility."""
+        if isinstance(params, dict):
+            new_params = {}
+            for k, v in params.items():
+                if k == "type" and isinstance(v, str):
+                    new_params[k] = v.lower()
+                else:
+                    new_params[k] = self._strict_json_schema(v)
+            return new_params
+        elif isinstance(params, list):
+            return [self._strict_json_schema(item) for item in params]
+        return params
+
     def to_openai(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
         Converts metadata to OpenAI Tool format.
         D-06: Only uses parameters explicitly defined in metadata.
+        Strict JSON Schema: Ensures type strings like "STRING" are converted to "string".
         """
         desc = self.prune_description(metadata.get("description", ""), self.LIMIT_OPENAI)
         
+        raw_params = metadata.get("parameters", {
+            "type": "object",
+            "properties": {},
+            "required": []
+        })
+
+        # Apply strict lowercase to types
+        strict_params = self._strict_json_schema(raw_params)
+
         return {
             "type": "function",
             "function": {
                 "name": metadata.get("name"),
                 "description": desc,
-                "parameters": metadata.get("parameters", {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                })
+                "parameters": strict_params
             }
         }
 

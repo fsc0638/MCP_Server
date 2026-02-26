@@ -156,7 +156,7 @@ class ClaudeAdapter:
             logger.error(f"Claude chat error: {e}")
             return {"status": "error", "message": str(e)}
 
-    def simple_chat(self, session_history: list) -> dict:
+    def simple_chat(self, session_history: list, **kwargs) -> dict:
         """
         Pure LLM conversation — NO tools, NO skill schema injection.
         Strictly isolated from skill execution.
@@ -164,6 +164,7 @@ class ClaudeAdapter:
         Args:
             session_history: List of {role, content} dicts (OpenAI format).
                              System messages are extracted automatically.
+            kwargs: Accepts session_id and attached_file for compatibility.
         Returns:
             {status: 'success'|'error', content: str}
         """

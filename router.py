@@ -319,12 +319,10 @@ async def chat(req: ChatRequest):
                 "message": f"模型 {req.model} 無法使用，請確認 API Key 是否設定於 .env"
             })
 
-        history.append({"role": "user", "content": user_content})
-
-        kwargs = {}
-        if req.model == "gemini":
-            kwargs["session_id"] = req.session_id
-            kwargs["attached_file"] = req.attached_file
+        kwargs = {
+            "session_id": req.session_id,
+            "attached_file": req.attached_file
+        }
 
         if req.execute:
             # Agent Mode -> full chat with tool calling
@@ -333,20 +331,22 @@ async def chat(req: ChatRequest):
             result = adapter.chat(messages=agent_history, user_query=user_content, **kwargs)
         else:
             # Pure Chat Mode -> no tools
-            result = adapter.simple_chat(history, **kwargs)
+            result = adapter.simple_chat(history_to_pass, **kwargs)
 
     except Exception as e:
         logger.error(f"Chat error: {e}")
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
-    # 6. Append assistant reply to history
+    # 6. Append assistant reply to history Manager
     if result.get("status") == "success":
-        history.append({"role": "assistant", "content": result["content"]})
-        # Sprint 2: Notify SessionManager to record messages and extract citations
+        # Sprint 2/5 D-07: Unified SessionManager handles appending and compressing memory
         _session_mgr.append_message(req.session_id, "user", req.user_input)
         _session_mgr.append_message(req.session_id, "assistant", result["content"])
+        
         # Auto-flush every 20 messages to prevent memory loss
-        if len(history) % 20 == 0:
+        # Note: we use _session_mgr._conversations size for accurate count
+        conv_len = len(_session_mgr.get_or_create_conversation(req.session_id))
+        if conv_len > 0 and conv_len % 20 == 0:
             flush_session_to_memory(req.session_id)
 
     return result
