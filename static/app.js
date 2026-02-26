@@ -874,6 +874,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
         function renderDocList(files, total) {
             docCount.textContent = total;
+        const sourceHint = document.getElementById('sourceCountHint');
+        if (sourceHint) {
+            if (total > 0) {
+                sourceHint.textContent = `${total} 個來源`;
+                sourceHint.classList.remove('hidden');
+            } else {
+                sourceHint.classList.add('hidden');
+            }
+        }
             docList.innerHTML = '';
 
             if (total === 0) {

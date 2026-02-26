@@ -47,7 +47,7 @@
     --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.15);
 
     /* Fonts */
-    --font-ui: 'Inter', 'PingFang TC', -apple-system, sans-serif;
+    --font-ui: 'Noto Sans TC', 'Noto Sans CJK TC', 'Noto Sans JP', 'Noto Sans KR', 'Inter', 'PingFang TC', -apple-system, sans-serif;
     --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
     /* Layout */
@@ -577,19 +577,52 @@ body {
 
 .input-wrapper {
     display: flex;
-    align-items: flex-end;
-    gap: 10px;
+    align-items: center;
+    gap: 12px;
     background: var(--surface-input);
     border: 1.5px solid var(--border-strong);
-    border-radius: 24px;
-    padding: 10px 12px 10px 20px;
-    box-shadow: var(--shadow-sm);
+    border-radius: 36px;
+    padding: 8px 12px 8px 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
     transition: border-color 0.2s, box-shadow 0.2s;
+    min-height: 56px;
 }
 
 .input-wrapper:focus-within {
     border-color: var(--cis-blue);
     box-shadow: 0 0 0 3px rgba(0, 51, 102, 0.1);
+}
+
+.attach-file-btn {
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: color 0.2s, background 0.2s;
+}
+
+.attach-file-btn:hover {
+    color: var(--cis-blue);
+    background: var(--cis-blue-light);
+}
+
+.input-right-actions {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-left: auto;
+}
+
+.source-count-hint {
+    font-size: 13.5px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    font-weight: 500;
 }
 
 textarea {
@@ -598,11 +631,12 @@ textarea {
     border: none;
     outline: none;
     font-family: var(--font-ui);
-    font-size: 14px;
+    font-size: 15px;
     color: var(--text-primary);
     resize: none;
     max-height: 160px;
     line-height: 1.5;
+    padding-top: 8px;
 }
 
 textarea::placeholder {
@@ -610,8 +644,8 @@ textarea::placeholder {
 }
 
 .send-btn {
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
     background: var(--cis-blue);
     color: white;
     border: none;
@@ -630,11 +664,11 @@ textarea::placeholder {
 }
 
 .send-btn:disabled {
-    background: var(--border-strong);
+    background: #f0f4f9;
+    color: #9ca3af;
     cursor: not-allowed;
     transform: none;
 }
-
 .input-hint {
     text-align: center;
     font-size: 11px;
