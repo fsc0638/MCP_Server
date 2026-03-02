@@ -1190,7 +1190,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         <div class="source-item-top">
                             ${s.favicon ? `<img src="${s.favicon}" class="source-item-favicon" onerror="this.style.display='none'">` : ''}
                             <a href="${s.url}" target="_blank" class="source-item-title">${escapeHtml(s.title)}</a>
-                            <a href="${s.url}" target="_blank" class="source-link-icon">🔗</a>
                         </div>
                         <div class="source-item-snippet">${escapeHtml(s.snippet)}</div>
                     </div>

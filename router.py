@@ -267,22 +267,84 @@ async def add_url_source(req: UrlSourcingRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def call_google_search(query: str) -> List[Dict[str, Any]]:
+    """Helper to call Google Custom Search JSON API."""
+    import httpx
+    api_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    cse_id = os.getenv("GOOGLE_CSE_ID", "").strip()
+    
+    if not api_key or not cse_id:
+        logger.warning("Google Search API credentials missing in .env")
+        return []
+
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        'key': api_key,
+        'cx': cse_id,
+        'q': query,
+        'num': 10 # Get top 10 results
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(url, params=params)
+            if resp.status_code != 200:
+                logger.error(f"Google Search API failed with status {resp.status_code}: {resp.text}")
+                return []
+            
+            data = resp.json()
+            items = data.get("items", [])
+            sources = []
+            for item in items:
+                # Extract favicon from pagemap if available
+                pagemap = item.get("pagemap", {})
+                favicon = ""
+                if "cse_image" in pagemap:
+                    favicon = pagemap["cse_image"][0].get("src", "")
+                elif "metatags" in pagemap:
+                    favicon = pagemap["metatags"][0].get("og:image", "")
+                
+                sources.append({
+                    "title": item.get("title", "No Title"),
+                    "url": item.get("link", ""),
+                    "snippet": item.get("snippet", ""),
+                    "favicon": favicon
+                })
+            return sources
+    except Exception as e:
+        logger.error(f"Error calling Google Search API: {e}")
+        return []
+
 @app.post("/api/research", tags=["Documents"])
 async def research_sources(req: ResearchRequest):
     """
-    Use OpenAI to 'research' and find 15-20 relevant sources based on a query.
-    Returns a curated list of potential sources for the user to select.
+    Research sources using Google Search with a fallback to OpenAI internal knowledge.
     """
     from adapters.openai_adapter import OpenAIAdapter
     uma = get_uma()
     adapter = OpenAIAdapter(uma)
     
+    # 1. Try Google Search First
+    google_sources = await call_google_search(req.query)
+    if google_sources:
+        logger.info(f"Using Google Search results for query: {req.query}")
+        return {"status": "success", "sources": google_sources, "method": "google_search"}
+
+    # 2. Fallback to OpenAI Research
+    logger.info(f"Falling back to OpenAI research for query: {req.query}")
     if not adapter.is_available:
-        raise HTTPException(status_code=503, detail="OpenAI adapter is not available")
+        raise HTTPException(status_code=503, detail="OpenAI adapter is not available and Google Search failed.")
 
     prompt = (
-        f"You are a research assistant. Based on the user query: '{req.query}', "
-        f"identify 15-20 highly relevant web sources (articles, documentation, news). "
+        f"Role: 你現在是一個專業的「網際網路研究專家」。目前的 Google 搜尋系統暫時由你接管，你的任務是針對使用者提出的關鍵字進行深度資源檢索。\n"
+        f"Task:\n"
+        f"1. 針對使用者的關鍵字：'{req.query}'，運用你廣大且精確的知識庫進行檢索。\n"
+        f"2. 篩選出關聯性最高、最具權威性的 15-20 個真實存在的網頁連結。\n"
+        f"3. 嚴格禁止只提供首頁連結（如 www.google.com），必須提供能獲取具體資訊的「深度內頁連結」（如具體的文章、技術論壇、官方新聞稿等）。\n"
+        f"Constraints:\n"
+        f"- 優先選擇具備長久參考價值的深度資料。\n"
+        f"- 排除廣告與無關的社群貼文。\n"
+        f"- 確保 URL 格式正確且為可存取的長連結，而非縮網址。\n\n"
         f"Format the output as a JSON array of objects, each containing: "
         f"'title' (string), 'url' (string, valid URL), 'snippet' (string, 1-2 sentences summary), "
         f"and 'favicon' (string, optional URL to a favicon or empty string).\n"
@@ -290,7 +352,6 @@ async def research_sources(req: ResearchRequest):
     )
 
     try:
-        # Use simple_chat since we want a direct LLM response without tools
         messages = [
             {"role": "system", "content": "You are a helpful assistant that provides source lists in JSON format. Return only valid JSON."},
             {"role": "user", "content": prompt}
@@ -300,32 +361,21 @@ async def research_sources(req: ResearchRequest):
         if result.get("status") != "success":
             raise HTTPException(status_code=500, detail=result.get("message", "OpenAI call failed"))
 
-        # Robust JSON extraction using REGEX
         content = result["content"].strip()
         import re
-        # Find the first [ and the last ] to extract the array
         match = re.search(r'\[.*\]', content, re.DOTALL)
-        if match:
-            json_str = match.group(0)
-        else:
-            # Fallback to current logic or throw error
-            json_str = content
-            if json_str.startswith("```json"):
-                json_str = json_str.replace("```json", "", 1).replace("```", "", 1).strip()
-            elif json_str.startswith("```"):
-                json_str = json_str.replace("```", "", 2).strip()
+        json_str = match.group(0) if match else content
+        if not match and json_str.startswith("```"):
+            json_str = json_str.replace("```json", "", 1).replace("```", "", 1).strip()
 
         sources = json.loads(json_str)
-        
-        # Validation: ensure it's a list
         if not isinstance(sources, list):
             raise ValueError("LLM did not return a list")
 
-        return {"status": "success", "sources": sources}
+        return {"status": "success", "sources": sources, "method": "llm_research"}
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse JSON from OpenAI research results: {e}")
-        logger.debug(f"Raw content: {result['content']}")
         raise HTTPException(status_code=500, detail=f"解析研究結果失敗: {str(e)}")
     except Exception as e:
         logger.error(f"Error in /api/research: {e}")

@@ -1229,6 +1229,7 @@ textarea::placeholder {
 
 .import-btn.active {
     background: #4285f4;
+    color: #fff;
     cursor: pointer;
 }
 
