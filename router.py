@@ -130,6 +130,9 @@ class TextSourcingRequest(BaseModel):
     name: str
     content: str
 
+class ResearchRequest(BaseModel):
+    query: str
+
 
 # ─── Health ───────────────────────────────────────────────────────────────────
 
@@ -261,6 +264,71 @@ async def add_url_source(req: UrlSourcingRequest):
         raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {str(e)}")
     except Exception as e:
         logger.error(f"Scraping error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/research", tags=["Documents"])
+async def research_sources(req: ResearchRequest):
+    """
+    Use OpenAI to 'research' and find 15-20 relevant sources based on a query.
+    Returns a curated list of potential sources for the user to select.
+    """
+    from adapters.openai_adapter import OpenAIAdapter
+    uma = get_uma()
+    adapter = OpenAIAdapter(uma)
+    
+    if not adapter.is_available:
+        raise HTTPException(status_code=503, detail="OpenAI adapter is not available")
+
+    prompt = (
+        f"You are a research assistant. Based on the user query: '{req.query}', "
+        f"identify 15-20 highly relevant web sources (articles, documentation, news). "
+        f"Format the output as a JSON array of objects, each containing: "
+        f"'title' (string), 'url' (string, valid URL), 'snippet' (string, 1-2 sentences summary), "
+        f"and 'favicon' (string, optional URL to a favicon or empty string).\n"
+        f"Return ONLY the raw JSON array. DO NOT include markdown code blocks or any other text."
+    )
+
+    try:
+        # Use simple_chat since we want a direct LLM response without tools
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant that provides source lists in JSON format. Return only valid JSON."},
+            {"role": "user", "content": prompt}
+        ]
+        result = adapter.simple_chat(messages)
+        
+        if result.get("status") != "success":
+            raise HTTPException(status_code=500, detail=result.get("message", "OpenAI call failed"))
+
+        # Robust JSON extraction using REGEX
+        content = result["content"].strip()
+        import re
+        # Find the first [ and the last ] to extract the array
+        match = re.search(r'\[.*\]', content, re.DOTALL)
+        if match:
+            json_str = match.group(0)
+        else:
+            # Fallback to current logic or throw error
+            json_str = content
+            if json_str.startswith("```json"):
+                json_str = json_str.replace("```json", "", 1).replace("```", "", 1).strip()
+            elif json_str.startswith("```"):
+                json_str = json_str.replace("```", "", 2).strip()
+
+        sources = json.loads(json_str)
+        
+        # Validation: ensure it's a list
+        if not isinstance(sources, list):
+            raise ValueError("LLM did not return a list")
+
+        return {"status": "success", "sources": sources}
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON from OpenAI research results: {e}")
+        logger.debug(f"Raw content: {result['content']}")
+        raise HTTPException(status_code=500, detail=f"解析研究結果失敗: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error in /api/research: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

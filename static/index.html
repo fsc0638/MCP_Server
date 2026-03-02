@@ -10,7 +10,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"
         rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=12">
+    <link rel="stylesheet" href="style.css?v=20">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 
@@ -323,51 +323,111 @@
         </div>
     </div>
 
-    <!-- ADD SOURCE MODAL (NotebookLM Style) -->
-    <div class="modal-overlay hidden" id="addSourceModalOverlay">
+    <!-- ADD SOURCE MODAL (Official NotebookLM High-Fidelity Style) -->
+    <div class="modal-overlay" id="addSourceModalOverlay">
         <div class="modal-container source-modal" id="addSourceModal">
+            <!-- Background Blobs -->
+            <div class="blob blue-blob"></div>
+            <div class="blob green-blob"></div>
+
+            <button class="modal-close" id="closeAddSourceBtn">&times;</button>
+
             <div class="modal-header">
-                <h3 class="modal-title">新增來源</h3>
-                <button class="modal-close" id="closeAddSourceBtn">&times;</button>
+                <div class="modal-header-center">
+                    <h1 class="modal-title">
+                        從您的 <span class="highlight-container" id="sourceHighlight">
+                            <span class="highlight-text active">網頁</span>
+                            <span class="highlight-text">文件</span>
+                            <span class="highlight-text">文本</span>
+                        </span>
+                        建構知識庫
+                    </h1>
+                </div>
             </div>
 
             <div class="modal-body">
                 <div class="source-search-wrap">
                     <span class="search-icon">🔍</span>
-                    <input type="text" class="source-search-input" id="webSearchInput" placeholder="在網路上搜尋新來源">
-                    <button class="source-search-go" id="webSearchGoBtn">→</button>
-                </div>
-
-                <div class="source-actions-grid">
-                    <button class="source-action-card" id="uploadFileBtnAction">
-                        <span class="card-icon">📤</span>
-                        <span class="card-label">上傳檔案</span>
-                    </button>
-                    <button class="source-action-card" id="addUrlBtnAction">
-                        <span class="card-icon">🔗</span>
-                        <span class="card-label">連結網站</span>
-                    </button>
-                    <button class="source-action-card" id="googleDriveBtnAction">
-                        <span class="card-icon">📁</span>
-                        <span class="card-label">雲端硬碟</span>
-                    </button>
-                    <button class="source-action-card" id="copyPasteBtnAction">
-                        <span class="card-icon">📋</span>
-                        <span class="card-label">複製文字</span>
-                    </button>
+                    <textarea class="source-search-input" id="webSearchInput" placeholder="在網路上搜尋新來源"
+                        rows="1"></textarea>
+                    <div class="search-chips">
+                        <button class="search-chip search-google-btn" id="googleSearchBtn">搜尋</button>
+                    </div>
                 </div>
 
                 <div class="source-drop-zone" id="sourceDropZone">
-                    <p class="drop-text">或者在此放置文件</p>
-                    <p class="drop-hint">PDF、Word、TXT、Markdown 等格式</p>
+                    <div class="drop-content">
+                        <p class="drop-text">或者將檔案拖放到這裡</p>
+                        <p class="drop-hint">PDF、圖片、文件、音訊等 (上限 50 份)</p>
+                    </div>
+
+                    <div class="source-actions-inline">
+                        <button class="source-action-pill mat-stroked" id="uploadFileBtnAction">
+                            <span class="pill-label">上傳檔案</span>
+                        </button>
+                        <button class="source-action-pill mat-stroked" id="addUrlBtnAction">
+                            <span class="pill-label">網站連結</span>
+                        </button>
+                        <button class="source-action-pill mat-stroked" id="googleDriveBtnAction">
+                            <span class="pill-label">雲端硬碟</span>
+                        </button>
+                        <button class="source-action-pill mat-stroked" id="copyPasteBtnAction">
+                            <span class="pill-label">複製文字</span>
+                        </button>
+                    </div>
                 </div>
 
-                <div class="source-limit-row">
-                    <div class="limit-bar-bg">
-                        <div class="limit-bar-fill" id="sourceLimitFill" style="width: 0%;"></div>
+                <div class="quota-container">
+                    <div class="quota-row">
+                        <div class="limit-bar-bg">
+                            <div class="limit-bar-fill" id="sourceLimitFill" style="width: 0%;"></div>
+                        </div>
+                        <span class="limit-counter" id="sourceLimitText">0 / 50</span>
                     </div>
-                    <span class="limit-text" id="sourceLimitText">0 / 50</span>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- RESEARCHING MODAL (Loading Pill) -->
+    <div class="modal-overlay" id="researchingModalOverlay">
+        <div class="researching-pill">
+            <div class="spinner-small"></div>
+            <span class="researching-text">正在分析並搜尋相關網頁...</span>
+        </div>
+    </div>
+
+    <!-- SOURCE SELECTION MODAL -->
+    <div class="modal-overlay" id="sourceSelectionModalOverlay">
+        <div class="modal-container selection-modal">
+            <div class="blue-blob"></div>
+            <div class="green-blob"></div>
+            <div class="modal-header-simple">
+                <div class="selection-header-top">
+                    <label class="checkbox-container">
+                        <input type="checkbox" id="selectAllSources" checked>
+                        <span class="checkmark"></span>
+                        選取所有來源
+                    </label>
+                </div>
+                <button class="modal-close-simple" id="closeSelectionBtn">&times;</button>
+            </div>
+
+            <div class="modal-body scrolling-content">
+                <div id="sourceListContainer" class="source-selection-list">
+                    <!-- Dynamic sources will be injected here -->
+                </div>
+            </div>
+
+            <div class="modal-footer-selection">
+                <div class="selection-buttons-left">
+                    <button class="icon-btn-ghost"><span class="icon">👍</span></button>
+                    <button class="icon-btn-ghost"><span class="icon">👎</span></button>
+                </div>
+                <div class="selection-stats">
+                    已選取 <span id="selectedCountText">0</span> 件來源
+                </div>
+                <button class="import-btn active" id="confirmImportBtn">匯入</button>
             </div>
         </div>
     </div>
@@ -400,7 +460,7 @@
         </div>
     </div>
 
-    <script src="app.js?v=12"></script>
+    <script src="app.js?v=20"></script>
     <script>
         document.getElementById('initTime').textContent =
             new Date().toLocaleTimeString('zh-TW', { hour12: false }) + ' ';

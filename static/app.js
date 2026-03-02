@@ -984,6 +984,18 @@ document.addEventListener('DOMContentLoaded', () => {
         if (closeText) closeText.onclick = () => textOverlay.classList.remove('active');
         if (confirmText) confirmText.onclick = submitText;
 
+        const googleBtn = document.getElementById('googleSearchBtn');
+        if (googleBtn) {
+            googleBtn.onclick = () => {
+                const q = searchInput.value.trim();
+                if (q) {
+                    researchModule.startResearch(q);
+                } else {
+                    alert('請輸入搜尋內容');
+                }
+            };
+        }
+
         // Drag & Drop
         if (dropZone) {
             ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(evt => {
@@ -1028,6 +1040,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         };
+        window.sourceModule = sourceModule;
     })();
 
 
@@ -1116,8 +1129,166 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     // =========================================================================
+    // RESEARCH MODULE (Automated Sourcing)
+    // =========================================================================
+    const researchModule = (() => {
+        const researchOverlay = document.getElementById('researchingModalOverlay');
+        const selectionOverlay = document.getElementById('sourceSelectionModalOverlay');
+        const sourceList = document.getElementById('sourceListContainer');
+        const selectAll = document.getElementById('selectAllSources');
+        const selectedCountText = document.getElementById('selectedCountText');
+        const confirmBtn = document.getElementById('confirmImportBtn');
+        const closeSelection = document.getElementById('closeSelectionBtn');
+        const addSourceOverlay = document.getElementById('addSourceModalOverlay');
+
+        let currentSources = [];
+
+        function startResearch(query) {
+            addSourceOverlay.classList.remove('active');
+            researchOverlay.classList.add('active');
+            logModule.addLog('SYS', `開始研究新來源: ${query}`);
+
+            fetch('/api/research', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query })
+            })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        showSelection(data.sources);
+                    } else {
+                        throw new Error(data.detail || data.message || '研究失敗');
+                    }
+                })
+                .catch(e => {
+                    researchOverlay.classList.remove('active');
+                    alert('研究過程發生錯誤: ' + e.message);
+                    addSourceOverlay.classList.add('active');
+                });
+        }
+
+        function showSelection(sources) {
+            currentSources = sources;
+            researchOverlay.classList.remove('active');
+            selectionOverlay.classList.add('active');
+            renderSources();
+            updateStats();
+        }
+
+        function renderSources() {
+            sourceList.innerHTML = '';
+            currentSources.forEach((s, idx) => {
+                const item = document.createElement('div');
+                item.className = 'source-selection-item';
+                item.innerHTML = `
+                    <label class="checkbox-container">
+                        <input type="checkbox" class="source-chk" data-idx="${idx}" checked>
+                        <span class="checkmark"></span>
+                    </label>
+                    <div class="source-item-meta">
+                        <div class="source-item-top">
+                            ${s.favicon ? `<img src="${s.favicon}" class="source-item-favicon" onerror="this.style.display='none'">` : ''}
+                            <a href="${s.url}" target="_blank" class="source-item-title">${escapeHtml(s.title)}</a>
+                            <a href="${s.url}" target="_blank" class="source-link-icon">🔗</a>
+                        </div>
+                        <div class="source-item-snippet">${escapeHtml(s.snippet)}</div>
+                    </div>
+                `;
+                sourceList.appendChild(item);
+            });
+
+            // Re-wire individual checkboxes
+            document.querySelectorAll('.source-chk').forEach(chk => {
+                chk.onchange = updateStats;
+            });
+        }
+
+        function updateStats() {
+            const checked = document.querySelectorAll('.source-chk:checked');
+            selectedCountText.textContent = checked.length;
+            if (checked.length > 0) {
+                confirmBtn.classList.add('active');
+                confirmBtn.disabled = false;
+            } else {
+                confirmBtn.classList.remove('active');
+                confirmBtn.disabled = true;
+            }
+        }
+
+        async function importSelected() {
+            const checked = Array.from(document.querySelectorAll('.source-chk:checked'));
+            if (checked.length === 0) return;
+
+            const toImport = checked.map(chk => currentSources[parseInt(chk.dataset.idx)]);
+            selectionOverlay.classList.remove('active');
+            logModule.addLog('SYS', `準備匯入 ${toImport.length} 個來源...`);
+
+            let successCount = 0;
+            for (const s of toImport) {
+                try {
+                    const res = await fetch('/api/documents/url', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: s.url })
+                    });
+                    if (res.ok) successCount++;
+                } catch (e) {
+                    console.error('Import failed for:', s.url, e);
+                }
+            }
+
+            logModule.addLog('SYS', `匯入完成: 成功 ${successCount}/${toImport.length}`);
+            window.docModule.loadDocuments();
+        }
+
+        // Wiring
+        if (selectAll) {
+            selectAll.onchange = () => {
+                document.querySelectorAll('.source-chk').forEach(chk => {
+                    chk.checked = selectAll.checked;
+                });
+                updateStats();
+            };
+        }
+
+        if (confirmBtn) confirmBtn.onclick = importSelected;
+        if (closeSelection) closeSelection.onclick = () => selectionOverlay.classList.remove('active');
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        return { startResearch };
+    })();
+    window.researchModule = researchModule;
+
+
+    // =========================================================================
     // INIT
     // =========================================================================
+    // --- UI Logic for Search TextArea (Auto-size) ---
+    const searchArea = document.getElementById('webSearchInput');
+    if (searchArea) {
+        searchArea.addEventListener('input', () => {
+            searchArea.style.height = 'auto';
+            searchArea.style.height = (searchArea.scrollHeight) + 'px';
+        });
+    }
+
+    // --- Dynamic Highlight Rotation ---
+    const highlightTexts = document.querySelectorAll('#sourceHighlight .highlight-text');
+    let highlightIndex = 0;
+    if (highlightTexts.length > 0) {
+        setInterval(() => {
+            highlightTexts[highlightIndex].classList.remove('active');
+            highlightIndex = (highlightIndex + 1) % highlightTexts.length;
+            highlightTexts[highlightIndex].classList.add('active');
+        }, 3000);
+    }
+
     skillModule.loadSkills();
     docModule.loadDocuments();
 
