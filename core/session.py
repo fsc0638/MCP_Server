@@ -128,24 +128,90 @@ class SessionManager:
             logger.error(f"Failed to log compression event: {e}")
 
     def flush_conversation_to_memory(self, session_id: str):
-        """Persist a web session's conversation history to MEMORY.md."""
-        history = self._conversations.get(session_id, [])
-        if len(history) <= 1:  # Only system msg or empty
-            return
-        try:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            lines = [f"\n## Session: {session_id} — {timestamp}\n"]
-            for msg in history:
-                if msg["role"] == "system":
-                    continue
-                role_label = "👤 User" if msg["role"] == "user" else "🤖 Assistant"
-                lines.append(f"**{role_label}**: {msg['content']}\n\n")
+        """Legacy: Persist raw conversation to MEMORY.md. Use flush_with_llm_summary() for semantic logging."""
+        self.flush_with_llm_summary(session_id, llm_callable=None)
 
+    def flush_with_llm_summary(self, session_id: str, llm_callable=None):
+        """
+        D-07 (Updated): Flush session to MEMORY.md with LLM-generated semantic summary
+        and citation grounding.
+
+        Args:
+            session_id:    Session to persist.
+            llm_callable:  Optional callable(prompt: str) -> str for LLM summarisation.
+                           If None or fails, a turn-count placeholder is written instead.
+        """
+        import re
+        history = self._conversations.get(session_id, [])
+        chat_msgs = [m for m in history if m.get("role") in ("user", "assistant")]
+        if not chat_msgs:
+            return
+
+        # 1. Extract citation tags from all assistant turns
+        all_citations = []
+        for msg in chat_msgs:
+            if msg.get("role") == "assistant":
+                found = re.findall(
+                    r'\[\s*(.+?\.[a-zA-Z0-9]+)(?:#chunk_(\d+))?\s*:\s*(.+?)\s*\]',
+                    msg.get("content", "")
+                )
+                all_citations.extend(found)
+
+        # 2. Generate LLM semantic summary
+        summary_text = None
+        if llm_callable and len(chat_msgs) >= 2:
+            summary_prompt = (
+                "請以 2-3 句話（繁體中文）摘要以下對話的核心要點，"
+                "包含：主要討論主題、提及的具體名詞或數據、達成的結論。"
+                "禁止包含問候語或無意義填充詞。\n\n"
+            )
+            for m in chat_msgs[-20:]:  # Last 20 messages to stay within token budget
+                content_preview = str(m.get("content", ""))[:300]
+                summary_prompt += f"[{m['role']}]: {content_preview}\n"
+            try:
+                summary_text = llm_callable(summary_prompt)
+            except Exception as e:
+                logger.warning(f"LLM summary generation failed for {session_id}: {e}")
+
+        if not summary_text:
+            turn_count = len(chat_msgs) // 2
+            summary_text = f"對話共 {turn_count} 輪（語義摘要未生成）"
+
+        # 3. Build and write MEMORY.md entry
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines = [
+            f"\n## Session: {session_id} — {timestamp}\n",
+            f"**摘要**: {summary_text}\n\n",
+        ]
+
+        # Append citation grounding block if documents were referenced
+        if all_citations:
+            unique_citations = {(fn, ci, sn) for fn, ci, sn in all_citations}
+            lines.append("**來源文件**:\n")
+            for filename, chunk_idx, snippet in sorted(unique_citations):
+                offset = f"#chunk_{chunk_idx}" if chunk_idx else ""
+                snip = snippet.strip()[:60] + "..." if len(snippet.strip()) > 60 else snippet.strip()
+                lines.append(f"- `{filename}{offset}` — {snip}\n")
+            lines.append("\n")
+
+        lines.append("---\n\n")
+
+        try:
             with open(self.memory_file, "a", encoding="utf-8") as f:
                 f.writelines(lines)
-            logger.info(f"Session {session_id} conversation flushed to MEMORY.md")
+            logger.info(f"Session {session_id} flushed with LLM summary to MEMORY.md")
         except Exception as e:
-            logger.error(f"Failed to flush conversation to memory: {e}")
+            logger.error(f"Failed to write session memory for {session_id}: {e}")
+
+    def flush_all_sessions(self, llm_callable=None):
+        """
+        D-07: Flush ALL active in-memory sessions to MEMORY.md.
+        Called on server shutdown to prevent data loss.
+        """
+        session_ids = list(self._conversations.keys())
+        for sid in session_ids:
+            self.flush_with_llm_summary(sid, llm_callable)
+        logger.info(f"flush_all_sessions: persisted {len(session_ids)} sessions to MEMORY.md")
 
     def clear_conversation(self, session_id: str):
         """Clear a conversation session (flush first, then remove)."""

@@ -45,35 +45,137 @@ if not static_dir.exists():
     static_dir.mkdir()
 app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="static")
 
+# ─── Skill Hash Registry (Plan A) ───────────────────────────────────────────
+import hashlib as _hashlib
+
+_SKILL_HASHES_FILE = Path.home() / ".mcp_faiss" / "skill_hashes.json"
+
+def _load_skill_hashes() -> dict:
+    """Load persisted SKILL.md content hashes."""
+    try:
+        if _SKILL_HASHES_FILE.exists():
+            return json.loads(_SKILL_HASHES_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {}
+
+def _save_skill_hashes(hashes: dict):
+    """Persist SKILL.md content hashes to disk."""
+    try:
+        _SKILL_HASHES_FILE.parent.mkdir(exist_ok=True)
+        _SKILL_HASHES_FILE.write_text(json.dumps(hashes, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Failed to save skill hashes: {e}")
+
+def _md5(path: Path) -> str:
+    """Compute MD5 of a file's content for change detection."""
+    return _hashlib.md5(path.read_bytes()).hexdigest()
+
+
+def _delta_index_skills(uma, retriever) -> dict:
+    """
+    Plan A: Hash-based delta skill indexing.
+    Only re-indexes skills whose SKILL.md has changed since last run.
+    Also removes FAISS chunks for deleted skills.
+
+    Returns a summary dict: {added, updated, removed, unchanged, errors}
+    """
+    stored_hashes = _load_skill_hashes()
+    current_skills = {name: data for name, data in uma.registry.skills.items()}
+    current_names  = set(current_skills.keys())
+    stored_names   = set(stored_hashes.keys())
+
+    summary = {"added": [], "updated": [], "removed": [], "unchanged": [], "errors": []}
+    new_hashes = {}
+
+    # Detect removed skills → remove from FAISS
+    for removed in sorted(stored_names - current_names):
+        try:
+            retriever.delete_document(removed)
+            summary["removed"].append(removed)
+            logger.info(f"[Delta] Removed skill from FAISS: {removed}")
+        except Exception as e:
+            summary["errors"].append(f"{removed}: {e}")
+
+    # Detect new / changed skills
+    for skill_name, skill_data in current_skills.items():
+        skill_md = skill_data["path"] / "SKILL.md"
+        if not skill_md.exists():
+            continue
+        try:
+            current_hash = _md5(skill_md)
+            stored_hash  = stored_hashes.get(skill_name)
+            new_hashes[skill_name] = current_hash
+
+            if stored_hash is None:
+                # New skill — never indexed
+                retriever.ingest_skill(skill_name, str(skill_md))
+                summary["added"].append(skill_name)
+                logger.info(f"[Delta] New skill indexed: {skill_name}")
+            elif current_hash != stored_hash:
+                # Changed — re-index
+                retriever.ingest_skill(skill_name, str(skill_md))
+                summary["updated"].append(skill_name)
+                logger.info(f"[Delta] Changed skill re-indexed: {skill_name}")
+            else:
+                # No change — skip
+                summary["unchanged"].append(skill_name)
+        except Exception as e:
+            logger.error(f"[Delta] Failed to process skill {skill_name}: {e}")
+            summary["errors"].append(f"{skill_name}: {e}")
+            new_hashes.pop(skill_name, None)
+
+    _save_skill_hashes(new_hashes)
+    return summary
+
+
 @app.on_event("startup")
 async def index_all_skills():
-    """Sprint 3/4: Index all skills and start directory watcher."""
+    """Plan A+C: Async startup — server is immediately available.
+    Skill FAISS indexing runs in background using hash-based delta.
+    """
     from main import get_uma
     from core.retriever import retriever
     from core.watcher import DirectoryWatcher
+    import asyncio
+
+    async def _background_index():
+        try:
+            uma = get_uma()
+            summary = await asyncio.get_event_loop().run_in_executor(
+                None, _delta_index_skills, uma, retriever
+            )
+            logger.info(
+                f"[Startup] Delta index complete — "
+                f"added:{len(summary['added'])} updated:{len(summary['updated'])} "
+                f"removed:{len(summary['removed'])} unchanged:{len(summary['unchanged'])} "
+                f"errors:{len(summary['errors'])}"
+            )
+        except Exception as e:
+            logger.error(f"[Startup] Background skill indexing failed: {e}")
+
     try:
         uma = get_uma()
-        count = 0
-        for skill_name, skill_data in uma.registry.skills.items():
-            skill_md = skill_data["path"] / "SKILL.md"
-            if skill_md.exists():
-                retriever.ingest_skill(skill_name, str(skill_md))
-                count += 1
-        logger.info(f"Startup SKILL indexing complete. Indexed {count} skills.")
-
-        # Start Watchdog
+        # Start Watchdog first so user can use the system immediately
         global __watcher
         __watcher = DirectoryWatcher(str(WORKSPACE_DIR), str(uma.registry.skills_home), retriever)
         __watcher.start()
+        logger.info("[Startup] Watchdog started. Skill delta indexing running in background...")
+
+        # Plan C: fire-and-forget background task
+        asyncio.create_task(_background_index())
 
     except Exception as e:
-        logger.error(f"Failed to start indexing or watcher on startup: {e}")
+        logger.error(f"Failed to start watcher or schedule indexing: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_system():
     global __watcher
     if '__watcher' in globals() and __watcher is not None:
         __watcher.stop()
+    # D-07: Flush all in-memory sessions to MEMORY.md before shutdown
+    _session_mgr.flush_all_sessions(_make_llm_callable())
+    logger.info("Shutdown: all sessions persisted to MEMORY.md")
 
 
 
@@ -83,21 +185,84 @@ from core.session import SessionManager
 
 _session_mgr = SessionManager(str(PROJECT_ROOT))
 
-SYSTEM_PROMPT = (
-    "你是研發組 MCP Agent Console 的 AI 助理。\n"
-    "你的職責是回答用戶關於技術、開發、管理或任何其他問題。\n"
-    "你沒有存取任何外部工具或技能執行的能力。\n"
-    "請以繁體中文回覆，保持專業、清晰、簡潔。"
-)
+# ─── System Prompt Cache ─────────────────────────────────────────────────────
+_prompt_cache: dict = {"prompt": None}
+
+def invalidate_prompt_cache():
+    """Invalidate the system prompt cache. Call after rescan, upload, or delete."""
+    _prompt_cache["prompt"] = None
+
+def build_system_prompt() -> str:
+    """
+    Dynamically build system prompt with live skill list (name + one-liner)
+    and knowledge base document count. Result is cached until invalidated.
+    """
+    if _prompt_cache["prompt"] is not None:
+        return _prompt_cache["prompt"]
+
+    uma = get_uma()
+    skill_lines = []
+    for name, data in uma.registry.skills.items():
+        meta = data["metadata"]
+        status = "✅" if meta.get("_env_ready", False) else "⚠"
+        # One-liner: first sentence only, max 50 chars to keep prompt concise
+        desc = meta.get("description", "").split("\n")[0][:50]
+        skill_lines.append(f"  - {name} {status}  {desc}")
+
+    skills_block = "\n".join(skill_lines) if skill_lines else "  （無已安裝技能）"
+
+    doc_count = len([
+        f for f in WORKSPACE_DIR.iterdir()
+        if f.is_file() and not f.name.startswith(".")
+    ]) if WORKSPACE_DIR.exists() else 0
+
+    prompt = (
+        "你是研發組 MCP Agent Console 的 AI 助理。\n"
+        "你的職責是回答用戶關於技術、開發、管理或任何其他問題。\n\n"
+        f"【即時系統狀態】\n"
+        f"已安裝 Agent Skills（共 {len(skill_lines)} 個）：\n{skills_block}\n\n"
+        f"知識庫文件數量：{doc_count} 份\n\n"
+        "如用戶詢問技能功能或文件詳情，請依據上方資訊準確回答，"
+        "詳細技能定義將在用戶附加技能時另行提供。\n"
+        "請以繁體中文回覆，保持專業、清晰、簡潔。"
+    )
+    _prompt_cache["prompt"] = prompt
+    return prompt
+
+
+# ─── RAG Heuristic ────────────────────────────────────────────────────────────
+_RAG_KEYWORDS = {
+    # 繁體中文
+    "工作區", "檔案", "文件", "內容", "資料", "報告", "分析",
+    "目前技能", "知識庫", "上傳", "參考", "根據", "文章", "查詢",
+    # English
+    "file", "doc", "document", "skill", "content", "workspace",
+    "knowledge", "reference", "report", "analyze", "based on",
+    # 日本語
+    "ファイル", "内容", "参考", "ドキュメント", "スキル", "分析",
+}
+
+def _should_trigger_rag(user_input: str) -> bool:
+    """Heuristic: trigger RAG only when query suggests document/workspace relevance."""
+    lowered = user_input.lower()
+    return any(kw in lowered for kw in _RAG_KEYWORDS)
 
 
 def get_session(session_id: str) -> List[Dict[str, Any]]:
-    return _session_mgr.get_or_create_conversation(session_id, SYSTEM_PROMPT)
+    return _session_mgr.get_or_create_conversation(session_id, build_system_prompt())
 
 
-def flush_session_to_memory(session_id: str):
-    """Persist conversation history to MEMORY.md via SessionManager."""
-    _session_mgr.flush_conversation_to_memory(session_id)
+def _make_llm_callable():
+    """Build a lightweight LLM summarizer using the best available adapter."""
+    from adapters.openai_adapter import OpenAIAdapter
+    uma = get_uma()
+    adapter = OpenAIAdapter(uma)
+    if adapter.is_available:
+        def caller(prompt: str) -> str:
+            r = adapter.simple_chat([{"role": "user", "content": prompt}])
+            return r.get("content", "") if r.get("status") == "success" else ""
+        return caller
+    return None  # Fallback: session.py will write turn-count placeholder
 
 
 # ─── Request / Response Models ────────────────────────────────────────────────
@@ -189,10 +354,19 @@ async def upload_document(file: UploadFile = File(...), background_tasks: Backgr
         else:
             logger.info(f"File already exists (Hash match): {final_path.name} (Original: {filename})")
             
-        # 5. Background vectorization is now fully handled by the Watchdog in core/watcher.py
-        # no manual background_tasks.add_task needed here.
+        # 5. Persist original filename to .names.json registry for display purposes
+        names_file = WORKSPACE_DIR / ".names.json"
+        try:
+            names = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
+            names[hashed_filename] = filename
+            names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Failed to update .names.json: {e}")
+
+        # 6. Background vectorization is now fully handled by the Watchdog in core/watcher.py
         vectorized_status = "pending" if extension in {".txt", ".md", ".pdf", ".csv"} else "unsupported"
-            
+
+        invalidate_prompt_cache()  # Doc count changed — before return
         return {
             "status": "success",
             "filename": hashed_filename,
@@ -419,14 +593,24 @@ def list_documents():
     """
     List all uploaded files in workspace/.
     Also reports which files are currently indexed in FAISS.
+    Returns original_name (user-facing) alongside the hashed filename.
     """
     from core.retriever import retriever
     indexed = set(retriever.list_indexed_files())
+
+    # Load original filename registry
+    names_file = WORKSPACE_DIR / ".names.json"
+    try:
+        names = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
+    except Exception:
+        names = {}
+
     files = []
     for f in sorted(WORKSPACE_DIR.iterdir()):
         if f.is_file() and not f.name.startswith("."):
             files.append({
                 "filename": f.name,
+                "original_name": names.get(f.name, f.name),  # Fall back to hash name if no record
                 "size": f.stat().st_size,
                 "indexed": f.name in indexed
             })
@@ -456,6 +640,7 @@ def delete_document_endpoint(filename: str):
     # Remove from disk
     target.unlink()
     logger.info(f"Deleted file and FAISS index: {filename}")
+    invalidate_prompt_cache()  # Doc count changed
     return {"status": "success", "message": f"'{filename}' 已刪除"}
 
 
@@ -516,8 +701,27 @@ async def chat(req: ChatRequest):
             meta = skill_data["metadata"]
             skill_context = f"\n\n[技能參考 — {req.injected_skill}] {meta.get('description', '無描述')}"
 
+    # 3.5. RAG: Semantic heuristic — only query FAISS when query seems document-related
+    from core.retriever import retriever as _retriever
+    rag_context = ""
+    if _should_trigger_rag(req.user_input):
+        rag_results = _retriever.search_context(req.user_input, top_k=3)
+        if rag_results:
+            rag_context = (
+                f"\n\n[知識庫參考資料 — Source Grounding]\n"
+                f"以下是從知識庫中語意搜尋到的相關文件片段，請作為回答依據：\n\n"
+                f"{rag_results}\n"
+                f"---\n"
+                f"引用規則（強制）：\n"
+                f"1. 引用知識庫內容時，必須在句末標示來源，格式為：[filename#chunk_x: 引用片段]\n"
+                f"   範例：[奧情分析.txt#chunk_2: 關鍵趨勢分析結果...]\n"
+                f"2. 若知識庫中找不到與問題明確相關的資料，請明確告知用戶：\n"
+                f"   「知識庫中目前沒有關於此主題的相關文件，以下回答基於模型訓練知識。」\n"
+                f"3. 禁止在無對應來源時偽造引用標籤。"
+            )
+
     # 4. Append user message
-    user_content = req.user_input + execution_context + skill_context
+    user_content = req.user_input + execution_context + skill_context + rag_context
     history_to_pass = history + [{"role": "user", "content": user_content}]
 
     # 5. Select adapter and call appropriate mode (chat vs simple_chat)
@@ -555,23 +759,22 @@ async def chat(req: ChatRequest):
 
     # 6. Append assistant reply to history Manager
     if result.get("status") == "success":
-        # Sprint 2/5 D-07: Unified SessionManager handles appending and compressing memory
+        # D-07: Unified SessionManager handles appending and compressing memory
         _session_mgr.append_message(req.session_id, "user", req.user_input)
         _session_mgr.append_message(req.session_id, "assistant", result["content"])
-        
-        # Auto-flush every 20 messages to prevent memory loss
-        # Note: we use _session_mgr._conversations size for accurate count
+
+        # Auto-flush every 5 messages using LLM summarization
         conv_len = len(_session_mgr.get_or_create_conversation(req.session_id))
-        if conv_len > 0 and conv_len % 20 == 0:
-            flush_session_to_memory(req.session_id)
+        if conv_len > 0 and conv_len % 5 == 0:
+            _session_mgr.flush_with_llm_summary(req.session_id, _make_llm_callable())
 
     return result
 
 
 @app.post("/chat/flush/{session_id}", tags=["Chat"])
 def flush_memory(session_id: str):
-    """Manually persist a session's conversation to MEMORY.md."""
-    flush_session_to_memory(session_id)
+    """Manually persist a session's conversation to MEMORY.md with LLM summarization."""
+    _session_mgr.flush_with_llm_summary(session_id, _make_llm_callable())
     return {"status": "success", "message": f"Session '{session_id}' flushed to MEMORY.md"}
 
 
@@ -766,15 +969,35 @@ def install_skill_deps(skill_name: str):
 
 @app.post("/skills/rescan", tags=["Skill Management"])
 def rescan_skills():
-    """Re-scan the skills directory and refresh the registry."""
+    """Re-scan skills directory, hash-check for changes, and delta re-index FAISS.
+    Only changed/new/removed skills are processed (Plan A).
+    """
+    from core.retriever import retriever
     uma = get_uma()
     uma.registry.skills.clear()
     uma.registry.validation_cache.clear()
     uma.registry.scan_skills()
+
+    # Plan A: delta index — only re-process changed skills
+    summary = _delta_index_skills(uma, retriever)
+    invalidate_prompt_cache()  # Skill list may have changed
+
+    parts = []
+    if summary["added"]:     parts.append(f"新增 {len(summary['added'])} 個")
+    if summary["updated"]:   parts.append(f"更新 {len(summary['updated'])} 個")
+    if summary["removed"]:   parts.append(f"移除 {len(summary['removed'])} 個")
+    if summary["unchanged"]: parts.append(f"{len(summary['unchanged'])} 個無異動")
+    detail = "，".join(parts) if parts else "無異動"
+
     return {
         "status": "success",
         "total_skills": len(uma.registry.skills),
-        "message": "技能庫重新掃描完成"
+        "added":     summary["added"],
+        "updated":   summary["updated"],
+        "removed":   summary["removed"],
+        "unchanged": len(summary["unchanged"]),
+        "errors":    summary["errors"],
+        "message":   f"技能庫重新掃描完成（{detail}）"
     }
 
 

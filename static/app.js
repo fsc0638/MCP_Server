@@ -105,7 +105,12 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        const sessionId = 'web-' + Math.random().toString(36).slice(2, 8);
+        const SESSION_KEY = 'mcp_session_id';
+        let sessionId = localStorage.getItem(SESSION_KEY);
+        if (!sessionId) {
+            sessionId = 'web-' + Math.random().toString(36).slice(2, 8);
+            localStorage.setItem(SESSION_KEY, sessionId);
+        }
 
         function appendMessage(role, text) {
             if (welcomeBlock) welcomeBlock.style.display = 'none';
@@ -241,6 +246,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 await fetch(`/chat/flush/${sessionId}`, { method: 'POST' });
                 await fetch(`/chat/session/${sessionId}`, { method: 'DELETE' });
             } catch (_) { }
+            // Generate a fresh session for the next conversation
+            sessionId = 'web-' + Math.random().toString(36).slice(2, 8);
+            localStorage.setItem(SESSION_KEY, sessionId);
             msgContainer.innerHTML = '';
             if (welcomeBlock) welcomeBlock.style.display = '';
             logModule.addLog('SYS', '對話已清除，記憶已儲存至 MEMORY.md');
@@ -350,6 +358,11 @@ document.addEventListener('DOMContentLoaded', () => {
             userInput.style.height = 'auto';
             userInput.style.height = Math.min(userInput.scrollHeight, 160) + 'px';
         };
+
+        // Persist session memory on page/tab close
+        window.addEventListener('beforeunload', () => {
+            navigator.sendBeacon(`/chat/flush/${sessionId}`);
+        });
 
         return {
             enable() { userInput.disabled = false; sendBtn.disabled = false; userInput.focus(); },
@@ -893,7 +906,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const textNameInput = document.getElementById('sourceTextName');
         const textContentInput = document.getElementById('sourceTextContent');
 
-        function openModal() { modalOverlay.classList.add('active'); }
+        function openModal() {
+            modalOverlay.classList.add('active');
+            // Sync document count when modal opens
+            if (window.docModule) window.docModule.loadDocuments();
+        }
         function closeModal() { modalOverlay.classList.remove('active'); }
 
         // --- URL sourcing ---
@@ -1040,8 +1057,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         };
-        window.sourceModule = sourceModule;
     })();
+    window.sourceModule = sourceModule;
 
 
     // =========================================================================
@@ -1087,11 +1104,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 li.className = 'skill-item doc-item';
 
                 const sizeKB = (f.size / 1024).toFixed(1);
+                // Use original_name for display; fall back to hashed filename if not available
+                const displayName = f.original_name || f.filename;
 
                 li.innerHTML = `
                     <button class="doc-menu-btn" title="選項" data-filename="${escapeHtml(f.filename)}">&#8942;</button>
                     <div class="doc-item-info">
-                        <span class="doc-filename" title="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</span>
+                        <span class="doc-filename" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
                         <span class="doc-item-size">${sizeKB} KB</span>
                     </div>
                     <label class="doc-checkbox-wrap" title="選取">
