@@ -136,16 +136,22 @@ class DocumentRetriever:
             traceback.print_exc()
             return False
 
-    def search_context(self, query: str, top_k: int = 3) -> str:
+    def search_context(self, query: str, top_k: int = 3, filter_type: str = "workspace") -> str:
         """
         Retrieves relevant context based on query semantic similarity.
+
+        Args:
+            query: The search query.
+            top_k: Number of chunks to retrieve.
+            filter_type: 'workspace' (default, requires file extension), 'skill' (no extension), or 'all'.
         """
         if self.vectorstore is None:
             return ""
             
         try:
-            # Search FAISS
-            docs = self.vectorstore.similarity_search(query, k=top_k)
+            # Fetch extra candidates when filtering
+            fetch_k = top_k * 4 if filter_type != "all" else top_k
+            docs = self.vectorstore.similarity_search(query, k=fetch_k)
 
             if not docs:
                 return ""
@@ -153,6 +159,13 @@ class DocumentRetriever:
             context_parts = []
             for doc in docs:
                 filename = doc.metadata.get("filename", "Unknown")
+                has_ext = bool(Path(filename).suffix)
+
+                if filter_type == "workspace" and not has_ext:
+                    continue
+                if filter_type == "skill" and has_ext:
+                    continue
+
                 keywords = doc.metadata.get("keywords", "")
                 chunk_idx = doc.metadata.get("chunk_index", 0)
                 
@@ -161,12 +174,16 @@ class DocumentRetriever:
                     context_chunk += f"(Keywords: {keywords})\n"
                 context_chunk += f"{doc.page_content}\n"
                 context_parts.append(context_chunk)
-            
+
+                if len(context_parts) >= top_k:
+                    break
+
             return "\n---\n".join(context_parts)
             
         except Exception as e:
             logger.error(f"Search context failed: {e}")
             return ""
+
 
     def delete_document(self, filename: str) -> bool:
         """

@@ -211,17 +211,30 @@ def build_system_prompt() -> str:
 
     skills_block = "\n".join(skill_lines) if skill_lines else "  （無已安裝技能）"
 
-    doc_count = len([
+    doc_files = [
         f for f in WORKSPACE_DIR.iterdir()
         if f.is_file() and not f.name.startswith(".")
-    ]) if WORKSPACE_DIR.exists() else 0
+    ] if WORKSPACE_DIR.exists() else []
+
+    doc_names = []
+    if doc_files:
+        try:
+            names_file = WORKSPACE_DIR / ".names.json"
+            names_map = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
+            for f in doc_files:
+                original_name = names_map.get(f.name, f.name)
+                doc_names.append(f"  - {original_name}")
+        except Exception:
+            doc_names = [f"  - {f.name}" for f in doc_files]
+
+    doc_block = "\n".join(doc_names) if doc_names else "  （無已上傳文件）"
 
     prompt = (
         "你是研發組 MCP Agent Console 的 AI 助理。\n"
         "你的職責是回答用戶關於技術、開發、管理或任何其他問題。\n\n"
         f"【即時系統狀態】\n"
         f"已安裝 Agent Skills（共 {len(skill_lines)} 個）：\n{skills_block}\n\n"
-        f"知識庫文件數量：{doc_count} 份\n\n"
+        f"知識庫文件清單（共 {len(doc_files)} 份）：\n{doc_block}\n\n"
         "如用戶詢問技能功能或文件詳情，請依據上方資訊準確回答，"
         "詳細技能定義將在用戶附加技能時另行提供。\n"
         "請以繁體中文回覆，保持專業、清晰、簡潔。"
@@ -701,23 +714,31 @@ async def chat(req: ChatRequest):
             meta = skill_data["metadata"]
             skill_context = f"\n\n[技能參考 — {req.injected_skill}] {meta.get('description', '無描述')}"
 
-    # 3.5. RAG: Semantic heuristic — only query FAISS when query seems document-related
+    # 3.5. RAG: Semantic heuristic — Dual check for Workspace Docs and Skills
     from core.retriever import retriever as _retriever
     rag_context = ""
     if _should_trigger_rag(req.user_input):
-        rag_results = _retriever.search_context(req.user_input, top_k=3)
-        if rag_results:
-            rag_context = (
-                f"\n\n[知識庫參考資料 — Source Grounding]\n"
-                f"以下是從知識庫中語意搜尋到的相關文件片段，請作為回答依據：\n\n"
-                f"{rag_results}\n"
+        doc_results = _retriever.search_context(req.user_input, top_k=3, filter_type="workspace")
+        skill_results = _retriever.search_context(req.user_input, top_k=2, filter_type="skill")
+        
+        if doc_results or skill_results:
+            rag_context = "\n\n[語意檢索結果]\n"
+            if doc_results:
+                rag_context += (
+                    f"【知識庫文件內容】（請以此為分析基底，如 NotebookLM 重點參照）\n{doc_results}\n\n"
+                )
+            if skill_results:
+                rag_context += (
+                    f"【內部技能設定參考】\n{skill_results}\n\n"
+                )
+            
+            rag_context += (
                 f"---\n"
-                f"引用規則（強制）：\n"
-                f"1. 引用知識庫內容時，必須在句末標示來源，格式為：[filename#chunk_x: 引用片段]\n"
-                f"   範例：[奧情分析.txt#chunk_2: 關鍵趨勢分析結果...]\n"
-                f"2. 若知識庫中找不到與問題明確相關的資料，請明確告知用戶：\n"
-                f"   「知識庫中目前沒有關於此主題的相關文件，以下回答基於模型訓練知識。」\n"
-                f"3. 禁止在無對應來源時偽造引用標籤。"
+                f"【分析與回答準則】\n"
+                f"1. NotebookLM 風格：你的回答應「深度依賴」上述【知識庫文件內容】。使用者會依據這些文件來設計工作流程與系統技能，請以這些文件作為分析與評估的首要基底。\n"
+                f"2. 允許使用者同時查閱「技能」與「文件」，請根據問題語意自行判斷應查閱與比對哪一部分。\n"
+                f"3. 強制引用：引用知識庫內容時，句末必須標示來源，格式：[filename#chunk_x: 引用片段]。\n"
+                f"4. 若檢索結果不包含使用者所問的資訊，請明白告知「知識庫中缺乏相關資訊」，絕不可自行編造。\n"
             )
 
     # 4. Append user message
