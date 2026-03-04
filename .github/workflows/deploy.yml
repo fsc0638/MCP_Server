@@ -23,5 +23,11 @@ jobs:
             # Pull latest code from GitHub
             git pull origin main
             
+            # Stop and remove any existing containers
+            docker-compose down
+            
+            # Remove dangling or stopped containers not cleaned up
+            docker container prune -f
+            
             # Rebuild and restart docker containers
             docker-compose up -d --build
