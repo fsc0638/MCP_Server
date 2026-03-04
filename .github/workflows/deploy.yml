@@ -1,0 +1,27 @@
+name: Deploy MCP Server to Tokyo
+
+on:
+  push:
+    branches:
+      - main  # 監聽 main 分支的更新
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            # Navigate to the deployment directory on the server
+            cd /opt/mcp_server
+            
+            # Pull latest code from GitHub
+            git pull origin main
+            
+            # Rebuild and restart docker containers
+            docker-compose up -d --build

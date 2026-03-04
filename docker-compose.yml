@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  mcp_server:
+    build: .
+    container_name: mcp_server_app
+    restart: always
+    ports:
+      # Map the server's external port 6888 to the container's internal port 8000
+      - "6888:8000"
+    volumes:
+      # Mount necessary files and directories to ensure no code changes are needed
+      - ./.env:/app/.env
+      - ./Agent_skills:/app/Agent_skills
+      - ./uma_server.log:/app/uma_server.log
+    environment:
+      - TZ=Asia/Taipei
