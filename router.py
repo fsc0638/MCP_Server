@@ -165,6 +165,22 @@ async def index_all_skills():
         # Plan C: fire-and-forget background task
         asyncio.create_task(_background_index())
 
+        # Workspace document sync: index any workspace files not yet in FAISS
+        async def _sync_workspace_docs():
+            try:
+                ws_summary = await asyncio.get_event_loop().run_in_executor(
+                    None, retriever.sync_workspace, str(WORKSPACE_DIR)
+                )
+                logger.info(
+                    f"[Startup] Workspace sync complete — "
+                    f"added:{len(ws_summary['added'])} removed:{len(ws_summary['removed'])} "
+                    f"already:{len(ws_summary['already'])}"
+                )
+            except Exception as e:
+                logger.error(f"[Startup] Workspace sync failed: {e}")
+
+        asyncio.create_task(_sync_workspace_docs())
+
     except Exception as e:
         logger.error(f"Failed to start watcher or schedule indexing: {e}")
 
@@ -384,8 +400,13 @@ async def upload_document(file: UploadFile = File(...), background_tasks: Backgr
         except Exception as e:
             logger.warning(f"Failed to update .names.json: {e}")
 
-        # 6. Background vectorization is now fully handled by the Watchdog in core/watcher.py
-        vectorized_status = "pending" if extension in {".txt", ".md", ".pdf", ".csv", ".docx"} else "unsupported"
+        # 6. Immediate vectorization via background task (do not rely solely on Watchdog)
+        vectorized_status = "unsupported"
+        if extension in {".txt", ".md", ".pdf", ".csv", ".docx"}:
+            vectorized_status = "indexing"
+            from core.retriever import retriever as _upload_retriever
+            background_tasks.add_task(_upload_retriever.ingest_document, str(final_path))
+            logger.info(f"Background FAISS indexing queued for: {hashed_filename}")
 
         invalidate_prompt_cache()  # Doc count changed — before return
         return {

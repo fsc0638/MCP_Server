@@ -360,6 +360,56 @@ class DocumentRetriever:
             logger.error(f"list_indexed_files error: {e}")
             return []
 
+    def sync_workspace(self, workspace_dir) -> dict:
+        """
+        Startup sync: ensure every supported file in workspace/ is indexed in FAISS,
+        and remove FAISS entries for files that no longer exist on disk.
+        Returns a summary dict: {added: [...], removed: [...], already: [...]}.
+        """
+        workspace_dir = Path(workspace_dir)
+        supported_exts = {".txt", ".md", ".pdf", ".csv", ".docx"}
+        summary = {"added": [], "removed": [], "already": []}
+
+        # 1. Get currently indexed workspace files (only those with extensions)
+        indexed = set()
+        for f in self.list_indexed_files():
+            if Path(f).suffix:
+                indexed.add(f)
+
+        # 2. Get actual files on disk
+        on_disk = set()
+        if workspace_dir.exists():
+            for f in workspace_dir.iterdir():
+                if f.is_file() and not f.name.startswith(".") and f.suffix.lower() in supported_exts:
+                    on_disk.add(f.name)
+
+        # 3. Index files that are on disk but NOT in FAISS
+        to_add = on_disk - indexed
+        for fname in sorted(to_add):
+            fpath = workspace_dir / fname
+            logger.info(f"[Sync] Indexing missing file: {fname}")
+            if self.ingest_document(str(fpath)):
+                summary["added"].append(fname)
+            else:
+                logger.warning(f"[Sync] Failed to index: {fname}")
+
+        # 4. Remove FAISS entries for files no longer on disk
+        to_remove = indexed - on_disk
+        for fname in sorted(to_remove):
+            logger.info(f"[Sync] Removing stale FAISS entry: {fname}")
+            self.delete_document(fname)
+            summary["removed"].append(fname)
+
+        # 5. Already synced
+        summary["already"] = sorted(indexed & on_disk)
+
+        logger.info(
+            f"[Sync] Workspace sync complete — "
+            f"added:{len(summary['added'])} removed:{len(summary['removed'])} "
+            f"already:{len(summary['already'])}"
+        )
+        return summary
+
 
 # Global instance
 retriever = DocumentRetriever()
