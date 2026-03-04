@@ -743,7 +743,167 @@ textarea::placeholder {
     font-size: 11px;
 }
 
+/* ===== DOC ITEM (知識庫文件列表) ===== */
+.doc-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    position: relative;
+}
+
+/* 三點選單觸發按鈕 */
+.doc-menu-btn {
+    width: 24px;
+    height: 24px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s, color 0.15s;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.doc-item:hover .doc-menu-btn {
+    opacity: 1;
+}
+
+.doc-menu-btn:hover {
+    background: var(--cis-blue-light);
+    color: var(--cis-blue);
+}
+
+/* 全域浮動選單（掛在 body，position:fixed 不受 overflow 裁切） */
+.doc-float-menu {
+    display: none;
+    position: fixed;
+    background: var(--surface-panel);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    box-shadow: var(--shadow-md);
+    z-index: 9999;
+    min-width: 132px;
+    padding: 4px;
+    overflow: hidden;
+}
+
+.doc-float-menu.open {
+    display: block;
+}
+
+.doc-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    padding: 7px 10px;
+    font-size: 13px;
+    font-family: var(--font-ui);
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.12s;
+    text-align: left;
+}
+
+.doc-menu-item:hover {
+    background: var(--surface-bg);
+}
+
+.doc-menu-item svg {
+    flex-shrink: 0;
+    color: var(--text-secondary);
+}
+
+#docFloatDelete:hover {
+    color: var(--red);
+}
+
+#docFloatDelete:hover svg {
+    color: var(--red);
+}
+
+
+/* 檔名 + 大小 */
+.doc-item-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.doc-filename {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.doc-item-size {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+/* 右側自訂 Checkbox */
+.doc-checkbox-wrap {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    margin-left: auto;
+}
+
+.doc-checkbox-wrap input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.doc-checkmark {
+    width: 16px;
+    height: 16px;
+    border: 1.5px solid var(--border-strong);
+    border-radius: 4px;
+    background: var(--surface-input);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+}
+
+.doc-checkbox-wrap input:checked + .doc-checkmark {
+    background: var(--cis-blue);
+    border-color: var(--cis-blue);
+}
+
+.doc-checkbox-wrap input:checked + .doc-checkmark::after {
+    content: '';
+    display: block;
+    width: 4px;
+    height: 7px;
+    border: 2px solid white;
+    border-top: none;
+    border-left: none;
+    transform: rotate(45deg) translateY(-1px);
+}
+
 /* ===== RIGHT PANEL (Studio / Thought Stream) ===== */
+
 .panel-right {
     background: var(--surface-panel);
     border-left: 1px solid var(--border);

@@ -460,11 +460,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // ── Category map (Method 2) ─────────────────────────────────────────
         const CATEGORIES = [
-            { label: '📄 文件處理', skills: ['mcp-docx-processor', 'mcp-pdf-processor', 'mcp-pptx-processor', 'mcp-xlsx-processor'] },
-            { label: '🎨 設計與視覺', skills: ['mcp-brand-guidelines', 'mcp-canvas-design', 'mcp-frontend-design', 'mcp-theme-factory', 'mcp-algorithmic-art'] },
-            { label: '🤖 開發工具', skills: ['mcp-python-executor', 'mcp-webapp-tester', 'mcp-skill-builder', 'mcp-skill-factory', 'mcp-legacy-skill-creator'] },
-            { label: '💬 溝通協作', skills: ['mcp-internal-comms', 'mcp-doc-coauthoring', 'mcp-slack-gif-gen'] },
-            { label: '🔧 系統技能', skills: ['mcp-my-first-tool', 'mcp-sample-converter', 'mcp-web-artifacts'] },
+            { label: '文件處理', skills: ['mcp-docx-processor', 'mcp-pdf-processor', 'mcp-pptx-processor', 'mcp-xlsx-processor'] },
+            { label: '設計與視覺', skills: ['mcp-brand-guidelines', 'mcp-canvas-design', 'mcp-frontend-design', 'mcp-theme-factory', 'mcp-algorithmic-art'] },
+            { label: '開發工具', skills: ['mcp-python-executor', 'mcp-webapp-tester', 'mcp-skill-builder', 'mcp-skill-factory', 'mcp-legacy-skill-creator'] },
+            { label: '溝通協作', skills: ['mcp-internal-comms', 'mcp-doc-coauthoring', 'mcp-slack-gif-gen'] },
+            { label: '系統技能', skills: ['mcp-my-first-tool', 'mcp-sample-converter', 'mcp-web-artifacts'] },
         ];
 
         // ── Load skills list ──────────────────────────────────────────────────
@@ -527,7 +527,7 @@ document.addEventListener('DOMContentLoaded', () => {
             });
 
             const others = Object.keys(skills).filter(n => !categorisedNames.has(n));
-            if (others.length) allCats.push({ label: '📦 其他', skills: others });
+            if (others.length) allCats.push({ label: '其他', skills: others });
 
             allCats.forEach(cat => {
                 const inCat = cat.skills.filter(n => skills[n]);
@@ -1080,40 +1080,96 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
             files.forEach(f => {
                 const li = document.createElement('li');
-                li.className = 'skill-item';
+                li.className = 'skill-item doc-item';
 
-                // Format size
                 const sizeKB = (f.size / 1024).toFixed(1);
 
-                // Indexed status dot
-                const dotClass = f.indexed ? 'dot-green' : 'dot-grey';
-                const dotTitle = f.indexed ? '已加入知識庫' : '未建立索引/不支援';
-
-                // escape function is in chatModule scope, so we redefine a simple one here
-                const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
                 li.innerHTML = `
-                    <div class="skill-item-left">
-                        <div class="skill-item-header">
-                            <span class="dot ${dotClass}" title="${dotTitle}"></span>
-                            <span class="skill-name" style="font-size: 0.9rem; word-break: break-all;" title="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</span>
-                        </div>
-                        <div class="skill-item-desc" style="font-size: 0.8rem">${sizeKB} KB</div>
+                    <button class="doc-menu-btn" title="選項" data-filename="${escapeHtml(f.filename)}">&#8942;</button>
+                    <div class="doc-item-info">
+                        <span class="doc-filename" title="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</span>
+                        <span class="doc-item-size">${sizeKB} KB</span>
                     </div>
-                    <div class="skill-item-actions">
-                        <button class="action-btn" style="background: none; border: none; font-size: 1.1rem; cursor:pointer;" title="刪除檔案" onclick="window.docModule.deleteDocument('${f.filename}')">🗑️</button>
-                    </div>
+                    <label class="doc-checkbox-wrap" title="選取">
+                        <input type="checkbox" class="doc-checkbox">
+                        <span class="doc-checkmark"></span>
+                    </label>
                 `;
+
+                li.dataset.filename = f.filename;
+
+                const menuBtn = li.querySelector('.doc-menu-btn');
+                menuBtn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    openDocMenu(menuBtn, f.filename);
+                });
+
                 docList.appendChild(li);
             });
         }
 
+        // ── Global floating doc menu (position:fixed, body-level) ─────────────
+        let _docMenuTarget = null;
+        const _docMenu = (() => {
+            const el = document.createElement('div');
+            el.id = 'docFloatMenu';
+            el.className = 'doc-float-menu';
+            el.innerHTML = `
+                <button class="doc-menu-item" id="docFloatDelete">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+                    刪除來源
+                </button>
+                <button class="doc-menu-item" id="docFloatRename">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    重新命名
+                </button>
+            `;
+            document.body.appendChild(el);
+
+            el.querySelector('#docFloatDelete').addEventListener('click', e => {
+                e.stopPropagation();
+                const fn = _docMenuTarget;
+                closeDocMenu();
+                if (fn) deleteDocument(fn);
+            });
+            el.querySelector('#docFloatRename').addEventListener('click', e => {
+                e.stopPropagation();
+                const fn = _docMenuTarget;
+                closeDocMenu();
+                if (fn) renameDocument(fn);
+            });
+            return el;
+        })();
+
+        function openDocMenu(triggerBtn, filename) {
+            const isOpen = _docMenu.classList.contains('open') && _docMenuTarget === filename;
+            closeDocMenu();
+            if (isOpen) return;
+
+            _docMenuTarget = filename;
+            const rect = triggerBtn.getBoundingClientRect();
+            _docMenu.style.top = (rect.bottom + 4) + 'px';
+            _docMenu.style.left = rect.left + 'px';
+            _docMenu.classList.add('open');
+        }
+
+        function closeDocMenu() {
+            _docMenu.classList.remove('open');
+            _docMenuTarget = null;
+        }
+
+        function closeAllDocMenus() { closeDocMenu(); }
+        document.addEventListener('click', closeDocMenu);
+
+
         async function deleteDocument(filename) {
             if (!confirm(`確定要刪除文件 '${filename}' 嗎？\n這也會將它從知識庫中永久移除。`)) return;
             try {
-                const res = await fetch(`/api/documents/${filename}`, { method: 'DELETE' });
+                const res = await fetch(`/api/documents/${encodeURIComponent(filename)}`, { method: 'DELETE' });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.detail || data.message || '刪除失敗');
                 logModule.addLog('SYS', `已刪除文件: ${filename}`);
@@ -1123,7 +1179,25 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        return { loadDocuments, deleteDocument };
+        async function renameDocument(filename) {
+            const newName = prompt(`重新命名「${filename}」：`, filename);
+            if (!newName || newName.trim() === '' || newName.trim() === filename) return;
+            try {
+                const res = await fetch(`/api/documents/${encodeURIComponent(filename)}/rename`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ new_name: newName.trim() })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || data.message || '重新命名失敗');
+                logModule.addLog('SYS', `文件已重新命名：${filename} → ${newName.trim()}`);
+                loadDocuments();
+            } catch (e) {
+                alert(e.message);
+            }
+        }
+
+        return { loadDocuments, deleteDocument, renameDocument };
     })();
     window.docModule = docModule;
 

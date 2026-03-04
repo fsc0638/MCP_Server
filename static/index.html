@@ -49,7 +49,6 @@
         <aside class="panel panel-left">
             <!-- SECTION 1: Skills -->
             <div class="accordion-header active" id="skillAccordionBtn">
-                <span class="panel-icon">⚙</span>
                 <h2 class="accordion-title">技能控管</h2>
                 <span class="badge skill-count" id="skillCount">0</span>
                 <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -77,15 +76,13 @@
 
             <!-- SECTION 2: Docs -->
             <div class="accordion-header active" id="docAccordionBtn">
-                <span class="panel-icon">📂</span>
                 <h2 class="accordion-title">知識庫文件</h2>
                 <span class="badge doc-count" id="docCount" style="margin-left: 4px;">0</span>
                 <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="6 9 12 15 18 9"></polyline>
                 </svg>
             </div>
-            <div class="accordion-content active" id="docAccordionContent"
-                style="display:flex; flex-direction:column; overflow:hidden;">
+            <div class="accordion-content active" id="docAccordionContent">
                 <ul class="skill-list" id="docList" style="flex:1; overflow-y:auto; padding:8px 0;">
                     <!-- Documents injected here via JS -->
                 </ul>
@@ -159,16 +156,16 @@
                 <div class="input-wrapper" id="inputWrapper">
                     <input type="file" id="workspaceFileInput" class="hidden">
                     <textarea id="userInput" placeholder="開始輸入..." rows="1" disabled></textarea>
-                </div>
-                <div class="input-right-actions">
-                    <span class="source-count-hint hidden" id="sourceCountHint">0 個來源</span>
-                    <button id="sendBtn" class="send-btn" title="送出 (Enter)" disabled>
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="5" y1="12" x2="19" y2="12"></line>
-                            <polyline points="12 5 19 12 12 19"></polyline>
-                        </svg>
-                    </button>
+                    <div class="input-right-actions">
+                        <span class="source-count-hint hidden" id="sourceCountHint">0 個來源</span>
+                        <button id="sendBtn" class="send-btn" title="送出 (Enter)" disabled>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="5" y1="12" x2="19" y2="12"></line>
+                                <polyline points="12 5 19 12 12 19"></polyline>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
             </div>
             <div class="input-hint">
