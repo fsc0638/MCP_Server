@@ -145,6 +145,8 @@ class DocumentRetriever:
     def search_context(self, query: str, top_k: int = 3, filter_type: str = "workspace", allowed_filenames: list = None) -> str:
         """
         Retrieves relevant context based on query semantic similarity.
+        When allowed_filenames is provided, uses diversified retrieval to ensure
+        at least one chunk per selected file is included.
 
         Args:
             query: The search query.
@@ -156,7 +158,11 @@ class DocumentRetriever:
             return ""
             
         try:
-            # Fetch extra candidates when filtering
+            # When we have specific files selected, ensure we get chunks from EACH file
+            if allowed_filenames and filter_type == "workspace":
+                return self._diversified_search(query, top_k, allowed_filenames)
+
+            # Default path: standard top-k similarity search
             fetch_multiplier = 20 if allowed_filenames else 4
             fetch_k = top_k * fetch_multiplier if filter_type != "all" else top_k
             docs = self.vectorstore.similarity_search(query, k=fetch_k)
@@ -169,11 +175,8 @@ class DocumentRetriever:
                 filename = doc.metadata.get("filename", "Unknown")
                 has_ext = bool(Path(filename).suffix)
 
-                if filter_type == "workspace":
-                    if not has_ext:
-                        continue
-                    if allowed_filenames is not None and filename not in allowed_filenames:
-                        continue
+                if filter_type == "workspace" and not has_ext:
+                    continue
                 if filter_type == "skill" and has_ext:
                     continue
 
@@ -194,6 +197,68 @@ class DocumentRetriever:
         except Exception as e:
             logger.error(f"Search context failed: {e}")
             return ""
+
+    def _diversified_search(self, query: str, top_k: int, allowed_filenames: list) -> str:
+        """
+        Diversified retrieval: guarantees at least 1 chunk per selected file,
+        then fills remaining slots with globally most relevant chunks.
+        """
+        # Fetch a large pool of candidates
+        num_files = len(allowed_filenames)
+        fetch_k = max(top_k, num_files) * 20
+        docs = self.vectorstore.similarity_search(query, k=fetch_k)
+
+        if not docs:
+            return ""
+
+        # Bucket candidates by file, preserving similarity order
+        per_file: dict = {fn: [] for fn in allowed_filenames}
+        overflow = []  # candidates for remaining slots
+
+        for doc in docs:
+            filename = doc.metadata.get("filename", "Unknown")
+            if not Path(filename).suffix:  # skip skill chunks
+                continue
+            if filename not in per_file:
+                continue
+            per_file[filename].append(doc)
+
+        # Phase 1: pick the best chunk from each file (round-robin diversity)
+        selected = []
+        seen_keys = set()
+        for fn in allowed_filenames:
+            candidates = per_file.get(fn, [])
+            if candidates:
+                best = candidates[0]
+                key = (best.metadata.get("filename"), best.metadata.get("chunk_index"))
+                selected.append(best)
+                seen_keys.add(key)
+
+        # Phase 2: fill remaining slots with globally best chunks (across all files)
+        remaining = max(0, top_k - len(selected))
+        if remaining > 0:
+            for fn in allowed_filenames:
+                for doc in per_file.get(fn, [])[1:]:  # skip first (already picked)
+                    key = (doc.metadata.get("filename"), doc.metadata.get("chunk_index"))
+                    if key not in seen_keys:
+                        overflow.append(doc)
+            # overflow is already in similarity order from the original search
+            selected.extend(overflow[:remaining])
+
+        # Format output
+        context_parts = []
+        for doc in selected:
+            filename = doc.metadata.get("filename", "Unknown")
+            keywords = doc.metadata.get("keywords", "")
+            chunk_idx = doc.metadata.get("chunk_index", 0)
+
+            context_chunk = f"Document [{filename}#chunk_{chunk_idx}]:\n"
+            if keywords:
+                context_chunk += f"(Keywords: {keywords})\n"
+            context_chunk += f"{doc.page_content}\n"
+            context_parts.append(context_chunk)
+
+        return "\n---\n".join(context_parts)
 
 
     def delete_document(self, filename: str) -> bool:

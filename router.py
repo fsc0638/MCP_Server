@@ -772,7 +772,10 @@ async def chat(req: ChatRequest):
     if _should_trigger_rag(req.user_input):
         doc_results = ""
         if should_retrieve_docs:
-            doc_results = _retriever.search_context(req.user_input, top_k=3, filter_type="workspace", allowed_filenames=req.selected_docs)
+            # Dynamic top_k: at least 1 chunk per selected file + 2 extra for depth
+            num_docs = len(req.selected_docs) if req.selected_docs else 3
+            doc_top_k = max(3, num_docs + 2)
+            doc_results = _retriever.search_context(req.user_input, top_k=doc_top_k, filter_type="workspace", allowed_filenames=req.selected_docs)
         skill_results = _retriever.search_context(req.user_input, top_k=2, filter_type="skill")
         
         if doc_results or skill_results:
