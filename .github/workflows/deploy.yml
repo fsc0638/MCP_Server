@@ -23,6 +23,9 @@ jobs:
             # Pull latest code from GitHub
             git pull origin main
             
+            # Sync submodules (Agent_skills)
+            git submodule update --init --recursive
+            
             # Stop and remove any existing containers
             docker-compose down
             
