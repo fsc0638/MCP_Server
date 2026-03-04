@@ -852,6 +852,23 @@ textarea::placeholder {
     text-overflow: ellipsis;
 }
 
+.doc-rename-input {
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font-ui);
+    color: var(--text-primary);
+    background: var(--surface-bg);
+    border: 1px solid var(--cis-blue);
+    border-radius: 4px;
+    padding: 1px 4px;
+    outline: none;
+    width: 100%;
+}
+
+.doc-rename-input.hidden {
+    display: none;
+}
+
 .doc-item-size {
     font-size: 11px;
     color: var(--text-muted);
@@ -886,12 +903,12 @@ textarea::placeholder {
     flex-shrink: 0;
 }
 
-.doc-checkbox-wrap input:checked + .doc-checkmark {
+.doc-checkbox-wrap input:checked+.doc-checkmark {
     background: var(--cis-blue);
     border-color: var(--cis-blue);
 }
 
-.doc-checkbox-wrap input:checked + .doc-checkmark::after {
+.doc-checkbox-wrap input:checked+.doc-checkmark::after {
     content: '';
     display: block;
     width: 4px;

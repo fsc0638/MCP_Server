@@ -293,6 +293,10 @@ class ChatRequest(BaseModel):
     selected_docs: Optional[List[str]] = None # List of filenames user selected in UI
 
 
+class RenameRequest(BaseModel):
+    new_name: str
+
+
 class SkillUpdateRequest(BaseModel):
     yaml_content: str   # Raw YAML frontmatter string to validate + write
 
@@ -659,6 +663,48 @@ def delete_document_endpoint(filename: str):
     logger.info(f"Deleted file and FAISS index: {filename}")
     invalidate_prompt_cache()  # Doc count changed
     return {"status": "success", "message": f"'{filename}' 已刪除"}
+
+
+@app.post("/api/documents/{filename}/rename", tags=["Documents"])
+def rename_document_endpoint(filename: str, req: RenameRequest):
+    """
+    Rename an uploaded file.
+    We just update the `.names.json` registry instead of modifying the real hashed filename.
+    """
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    target = (WORKSPACE_DIR / filename).resolve()
+    if not str(target).startswith(str(WORKSPACE_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="Path traversal denied")
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"File '{filename}' not found")
+
+    new_name = req.new_name.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="New name cannot be empty")
+
+    names_file = WORKSPACE_DIR / ".names.json"
+    names = {}
+    if names_file.exists():
+        try:
+            names = json.loads(names_file.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+
+    # Ensure it keeps original extension from the file
+    original_ext = target.suffix
+    if not new_name.endswith(original_ext):
+        new_name += original_ext
+
+    names[filename] = new_name
+    names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+    
+    logger.info(f"Renamed file {filename} to {new_name}")
+    invalidate_prompt_cache() # Names changed
+
+    return {"status": "success", "message": f"'{filename}' 已重新命名為 '{new_name}'"}
 
 
 

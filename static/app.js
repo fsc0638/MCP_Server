@@ -1071,6 +1071,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const unselectedFiles = new Set();
         let currentLoadedFiles = [];
 
+        const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
         async function loadDocuments() {
             try {
                 const res = await fetch('/api/documents/list');
@@ -1101,8 +1103,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
             files.forEach(f => {
                 const li = document.createElement('li');
                 li.className = 'skill-item doc-item';
@@ -1116,6 +1116,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <button class="doc-menu-btn" title="選項" data-filename="${escapeHtml(f.filename)}">&#8942;</button>
                     <div class="doc-item-info">
                         <span class="doc-filename" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
+                        <input type="text" class="doc-rename-input hidden" spellcheck="false">
                         <span class="doc-item-size">${sizeKB} KB</span>
                     </div>
                     <label class="doc-checkbox-wrap" title="選取">
@@ -1129,7 +1130,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const menuBtn = li.querySelector('.doc-menu-btn');
                 menuBtn.addEventListener('click', e => {
                     e.stopPropagation();
-                    openDocMenu(menuBtn, f.filename);
+                    openDocMenu(menuBtn, f.filename, displayName, li);
                 });
 
                 const checkbox = li.querySelector('.doc-checkbox');
@@ -1144,6 +1145,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // ── Global floating doc menu (position:fixed, body-level) ─────────────
         let _docMenuTarget = null;
+        let _docMenuDisplayName = "";
+        let _docMenuTargetLi = null;
         const _docMenu = (() => {
             const el = document.createElement('div');
             el.id = 'docFloatMenu';
@@ -1163,24 +1166,31 @@ document.addEventListener('DOMContentLoaded', () => {
             el.querySelector('#docFloatDelete').addEventListener('click', e => {
                 e.stopPropagation();
                 const fn = _docMenuTarget;
+                const dn = _docMenuDisplayName;
                 closeDocMenu();
-                if (fn) deleteDocument(fn);
+                if (fn) {
+                    deleteDocument(fn, dn);
+                }
             });
             el.querySelector('#docFloatRename').addEventListener('click', e => {
                 e.stopPropagation();
                 const fn = _docMenuTarget;
+                const dn = _docMenuDisplayName;
+                const li = _docMenuTargetLi;
                 closeDocMenu();
-                if (fn) renameDocument(fn);
+                if (fn && li) renameDocument(fn, dn, li);
             });
             return el;
         })();
 
-        function openDocMenu(triggerBtn, filename) {
+        function openDocMenu(triggerBtn, filename, displayName, li) {
             const isOpen = _docMenu.classList.contains('open') && _docMenuTarget === filename;
             closeDocMenu();
             if (isOpen) return;
 
             _docMenuTarget = filename;
+            _docMenuDisplayName = displayName;
+            _docMenuTargetLi = li;
             const rect = triggerBtn.getBoundingClientRect();
             _docMenu.style.top = (rect.bottom + 4) + 'px';
             _docMenu.style.left = rect.left + 'px';
@@ -1190,15 +1200,76 @@ document.addEventListener('DOMContentLoaded', () => {
         function closeDocMenu() {
             _docMenu.classList.remove('open');
             _docMenuTarget = null;
+            _docMenuDisplayName = "";
+            _docMenuTargetLi = null;
         }
 
         function closeAllDocMenus() { closeDocMenu(); }
         document.addEventListener('click', closeDocMenu);
 
 
-        async function deleteDocument(filename) {
-            if (!confirm(`確定要刪除文件 '${filename}' 嗎？\n這也會將它從知識庫中永久移除。`)) return;
+        const _deleteConfirmModal = (() => {
+            const el = document.createElement('div');
+            el.id = 'deleteConfirmModalDynamic';
+            el.className = 'modal-overlay hidden';
+            el.style.zIndex = '10000';
+            el.innerHTML = `
+                <div class="modal-card">
+                    <div class="modal-card-header">
+                        <div>
+                            <h2 class="modal-title">確定刪除</h2>
+                            <p class="modal-subtitle">這個動作無法復原</p>
+                        </div>
+                    </div>
+                    <div class="modal-body">
+                        <p id="deleteConfirmTextDynamic" style="font-size: 14px; margin-bottom: 8px;"></p>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn-secondary" id="cancelDeleteBtnDynamic">取消</button>
+                        <button class="btn-primary" id="confirmDeleteBtnDynamic" style="background: var(--red); color: white; border: none; padding: 6px 16px; border-radius: 6px; font-weight: 600; cursor: pointer;">確定刪除</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(el);
+            return el;
+        })();
+
+        function awaitDeleteConfirm(displayName) {
+            return new Promise(resolve => {
+                const textEl = _deleteConfirmModal.querySelector('#deleteConfirmTextDynamic');
+                const cancelBtn = _deleteConfirmModal.querySelector('#cancelDeleteBtnDynamic');
+                const confirmBtn = _deleteConfirmModal.querySelector('#confirmDeleteBtnDynamic');
+
+                textEl.innerHTML = `確定要刪除文件 '${escapeHtml(displayName)}' 嗎？<br>此動作會將它從知識庫中永久移除。`;
+
+                _deleteConfirmModal.style.display = 'flex';
+                _deleteConfirmModal.style.opacity = '1';
+                _deleteConfirmModal.style.pointerEvents = 'auto';
+                _deleteConfirmModal.style.visibility = 'visible';
+                _deleteConfirmModal.classList.remove('hidden');
+
+                const cleanup = () => {
+                    cancelBtn.removeEventListener('click', onCancel);
+                    confirmBtn.removeEventListener('click', onConfirm);
+                    _deleteConfirmModal.classList.add('hidden');
+                    _deleteConfirmModal.style.opacity = '0';
+                    _deleteConfirmModal.style.pointerEvents = 'none';
+                    _deleteConfirmModal.style.display = 'none';
+                };
+
+                const onCancel = () => { cleanup(); resolve(false); };
+                const onConfirm = () => { cleanup(); resolve(true); };
+
+                cancelBtn.addEventListener('click', onCancel);
+                confirmBtn.addEventListener('click', onConfirm);
+            });
+        }
+
+        async function deleteDocument(filename, displayName) {
             try {
+                const confirmed = await awaitDeleteConfirm(displayName);
+                if (!confirmed) return;
+
                 const res = await fetch(`/api/documents/${encodeURIComponent(filename)}`, { method: 'DELETE' });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.detail || data.message || '刪除失敗');
@@ -1209,22 +1280,70 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        async function renameDocument(filename) {
-            const newName = prompt(`重新命名「${filename}」：`, filename);
-            if (!newName || newName.trim() === '' || newName.trim() === filename) return;
-            try {
-                const res = await fetch(`/api/documents/${encodeURIComponent(filename)}/rename`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ new_name: newName.trim() })
-                });
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || data.message || '重新命名失敗');
-                logModule.addLog('SYS', `文件已重新命名：${filename} → ${newName.trim()}`);
-                loadDocuments();
-            } catch (e) {
-                alert(e.message);
+        async function renameDocument(filename, displayName, li) {
+            const span = li.querySelector('.doc-filename');
+            let input = li.querySelector('.doc-rename-input');
+
+            // Extract base name without extension
+            let baseName = displayName;
+            const extMatch = displayName.match(/\.[^.]+$/);
+            const ext = extMatch ? extMatch[0] : '';
+            if (ext) {
+                baseName = displayName.slice(0, -ext.length);
             }
+
+            // Remove previous listeners if any, by cloning the input
+            const newInput = input.cloneNode(true);
+            input.parentNode.replaceChild(newInput, input);
+            input = newInput;
+
+            span.classList.add('hidden');
+            input.classList.remove('hidden');
+            input.value = baseName;
+
+            async function commitRename() {
+                input.blur(); // prevent double trigger
+                span.classList.remove('hidden');
+                input.classList.add('hidden');
+
+                const newVal = input.value.trim();
+                if (!newVal || newVal === baseName) return;
+
+                const newName = newVal + ext;
+
+                try {
+                    const res = await fetch(`/api/documents/${encodeURIComponent(filename)}/rename`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ new_name: newName })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || data.message || '重新命名失敗');
+
+                    logModule.addLog('SYS', `文件已重新命名: ${displayName} → ${newName}`);
+                    loadDocuments();
+                } catch (e) {
+                    alert(e.message);
+                }
+            }
+
+            const handleKeydown = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitRename();
+                } else if (e.key === 'Escape') {
+                    input.blur();
+                    span.classList.remove('hidden');
+                    input.classList.add('hidden');
+                }
+            };
+
+            input.addEventListener('keydown', handleKeydown);
+            input.addEventListener('blur', commitRename, { once: true });
+
+            // Focus and put cursor at end
+            input.focus();
+            input.setSelectionRange(input.value.length, input.value.length);
         }
 
         function getSelectedDocs() {
