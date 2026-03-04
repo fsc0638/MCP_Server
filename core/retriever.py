@@ -58,8 +58,14 @@ class DocumentRetriever:
         Parses a document, splits it into chunks, extracts keywords, and saves to FAISS.
         """
         try:
-            # Security: Sanitize path
-            safe_path = _dummy_engine.sanitize_path(file_path)
+            # Resolve path: accept absolute paths directly, resolve relative against WORKSPACE_DIR
+            p = Path(file_path)
+            safe_path = p.resolve() if p.is_absolute() else (WORKSPACE_DIR / p).resolve()
+
+            # Security: ensure path stays within WORKSPACE_DIR
+            if not str(safe_path).startswith(str(WORKSPACE_DIR.resolve())):
+                logger.error(f"Security: path outside workspace: {safe_path}")
+                return False
             
             if not safe_path.exists():
                 logger.error(f"File not found: {safe_path}")

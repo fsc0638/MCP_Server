@@ -385,7 +385,7 @@ async def upload_document(file: UploadFile = File(...), background_tasks: Backgr
             logger.warning(f"Failed to update .names.json: {e}")
 
         # 6. Background vectorization is now fully handled by the Watchdog in core/watcher.py
-        vectorized_status = "pending" if extension in {".txt", ".md", ".pdf", ".csv"} else "unsupported"
+        vectorized_status = "pending" if extension in {".txt", ".md", ".pdf", ".csv", ".docx"} else "unsupported"
 
         invalidate_prompt_cache()  # Doc count changed — before return
         return {

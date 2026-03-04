@@ -24,7 +24,7 @@ class WorkspaceEventHandler(FileSystemEventHandler):
 
     def _is_supported(self, path: str) -> bool:
         ext = Path(path).suffix.lower()
-        return ext in {".txt", ".md", ".pdf", ".csv"}
+        return ext in {".txt", ".md", ".pdf", ".csv", ".docx"}
 
     def on_created(self, event):
         if event.is_directory or getattr(event, 'is_synthetic', False):
