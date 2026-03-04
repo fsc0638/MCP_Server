@@ -136,7 +136,7 @@ class DocumentRetriever:
             traceback.print_exc()
             return False
 
-    def search_context(self, query: str, top_k: int = 3, filter_type: str = "workspace") -> str:
+    def search_context(self, query: str, top_k: int = 3, filter_type: str = "workspace", allowed_filenames: list = None) -> str:
         """
         Retrieves relevant context based on query semantic similarity.
 
@@ -144,13 +144,15 @@ class DocumentRetriever:
             query: The search query.
             top_k: Number of chunks to retrieve.
             filter_type: 'workspace' (default, requires file extension), 'skill' (no extension), or 'all'.
+            allowed_filenames: List of filenames to restrict workspace retrieval to.
         """
         if self.vectorstore is None:
             return ""
             
         try:
             # Fetch extra candidates when filtering
-            fetch_k = top_k * 4 if filter_type != "all" else top_k
+            fetch_multiplier = 20 if allowed_filenames else 4
+            fetch_k = top_k * fetch_multiplier if filter_type != "all" else top_k
             docs = self.vectorstore.similarity_search(query, k=fetch_k)
 
             if not docs:
@@ -161,8 +163,11 @@ class DocumentRetriever:
                 filename = doc.metadata.get("filename", "Unknown")
                 has_ext = bool(Path(filename).suffix)
 
-                if filter_type == "workspace" and not has_ext:
-                    continue
+                if filter_type == "workspace":
+                    if not has_ext:
+                        continue
+                    if allowed_filenames is not None and filename not in allowed_filenames:
+                        continue
                 if filter_type == "skill" and has_ext:
                     continue
 

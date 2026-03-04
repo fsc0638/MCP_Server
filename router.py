@@ -186,19 +186,20 @@ from core.session import SessionManager
 _session_mgr = SessionManager(str(PROJECT_ROOT))
 
 # ─── System Prompt Cache ─────────────────────────────────────────────────────
-_prompt_cache: dict = {"prompt": None}
+_prompt_cache: dict = {}
 
 def invalidate_prompt_cache():
     """Invalidate the system prompt cache. Call after rescan, upload, or delete."""
-    _prompt_cache["prompt"] = None
+    _prompt_cache.clear()
 
-def build_system_prompt() -> str:
+def build_system_prompt(selected_docs: list = None) -> str:
     """
     Dynamically build system prompt with live skill list (name + one-liner)
-    and knowledge base document count. Result is cached until invalidated.
+    and knowledge base document count. Result is cached per selection.
     """
-    if _prompt_cache["prompt"] is not None:
-        return _prompt_cache["prompt"]
+    cache_key = tuple(sorted(selected_docs)) if selected_docs is not None else "ALL"
+    if cache_key in _prompt_cache:
+        return _prompt_cache[cache_key]
 
     uma = get_uma()
     skill_lines = []
@@ -211,10 +212,12 @@ def build_system_prompt() -> str:
 
     skills_block = "\n".join(skill_lines) if skill_lines else "  （無已安裝技能）"
 
-    doc_files = [
+    all_doc_files = [
         f for f in WORKSPACE_DIR.iterdir()
         if f.is_file() and not f.name.startswith(".")
     ] if WORKSPACE_DIR.exists() else []
+
+    doc_files = [f for f in all_doc_files if selected_docs is None or f.name in selected_docs]
 
     doc_names = []
     if doc_files:
@@ -239,7 +242,7 @@ def build_system_prompt() -> str:
         "詳細技能定義將在用戶附加技能時另行提供。\n"
         "請以繁體中文回覆，保持專業、清晰、簡潔。"
     )
-    _prompt_cache["prompt"] = prompt
+    _prompt_cache[cache_key] = prompt
     return prompt
 
 
@@ -287,6 +290,7 @@ class ChatRequest(BaseModel):
     injected_skill: Optional[str] = None  # For "Attach Skill" feature
     execute: Optional[bool] = False       # Switch to agent mode for executing skills
     attached_file: Optional[str] = None   # Absolute path of uploaded workspace file
+    selected_docs: Optional[List[str]] = None # List of filenames user selected in UI
 
 
 class SkillUpdateRequest(BaseModel):
@@ -717,8 +721,12 @@ async def chat(req: ChatRequest):
     # 3.5. RAG: Semantic heuristic — Dual check for Workspace Docs and Skills
     from core.retriever import retriever as _retriever
     rag_context = ""
+    # Only try to retrieve if at least one doc is unchecked, or if there's no selected_docs array (empty array means no docs allowed)
+    should_retrieve_docs = req.selected_docs is None or len(req.selected_docs) > 0
     if _should_trigger_rag(req.user_input):
-        doc_results = _retriever.search_context(req.user_input, top_k=3, filter_type="workspace")
+        doc_results = ""
+        if should_retrieve_docs:
+            doc_results = _retriever.search_context(req.user_input, top_k=3, filter_type="workspace", allowed_filenames=req.selected_docs)
         skill_results = _retriever.search_context(req.user_input, top_k=2, filter_type="skill")
         
         if doc_results or skill_results:
@@ -744,6 +752,10 @@ async def chat(req: ChatRequest):
     # 4. Append user message
     user_content = req.user_input + execution_context + skill_context + rag_context
     history_to_pass = history + [{"role": "user", "content": user_content}]
+
+    # Update the dynamic system prompt to reflect newly checked/unchecked files mid-session
+    if history_to_pass and history_to_pass[0].get("role") == "system":
+        history_to_pass[0]["content"] = build_system_prompt(req.selected_docs)
 
     # 5. Select adapter and call appropriate mode (chat vs simple_chat)
     try:

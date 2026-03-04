@@ -190,7 +190,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     model: model,
                     injected_skill: attachedSkill,
                     execute: executeMode,
-                    attached_file: attachedFilePath
+                    attached_file: attachedFilePath,
+                    selected_docs: window.docModule ? window.docModule.getSelectedDocs() : []
                 };
                 console.log('[CHAT] Sending payload:', JSON.stringify(payload, null, 2));
                 logModule.addLog('SYS', `發送模式: execute=${executeMode}, 檔案=${attachedFilePath ? attachedFilePath.split('/').pop() : '無'}`);
@@ -1067,6 +1068,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const docModule = (() => {
         const docList = document.getElementById('docList');
         const docCount = document.getElementById('docCount');
+        const unselectedFiles = new Set();
+        let currentLoadedFiles = [];
 
         async function loadDocuments() {
             try {
@@ -1080,6 +1083,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         function renderDocList(files, total) {
+            currentLoadedFiles = files;
             docCount.textContent = total;
             const sourceHint = document.getElementById('sourceCountHint');
             if (sourceHint) {
@@ -1107,6 +1111,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Use original_name for display; fall back to hashed filename if not available
                 const displayName = f.original_name || f.filename;
 
+                const isChecked = !unselectedFiles.has(f.filename);
                 li.innerHTML = `
                     <button class="doc-menu-btn" title="選項" data-filename="${escapeHtml(f.filename)}">&#8942;</button>
                     <div class="doc-item-info">
@@ -1114,7 +1119,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <span class="doc-item-size">${sizeKB} KB</span>
                     </div>
                     <label class="doc-checkbox-wrap" title="選取">
-                        <input type="checkbox" class="doc-checkbox">
+                        <input type="checkbox" class="doc-checkbox" ${isChecked ? 'checked' : ''}>
                         <span class="doc-checkmark"></span>
                     </label>
                 `;
@@ -1125,6 +1130,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 menuBtn.addEventListener('click', e => {
                     e.stopPropagation();
                     openDocMenu(menuBtn, f.filename);
+                });
+
+                const checkbox = li.querySelector('.doc-checkbox');
+                checkbox.addEventListener('change', e => {
+                    if (e.target.checked) unselectedFiles.delete(f.filename);
+                    else unselectedFiles.add(f.filename);
                 });
 
                 docList.appendChild(li);
@@ -1216,7 +1227,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        return { loadDocuments, deleteDocument, renameDocument };
+        function getSelectedDocs() {
+            return currentLoadedFiles
+                .filter(f => !unselectedFiles.has(f.filename))
+                .map(f => f.filename);
+        }
+
+        return { loadDocuments, deleteDocument, renameDocument, getSelectedDocs };
     })();
     window.docModule = docModule;
 
