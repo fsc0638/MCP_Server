@@ -12,6 +12,5 @@ services:
       # Mount necessary files and directories to ensure no code changes are needed
       - ./.env:/app/.env
       - ./Agent_skills:/app/Agent_skills
-      - ./uma_server.log:/app/uma_server.log
     environment:
       - TZ=Asia/Taipei
