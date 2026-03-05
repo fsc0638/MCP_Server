@@ -829,6 +829,9 @@ document.addEventListener('DOMContentLoaded', () => {
             confirmCreateBtn.textContent = '建立中...';
             createError.classList.add('hidden');
 
+            const creatingOverlay = document.getElementById('creatingSkillModalOverlay');
+            if (creatingOverlay) creatingOverlay.classList.add('active');
+
             try {
                 const res = await fetch('/skills/create', {
                     method: 'POST',
@@ -849,16 +852,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 logModule.addLog('SYS', `成功新建技能: ${data.skill_name}`);
                 closeCreateModal();
+
                 await rescan(); // Refresh list to show new skill
+
                 // Automatically open the new skill's drawer and switch to EDIT mode
                 setTimeout(() => {
+                    if (creatingOverlay) creatingOverlay.classList.remove('active');
                     openDrawer(data.skill_name);
                     // Explicitly switch to edit mode to ensure flow coherence
                     const editBtn = document.getElementById('drawerEditBtn');
                     if (editBtn) editBtn.click();
-                }, 400);
+
+                    // Optional: slight focus delay for better user experience
+                    setTimeout(() => {
+                        const editor = document.getElementById('skillMdEditor');
+                        if (editor) editor.focus();
+                    }, 500);
+                }, 600);
 
             } catch (e) {
+                if (creatingOverlay) creatingOverlay.classList.remove('active');
                 createError.textContent = e.message;
                 createError.classList.remove('hidden');
                 logModule.addLog('ERR', `建立技能失敗: ${e.message}`, 'error');
