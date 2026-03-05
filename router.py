@@ -1116,6 +1116,9 @@ def rescan_skills():
 
 
 class CreateSkillRequest(BaseModel):
+    name: str           # Must be ASCII + hyphens only, e.g. "my-skill"
+    display_name: str   # Human-readable name (any language)
+    description: str    # Short description (any language)
     version: str = "1.0.0"
     category: str = ""  # Optional category tag
     no_script: bool = False # Whether it's a pure LLM logic skill
