@@ -365,9 +365,7 @@
                         <button class="source-action-pill mat-stroked" id="addUrlBtnAction">
                             <span class="pill-label">網站連結</span>
                         </button>
-                        <button class="source-action-pill mat-stroked" id="googleDriveBtnAction">
-                            <span class="pill-label">雲端硬碟</span>
-                        </button>
+
                         <button class="source-action-pill mat-stroked" id="copyPasteBtnAction">
                             <span class="pill-label">複製文字</span>
                         </button>
@@ -427,28 +425,44 @@
 
     <input type="file" id="sourceFileInput" style="display:none" multiple accept=".pdf,.docx,.txt,.md">
 
+    <!-- URL Sub-Modal (NotebookLM style) -->
     <div class="modal-overlay" id="addUrlModalOverlay" style="z-index: 1001;">
-        <div class="modal-container small-modal">
-            <div class="modal-header">
-                <h3>連結網站</h3><button class="modal-close" id="closeAddUrlBtn">&times;</button>
+        <div class="modal-container source-sub-modal">
+            <div class="sub-modal-header">
+                <button class="sub-modal-back" id="closeAddUrlBtn">&larr;</button>
+                <h2 class="sub-modal-title">網站與 YouTube 連結</h2>
+                <button class="modal-close" id="closeAddUrlBtn2">&times;</button>
             </div>
-            <div class="modal-body">
-                <input type="url" id="sourceUrlInput" placeholder="輸入網址 (https://...)" class="modal-input">
-                <button class="modal-action-btn" id="confirmAddUrlBtn">新增來源</button>
+            <p class="sub-modal-desc">將網站或 YouTube 的 URL 貼到以下欄位，作為知識庫的來源。</p>
+            <div class="sub-modal-body">
+                <textarea id="sourceUrlInput" class="sub-modal-textarea" placeholder="貼上連結..." rows="6"></textarea>
+                <ul class="sub-modal-hints">
+                    <li>複數 URL 請以換行或空格分隔。</li>
+                    <li>目前僅支援公開可存取的網頁內容。</li>
+                </ul>
+            </div>
+            <div class="sub-modal-footer">
+                <button class="sub-modal-action-btn" id="confirmAddUrlBtn">插入</button>
             </div>
         </div>
     </div>
 
+    <!-- Text Sub-Modal (NotebookLM style) -->
     <div class="modal-overlay" id="addTextModalOverlay" style="z-index: 1001;">
-        <div class="modal-container">
-            <div class="modal-header">
-                <h3>新增文字來源</h3><button class="modal-close" id="closeAddTextBtn">&times;</button>
+        <div class="modal-container source-sub-modal">
+            <div class="sub-modal-header">
+                <button class="sub-modal-back" id="closeAddTextBtn">&larr;</button>
+                <h2 class="sub-modal-title">貼上文字</h2>
+                <button class="modal-close" id="closeAddTextBtn2">&times;</button>
             </div>
-            <div class="modal-body">
-                <input type="text" id="sourceTextName" placeholder="來源名稱" class="modal-input"
-                    style="margin-bottom:12px;">
-                <textarea id="sourceTextContent" placeholder="在此貼上文字內容..." class="modal-input"></textarea>
-                <button class="modal-action-btn" id="confirmAddTextBtn" style="margin-top:12px;">新增來源</button>
+            <p class="sub-modal-desc">將文字內容貼到以下欄位，作為知識庫的來源。</p>
+            <div class="sub-modal-body">
+                <input type="text" id="sourceTextName" class="sub-modal-input" placeholder="來源名稱（選填）">
+                <textarea id="sourceTextContent" class="sub-modal-textarea" placeholder="在此貼上文字內容..."
+                    rows="8"></textarea>
+            </div>
+            <div class="sub-modal-footer">
+                <button class="sub-modal-action-btn" id="confirmAddTextBtn">插入</button>
             </div>
         </div>
     </div>

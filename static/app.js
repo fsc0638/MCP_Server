@@ -909,6 +909,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         function openModal() {
             modalOverlay.classList.add('active');
+            // Clear search field each time modal opens
+            if (searchInput) { searchInput.value = ''; searchInput.style.height = 'auto'; }
             // Sync document count when modal opens
             if (window.docModule) window.docModule.loadDocuments();
         }
@@ -936,7 +938,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert(e.message);
             } finally {
                 confirmUrl.disabled = false;
-                confirmUrl.textContent = '新增來源';
+                confirmUrl.textContent = '插入';
             }
         }
 
@@ -964,7 +966,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 alert(e.message);
             } finally {
                 confirmText.disabled = false;
-                confirmText.textContent = '新增來源';
+                confirmText.textContent = '插入';
             }
         }
 
@@ -996,22 +998,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (urlBtn) urlBtn.onclick = () => urlOverlay.classList.add('active');
         if (closeUrl) closeUrl.onclick = () => urlOverlay.classList.remove('active');
+        const closeUrl2 = document.getElementById('closeAddUrlBtn2');
+        if (closeUrl2) closeUrl2.onclick = () => urlOverlay.classList.remove('active');
         if (confirmUrl) confirmUrl.onclick = submitUrl;
 
         if (textBtn) textBtn.onclick = () => textOverlay.classList.add('active');
         if (closeText) closeText.onclick = () => textOverlay.classList.remove('active');
+        const closeText2 = document.getElementById('closeAddTextBtn2');
+        if (closeText2) closeText2.onclick = () => textOverlay.classList.remove('active');
         if (confirmText) confirmText.onclick = submitText;
 
         const googleBtn = document.getElementById('googleSearchBtn');
-        if (googleBtn) {
-            googleBtn.onclick = () => {
-                const q = searchInput.value.trim();
-                if (q) {
-                    researchModule.startResearch(q);
-                } else {
-                    alert('請輸入搜尋內容');
+        function triggerSearch() {
+            const q = searchInput.value.trim();
+            if (q) {
+                researchModule.startResearch(q);
+            } else {
+                alert('請輸入搜尋內容');
+            }
+        }
+        if (googleBtn) googleBtn.onclick = triggerSearch;
+        if (searchInput) {
+            searchInput.addEventListener('keydown', e => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    triggerSearch();
                 }
-            };
+            });
         }
 
         // Drag & Drop

@@ -1228,6 +1228,165 @@ textarea::placeholder {
     transform: translateY(-1px);
 }
 
+/* ===== SOURCE SUB-MODAL (NotebookLM style) ===== */
+.source-sub-modal {
+    background: white;
+    border-radius: 20px;
+    width: 92%;
+    max-width: 620px;
+    max-height: 85vh;
+    box-shadow: var(--shadow-lg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 28px 32px 24px;
+}
+
+.sub-modal-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.sub-modal-back {
+    background: none;
+    border: none;
+    font-size: 20px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background 0.15s;
+    line-height: 1;
+}
+
+.sub-modal-back:hover {
+    background: var(--surface-bg);
+}
+
+.sub-modal-title {
+    flex: 1;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.sub-modal-header .modal-close {
+    font-size: 22px;
+    color: var(--text-muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background 0.15s, color 0.15s;
+    line-height: 1;
+}
+
+.sub-modal-header .modal-close:hover {
+    background: var(--surface-bg);
+    color: var(--text-primary);
+}
+
+.sub-modal-desc {
+    font-size: 13.5px;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    margin-bottom: 18px;
+}
+
+.sub-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: 1;
+    min-height: 0;
+}
+
+.sub-modal-input {
+    width: 100%;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-family: var(--font-ui);
+    border: 1.5px solid var(--border-strong);
+    border-radius: 10px;
+    outline: none;
+    background: var(--surface-input);
+    color: var(--text-primary);
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.sub-modal-input:focus {
+    border-color: var(--cis-blue);
+    box-shadow: 0 0 0 3px rgba(0, 51, 102, 0.08);
+}
+
+.sub-modal-textarea {
+    width: 100%;
+    padding: 14px 16px;
+    font-size: 14px;
+    font-family: var(--font-ui);
+    border: 1.5px solid var(--border-strong);
+    border-radius: 10px;
+    outline: none;
+    background: var(--surface-input);
+    color: var(--text-primary);
+    resize: vertical;
+    min-height: 120px;
+    line-height: 1.6;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.sub-modal-textarea:focus {
+    border-color: var(--cis-blue);
+    box-shadow: 0 0 0 3px rgba(0, 51, 102, 0.08);
+}
+
+.sub-modal-textarea::placeholder,
+.sub-modal-input::placeholder {
+    color: var(--text-muted);
+}
+
+.sub-modal-hints {
+    list-style: disc;
+    padding-left: 20px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    line-height: 1.8;
+    margin: 4px 0 0;
+}
+
+.sub-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+.sub-modal-action-btn {
+    padding: 10px 28px;
+    background: var(--cis-blue);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: var(--font-ui);
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+}
+
+.sub-modal-action-btn:hover {
+    background: var(--cis-blue-hover);
+    transform: translateY(-1px);
+}
+
+.sub-modal-action-btn:disabled {
+    background: var(--border-strong);
+    cursor: not-allowed;
+    transform: none;
+}
+
 /* ===== SCROLLBARS ===== */
 ::-webkit-scrollbar {
     width: 5px;
