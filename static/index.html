@@ -466,6 +466,24 @@
             </div>
         </div>
     </div>
+    <!-- Shared Alert Modal (same style as delete confirmation) -->
+    <div class="modal-overlay hidden" id="alertModalOverlay" style="z-index: 2000;">
+        <div class="modal-card">
+            <div class="modal-card-header orange" id="alertModalHeader">
+                <div class="modal-warning-badge">⚠</div>
+                <div>
+                    <div class="modal-title" id="alertModalTitle">提示</div>
+                    <div class="modal-subtitle" id="alertModalSubtitle"></div>
+                </div>
+            </div>
+            <div class="modal-body">
+                <p class="risk-text" id="alertModalMessage">訊息內容</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="alertModalOkBtn">確定</button>
+            </div>
+        </div>
+    </div>
 
     <script src="app.js?v=25"></script>
     <script>

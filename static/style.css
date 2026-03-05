@@ -379,7 +379,7 @@ body {
 
 /* Divider */
 .source-divider {
-    padding: 10px 16px 6px;
+    padding: 7px 16px 4px;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.8px;
@@ -392,7 +392,7 @@ body {
 .skill-list {
     flex: 1;
     overflow-y: auto;
-    padding: 8px 0;
+    padding: 4px 0;
     list-style: none;
 }
 
@@ -400,7 +400,7 @@ body {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 10px 16px;
+    padding: 6px 16px;
     cursor: default;
     border-radius: 0;
     transition: background 0.15s;
@@ -748,7 +748,7 @@ textarea::placeholder {
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 12px;
+    padding: 5px 12px;
     position: relative;
 }
 
@@ -1137,6 +1137,15 @@ textarea::placeholder {
     display: flex;
     align-items: center;
     gap: 16px;
+    text-align: left;
+}
+
+.modal-card-header>div:not(.modal-warning-badge) {
+    flex: 1;
+}
+
+.modal-card-header.orange {
+    background: linear-gradient(135deg, var(--cis-orange), var(--cis-orange-hover));
 }
 
 .modal-warning-badge {

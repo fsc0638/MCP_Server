@@ -10,6 +10,22 @@
 
 document.addEventListener('DOMContentLoaded', () => {
 
+    // ── Shared alert modal utility (replaces native alert) ─────────────────
+    function showAlertModal(title, message, subtitle) {
+        const overlay = document.getElementById('alertModalOverlay');
+        document.getElementById('alertModalTitle').textContent = title || '提示';
+        document.getElementById('alertModalMessage').textContent = message || '';
+        const sub = document.getElementById('alertModalSubtitle');
+        sub.textContent = subtitle || '';
+        sub.style.display = subtitle ? 'block' : 'none';
+        overlay.classList.remove('hidden');
+        overlay.classList.add('active');
+        document.getElementById('alertModalOkBtn').onclick = () => {
+            overlay.classList.remove('active');
+            overlay.classList.add('hidden');
+        };
+    }
+
     // =========================================================================
     // MODULE A: CHAT (Pure LLM, no skill execution)
     // =========================================================================
@@ -1014,7 +1030,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (q) {
                 researchModule.startResearch(q);
             } else {
-                alert('請輸入搜尋內容');
+                showAlertModal('搜尋提示', '請輸入搜尋內容後再進行搜尋。', '欄位不可為空');
             }
         }
         if (googleBtn) googleBtn.onclick = triggerSearch;
