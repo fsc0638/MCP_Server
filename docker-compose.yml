@@ -12,5 +12,14 @@ services:
       # Mount necessary files and directories to ensure no code changes are needed
       - ./.env:/app/.env
       - ./Agent_skills:/app/Agent_skills
+      # Persist uploaded knowledge files across container rebuilds
+      - ./workspace:/app/workspace
+      # Persist FAISS vector index (inside container it maps to /root/.mcp_faiss)
+      - mcp_faiss_data:/root/.mcp_faiss
+      # Persist conversation memory
+      - ./memory:/app/memory
     environment:
       - TZ=Asia/Taipei
+
+volumes:
+  mcp_faiss_data:
