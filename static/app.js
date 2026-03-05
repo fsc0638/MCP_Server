@@ -486,6 +486,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const createError = document.getElementById('createSkillError');
 
         let currentSkill = null;
+        let currentSkillMetadata = {}; // Added for structured editor
         let globalCategories = new Set();
 
         // ── Category map (Method 2) ─────────────────────────────────────────
@@ -625,7 +626,53 @@ document.addEventListener('DOMContentLoaded', () => {
                     rollbackBtn.classList.add('hidden');
                 }
 
-                skillEditor.value = data.raw_content;
+                // Optimized Metadata and Body Loading Flow
+                const parts = data.raw_content.split('---');
+                if (parts.length >= 3) {
+                    const body = parts.slice(2).join('---').trim();
+                    skillEditor.value = body;
+
+                    // 2. Structured Parser (JSON Meta)
+                    const meta = data.metadata || {};
+                    currentSkillMetadata = meta;
+
+                    document.getElementById('editSkillDisplayName').value = meta.display_name || meta.name || '';
+                    document.getElementById('editSkillDescription').value = meta.description || '';
+                    document.getElementById('editSkillCategory').value = meta.category || '';
+                    document.getElementById('editSkillVersion').value = meta.version || '1.0.0';
+
+                    // No-Script Badge
+                    const isNoScript = meta.runtime_requirements && meta.runtime_requirements.length === 0;
+                    if (isNoScript) drawerBadge.innerHTML += ' <span style="font-size:10px; opacity:0.7;">(純 LLM)</span>';
+                    // Regex patterns to capture Markdown sections
+                    const reasoningMatch = body.match(/## 思維邏輯\s*\(Reasoning Flow\)([\s\S]*?)(?=##|$)/i);
+                    const instructionsMatch = body.match(/## 操作指南\s*\(Instructions\)([\s\S]*?)(?=##|$)/i);
+
+                    // Extract Context (everything before the first ## header)
+                    const contextMatch = body.match(/^([\s\S]*?)(?=##)/);
+
+                    document.getElementById('editSkillContext').value = contextMatch ? contextMatch[1].trim() : "";
+                    document.getElementById('editSkillReasoning').value = reasoningMatch ? reasoningMatch[1].trim() : "";
+                    document.getElementById('editSkillInstructions').value = instructionsMatch ? instructionsMatch[1].trim() : "";
+
+                    // Parse and store metadata (Deprecated manual YAML parsing)
+                    // Robustness Check: If headings are missing, fallback to Raw Mode
+                    if (!reasoningMatch || !instructionsMatch) {
+                        switchToRawMode(true);
+                    } else {
+                        switchToStructuredMode();
+                        document.getElementById('editSkillContext').value = contextMatch ? contextMatch[1].trim() : "";
+                        document.getElementById('editSkillReasoning').value = reasoningMatch ? reasoningMatch[1].trim() : "";
+                        document.getElementById('editSkillInstructions').value = instructionsMatch ? instructionsMatch[1].trim() : "";
+                    }
+                } else {
+                    // Fallback
+                    skillEditor.value = data.raw_content;
+                    document.getElementById('editSkillContext').value = "";
+                    document.getElementById('editSkillReasoning').value = "";
+                    document.getElementById('editSkillInstructions').value = "";
+                    currentSkillMetadata = {};
+                }
 
             } catch (e) {
                 drawerMeta.innerHTML = `<p style="color:var(--red)">載入失敗：${e.message}</p>`;
@@ -689,7 +736,54 @@ document.addEventListener('DOMContentLoaded', () => {
         // ── Save SKILL.md ─────────────────────────────────────────────────────
         async function saveSkill() {
             if (!currentSkill) return;
-            const content = skillEditor.value.trim();
+
+            // 1. Update stored metadata with UI values
+            const updatedMeta = { ...currentSkillMetadata };
+            updatedMeta.name = currentSkill; // Ensure name stays correct
+            updatedMeta.display_name = document.getElementById('editSkillDisplayName').value.trim();
+            updatedMeta.description = document.getElementById('editSkillDescription').value.trim();
+            updatedMeta.category = document.getElementById('editSkillCategory').value.trim();
+            updatedMeta.version = document.getElementById('editSkillVersion').value.trim();
+
+            // 2. Reassemble YAML with proper escaping
+            let yamlBlock = "---\n";
+            const escapeYaml = (val) => String(val).replace(/"/g, '\\"');
+
+            for (const [k, v] of Object.entries(updatedMeta)) {
+                if (k.startsWith('_')) continue;
+
+                if (Array.isArray(v)) {
+                    yamlBlock += `${k}: ${JSON.stringify(v)}\n`;
+                } else if (typeof v === 'boolean') {
+                    yamlBlock += `${k}: ${v}\n`;
+                } else {
+                    // Use double quotes for all string fields in YAML for safety
+                    yamlBlock += `${k}: "${escapeYaml(v)}"\n`;
+                }
+            }
+            yamlBlock += "---\n\n";
+
+            // 3. Reassemble full SKILL.md Body
+            let bodyContent = "";
+            const isRawMode = !rawEditorContainer.classList.contains('hidden');
+
+            if (isRawMode) {
+                bodyContent = skillEditor.value.trim();
+            } else {
+                // Structured reassembly
+                const displayName = document.getElementById('editSkillDisplayName').value.trim();
+                const ctx = document.getElementById('editSkillContext').value.trim();
+                const reas = document.getElementById('editSkillReasoning').value.trim();
+                const inst = document.getElementById('editSkillInstructions').value.trim();
+
+                bodyContent = `# ${displayName}\n\n`;
+                if (ctx) bodyContent += ctx + "\n\n";
+                bodyContent += `## 思維邏輯 (Reasoning Flow)\n${reas}\n\n`;
+                bodyContent += `## 操作指南 (Instructions)\n${inst}`;
+            }
+
+            const content = yamlBlock + bodyContent.trim();
+
             yamlError.classList.add('hidden');
 
             try {
@@ -716,6 +810,32 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
+        // ── Helper: Simple YAML Parser ─────────────────────────────────────────
+        function parseSkillYaml(yamlStr) {
+            const meta = {};
+            const lines = yamlStr.split('\n');
+            lines.forEach(line => {
+                const match = line.match(/^([a-z0-9_]+):\s*(.*)$/i);
+                if (match) {
+                    let k = match[1].trim();
+                    let v = match[2].trim();
+                    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+                        v = v.substring(1, v.length - 1);
+                    }
+                    // Handle simple lists [a, b]
+                    if (v.startsWith('[') && v.endsWith(']')) {
+                        v = v.substring(1, v.length - 1).split(',').map(s => s.trim().replace(/^["']|["']$/g, ''));
+                    }
+                    // Handle booleans
+                    if (v === 'true') v = true;
+                    if (v === 'false') v = false;
+
+                    meta[k] = v;
+                }
+            });
+            return meta;
+        }
+
         // ── Rollback ──────────────────────────────────────────────────────────
         async function rollbackSkill() {
             if (!currentSkill) return;
@@ -736,6 +856,29 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // ── Install deps ──────────────────────────────────────────────────────
+
+        // ── Delete Skill ──────────────────────────────────────────────────────
+        async function deleteSkill() {
+            if (!currentSkill) return;
+            const displayName = document.getElementById('editSkillDisplayName').value.trim() || currentSkill;
+
+            try {
+                // Reuse docModule's confirmation modal
+                const confirmed = await window.docModule.awaitDeleteConfirm(displayName, "技能");
+                if (!confirmed) return;
+
+                const res = await fetch(`/skills/${currentSkill}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || '刪除失敗');
+
+                logModule.addLog('SYS', `已永久刪除技能: ${currentSkill}`);
+                closeDrawer();
+                await rescan();
+            } catch (e) {
+                alert(e.message);
+            }
+        }
+
         async function installDeps(skillName) {
             installBtn.disabled = true;
             installBtn.textContent = '⬇ 安裝中...';
@@ -865,7 +1008,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     // Optional: slight focus delay for better user experience
                     setTimeout(() => {
-                        const editor = document.getElementById('skillMdEditor');
+                        const editor = document.getElementById('skillEditor');
                         if (editor) editor.focus();
                     }, 500);
                 }, 600);
@@ -909,6 +1052,74 @@ document.addEventListener('DOMContentLoaded', () => {
         closeCreateModalBtn.onclick = closeCreateModal;
         cancelCreateBtn.onclick = closeCreateModal;
         confirmCreateBtn.onclick = submitCreateSkill;
+
+        // Toggle logic with helper functions
+        const rawToggle = document.getElementById('rawModeToggle');
+        const structuredEditor = document.getElementById('structuredEditor');
+        const rawEditorContainer = document.getElementById('rawEditorContainer');
+
+        function switchToRawMode(silent = false) {
+            const reassembleBody = () => {
+                const ctx = document.getElementById('editSkillContext').value.trim();
+                const reas = document.getElementById('editSkillReasoning').value.trim();
+                const inst = document.getElementById('editSkillInstructions').value.trim();
+                const displayName = document.getElementById('editSkillDisplayName').value.trim();
+                let body = `# ${displayName}\n\n`;
+                if (ctx) body += ctx + "\n\n";
+                body += `## 思維邏輯 (Reasoning Flow)\n${reas}\n\n`;
+                body += `## 操作指南 (Instructions)\n${inst}`;
+                return body.trim();
+            };
+
+            const handleSwitch = () => {
+                skillEditor.value = reassembleBody();
+                structuredEditor.classList.add('hidden');
+                rawEditorContainer.classList.remove('hidden');
+                rawToggle.textContent = '🧩 切換結構化模式';
+            };
+
+            if (silent) {
+                handleSwitch();
+            } else {
+                // Use custom confirmation modal
+                window.docModule.awaitGeneralConfirm({
+                    title: "模式切換確認",
+                    subtitle: "將切換至 Markdown 編輯模式",
+                    message: "切換後會保留您的編輯。但在原始模式儲存後，若格式不符，下次載入時結構化欄位可能無法完全歸位。確定要切換嗎？",
+                    confirmText: "確定切換",
+                    cancelText: "取消",
+                    confirmBg: "var(--cis-blue)"
+                }).then(confirmed => {
+                    if (confirmed) handleSwitch();
+                });
+            }
+        }
+
+        function switchToStructuredMode() {
+            rawEditorContainer.classList.add('hidden');
+            structuredEditor.classList.remove('hidden');
+            rawToggle.textContent = '🌐 切換原始模式 (Markdown)';
+        }
+
+        rawToggle.onclick = () => {
+            const isRaw = !rawEditorContainer.classList.contains('hidden');
+            if (isRaw) {
+                const body = skillEditor.value;
+                const reasoningMatch = body.match(/## 思維邏輯\s*\(Reasoning Flow\)([\s\S]*?)(?=##|$)/i);
+                const instructionsMatch = body.match(/## 操作指南\s*\(Instructions\)([\s\S]*?)(?=##|$)/i);
+                const contextMatch = body.match(/^([\s\S]*?)(?=##)/);
+                if (reasoningMatch && instructionsMatch) {
+                    document.getElementById('editSkillContext').value = contextMatch ? contextMatch[1].trim() : "";
+                    document.getElementById('editSkillReasoning').value = reasoningMatch ? reasoningMatch[1].trim() : "";
+                    document.getElementById('editSkillInstructions').value = instructionsMatch ? instructionsMatch[1].trim() : "";
+                    switchToStructuredMode();
+                } else {
+                    alert("目前 Markdown 格式不符合結構化標題要求，無法自動轉換回結構化模式。");
+                }
+            } else {
+                switchToRawMode();
+            }
+        };
 
         return { loadSkills };
     })();
@@ -1283,13 +1494,40 @@ document.addEventListener('DOMContentLoaded', () => {
             return el;
         })();
 
-        function awaitDeleteConfirm(displayName) {
+        function awaitDeleteConfirm(displayName, type = "文件") {
+            return awaitGeneralConfirm({
+                title: `確定刪除${type}`,
+                subtitle: "這個動作無法復原",
+                message: `確定要刪除${type} '${escapeHtml(displayName)}' 嗎？<br>此動作會將它從系統中永久移除。`,
+                confirmText: "確定刪除",
+                cancelText: "取消",
+                confirmBg: "var(--cis-orange)"
+            });
+        }
+
+        function awaitGeneralConfirm({ title, subtitle, message, confirmText, cancelText, confirmBg }) {
             return new Promise(resolve => {
+                const titleEl = _deleteConfirmModal.querySelector('.modal-title');
+                const subtitleEl = _deleteConfirmModal.querySelector('.modal-subtitle');
                 const textEl = _deleteConfirmModal.querySelector('#deleteConfirmTextDynamic');
                 const cancelBtn = _deleteConfirmModal.querySelector('#cancelDeleteBtnDynamic');
                 const confirmBtn = _deleteConfirmModal.querySelector('#confirmDeleteBtnDynamic');
+                const header = _deleteConfirmModal.querySelector('.modal-card-header');
 
-                textEl.innerHTML = `確定要刪除文件 '${escapeHtml(displayName)}' 嗎？<br>此動作會將它從知識庫中永久移除。`;
+                titleEl.textContent = title || "確認";
+                subtitleEl.textContent = subtitle || "";
+                textEl.innerHTML = message || "";
+                confirmBtn.textContent = confirmText || "確定";
+                cancelBtn.textContent = cancelText || "取消";
+                confirmBtn.style.background = confirmBg || "var(--cis-blue)";
+
+                // If it's a delete/warning, we might want to keep the orange/red header
+                // but for general confirms, blue is better.
+                if (confirmBg === "var(--cis-orange)" || confirmBg === "var(--red)") {
+                    header.style.background = "var(--cis-orange)";
+                } else {
+                    header.style.background = "var(--cis-blue)";
+                }
 
                 _deleteConfirmModal.style.display = 'flex';
                 _deleteConfirmModal.style.opacity = '1';
@@ -1401,7 +1639,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 .map(f => f.filename);
         }
 
-        return { loadDocuments, deleteDocument, renameDocument, getSelectedDocs };
+        return { loadDocuments, deleteDocument, renameDocument, getSelectedDocs, awaitDeleteConfirm, awaitGeneralConfirm };
     })();
     window.docModule = docModule;
 

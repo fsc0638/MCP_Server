@@ -234,15 +234,68 @@
         <!-- Edit mode -->
         <div class="drawer-section hidden" id="drawerEditView">
             <div class="edit-toolbar">
-                <span class="edit-notice">⚠ 編輯前已自動備份 SKILL.md.bak</span>
+                <span class="edit-notice">✏️ 編輯技能定義</span>
+                <span class="edit-hint">YAML 將自動產生</span>
             </div>
-            <textarea id="skillEditor" class="skill-editor" spellcheck="false"></textarea>
+
+            <!-- Metadata Fields (Structured) -->
+            <div class="editor-metadata-grid">
+                <div class="form-group" style="grid-column: span 2;">
+                    <label>顯示名稱</label>
+                    <input type="text" id="editSkillDisplayName" class="form-input" placeholder="例如：郵件分析專家">
+                </div>
+                <div class="form-group" style="grid-column: span 2;">
+                    <label>簡短描述</label>
+                    <textarea id="editSkillDescription" class="form-input" style="height:60px; resize:vertical;"
+                        placeholder="一句話描述這個技能的功能"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>分類</label>
+                    <input type="text" id="editSkillCategory" class="form-input" placeholder="例如：文書處理">
+                </div>
+                <div class="form-group">
+                    <label>版本號</label>
+                    <input type="text" id="editSkillVersion" class="form-input" placeholder="例如：1.0.0">
+                </div>
+            </div>
+
+            <div class="editor-tabs">
+                <div class="editor-section-label">結構化內容</div>
+                <button class="raw-toggle-btn" id="rawModeToggle">🌐 切換原始模式 (Markdown)</button>
+            </div>
+
+            <!-- Granular Content Fields (Structured Mode) -->
+            <div id="structuredEditor">
+                <div class="form-group content-group">
+                    <label>背景與提示詞前綴 (Context / Prefix)</label>
+                    <textarea id="editSkillContext" class="form-input content-textarea"
+                        placeholder="在此貼上技能背景或一般指示..."></textarea>
+                </div>
+                <div class="form-group content-group">
+                    <label>思維邏輯 (Reasoning Flow)</label>
+                    <textarea id="editSkillReasoning" class="form-input content-textarea"
+                        placeholder="在此貼上思維步驟或 MD 語法..."></textarea>
+                </div>
+                <div class="form-group content-group">
+                    <label>操作指南 (Instructions)</label>
+                    <textarea id="editSkillInstructions" class="form-input content-textarea"
+                        placeholder="在此貼上具體操作指令或 MD 語法..."></textarea>
+                </div>
+            </div>
+
+            <!-- Raw Content Editor (Raw Mode - Hidden by default) -->
+            <div id="rawEditorContainer" class="hidden">
+                <textarea id="skillEditor" class="skill-editor" spellcheck="false"
+                    placeholder="在此編輯完整的 SKILL.md Markdown 內容..."></textarea>
+            </div>
+
             <div class="yaml-error hidden" id="yamlError">
                 <span id="yamlErrorMsg"></span>
             </div>
             <div class="drawer-footer-actions">
-                <button class="action-btn btn-rollback hidden" id="rollbackBtn">↩ 回退版本</button>
-                <button class="action-btn btn-save" id="saveSkillBtn">💾 儲存</button>
+                <button class="action-btn btn-delete" id="deleteSkillBtn">刪除技能</button>
+                <button class="action-btn btn-rollback hidden" id="rollbackBtn">↩ 還原版本</button>
+                <button class="action-btn btn-save" id="saveSkillBtn">儲存</button>
             </div>
         </div>
     </aside>

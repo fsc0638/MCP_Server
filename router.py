@@ -997,16 +997,63 @@ def update_skill(skill_name: str, req: SkillUpdateRequest):
 
         skill_md_path.write_text(new_content, encoding="utf-8")
 
-        # Clear registry cache so next scan picks up changes
-        uma.registry.skills.pop(skill_name, None)
+        # Re-register the skill immediately to refresh metadata and prevent 404 gaps
+        uma.registry._register_skill(skill_path)
 
-        logger.info(f"Skill '{skill_name}' updated. Backup saved to SKILL.md.bak")
+        logger.info(f"Skill '{skill_name}' updated. Registry refreshed.")
         return {
             "status": "success",
             "message": f"技能 '{skill_name}' 已更新，原始備份已儲存至 SKILL.md.bak",
             "backup_created": str(bak_path)
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/skills/{skill_name}", tags=["Skill Management"])
+def delete_skill(skill_name: str):
+    """
+    Permanently delete a skill directory and its content.
+    Safety:
+      1. Path sanitization (only delete within skills/ home).
+      2. Clear FAISS index (prevent ghost skills in RAG).
+      3. Invalidate prompt cache.
+    """
+    from core.retriever import retriever
+    uma = get_uma()
+    skill = uma.registry.get_skill(skill_name)
+    
+    # 1. Path Safety & Existence Check
+    skills_home = uma.registry.skills_home.resolve()
+    if skill:
+        skill_path = skill["path"].resolve()
+    else:
+        # If not in registry (e.g. malformed), try to resolve folder name directly
+        skill_path = (skills_home / skill_name).resolve()
+
+    if not skill_path.exists():
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    try:
+        skill_path.relative_to(skills_home)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path traversal denied: cannot delete outside skills directory")
+
+    try:
+        # 2. Clear FAISS index
+        retriever.delete_document(skill_name)
+        
+        # 3. Delete directory
+        shutil.rmtree(skill_path)
+        
+        # 4. Cleanup Registry and Cache
+        uma.registry.skills.pop(skill_name.lower(), None)
+        invalidate_prompt_cache()
+        
+        logger.info(f"Skill '{skill_name}' permanently deleted.")
+        return {"status": "success", "message": f"技能 '{skill_name}' 已永久刪除"}
+    except Exception as e:
+        logger.error(f"Failed to delete skill {skill_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1032,7 +1079,8 @@ def rollback_skill(skill_name: str):
 
     try:
         shutil.copy2(bak_path, skill_md_path)
-        uma.registry.skills.pop(skill_name, None)
+        # Re-register the skill immediately to refresh metadata and prevent 404 gaps
+        uma.registry._register_skill(skill_path)
 
         logger.info(f"Skill '{skill_name}' rolled back from SKILL.md.bak")
         return {"status": "success", "message": f"技能 '{skill_name}' 已回退至上次備份版本"}
@@ -1071,8 +1119,8 @@ def install_skill_deps(skill_name: str):
         except Exception as e:
             results.append({"package": pkg, "status": "error", "error": str(e)})
 
-    # Force re-scan so registry refreshes
-    uma.registry.skills.pop(skill_name, None)
+    # Force re-scan of this specific skill so registry refreshes dependency status
+    uma.registry._register_skill(skill_path)
 
     return {
         "status": "done",
