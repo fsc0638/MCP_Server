@@ -764,12 +764,22 @@ async def chat(req: ChatRequest):
         skill_data = uma.registry.get_skill(req.injected_skill)
         if full_skill_md and skill_data:
             meta = skill_data["metadata"]
+            skill_path = uma.registry.skills_home / req.injected_skill
+            
+            assets_injection = ""
+            assets_dir = skill_path / "assets"
+            if assets_dir.is_dir() and any(assets_dir.iterdir()):
+                assets_injection = f"\n\n[素材庫提醒]\n此技能備有輸出模板或範例素材於 {assets_dir} 中，若需要結構化輸出，請先參考該內容。"
+
+            reasoning_injection = "\n\n[核心原則]\n即使沒有腳本可以執行，你「必須」嚴格遵循下方技能定義中的『思維邏輯 (Reasoning Flow)』來回應用戶。"
+
             if req.execute:
                 # Execute mode: SKILL.md becomes the operational guide
                 skill_context = (
                     f"\n\n[技能操作指引 — {req.injected_skill}]\n"
                     f"以下是該技能的完整定義與操作說明，請嚴格依照此指引完成任務。\n"
-                    f"你可以使用提供的工具來執行程式碼或操作檔案。\n\n"
+                    f"你可以使用提供的工具來執行程式碼或操作檔案。\n"
+                    f"{reasoning_injection}{assets_injection}\n\n"
                     f"---\n{full_skill_md}\n---\n"
                 )
             else:
@@ -777,7 +787,8 @@ async def chat(req: ChatRequest):
                 skill_context = (
                     f"\n\n[技能知識參考 — {req.injected_skill}]\n"
                     f"以下是該技能的完整定義與操作說明，請以此知識為基礎回答問題。\n"
-                    f"注意：你目前處於純對話模式，不具有執行工具的能力。\n\n"
+                    f"注意：你目前處於純對話模式，不具有執行工具的能力。\n"
+                    f"{reasoning_injection}{assets_injection}\n\n"
                     f"---\n{full_skill_md}\n---\n"
                 )
         elif skill_data:
@@ -1154,6 +1165,7 @@ def create_skill(req: CreateSkillRequest):
         skill_path.mkdir(parents=True)
         (skill_path / "scripts").mkdir()
         (skill_path / "references").mkdir()
+        (skill_path / "assets").mkdir()
 
         skill_md = f"""---
 name: {name}
@@ -1169,14 +1181,18 @@ risk_level: "low"
 
 {req.description}
 
-## 使用方式
+## 思維邏輯 (Reasoning Flow)
 
-說明此技能的使用方法、接受的輸入與回傳的輸出格式。
+1. [第一步：分析...]
+2. [第二步：執行...]
+3. [第三步：產出...]
 
-## 注意事項
+## 操作指南 (Instructions)
 
-- 此為新建技能，尚未設定執行腳本
-- 請在 `scripts/` 目錄下新增 `main.py` 以啟用執行功能
+- 此為新建技能，具體的操作步驟與限制請列於此。
+- 若無需程式邏輯，僅需完善上方的「思維邏輯」，系統便能依照指示行動。
+- 若需執行自訂程式，請於 `scripts/` 目錄下新增 `main.py` 以啟用執行功能。
+- 若有參照範本，可置於 `assets/` 目錄。
 """
         (skill_path / "SKILL.md").write_text(skill_md, encoding="utf-8")
 
