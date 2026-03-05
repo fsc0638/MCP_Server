@@ -796,6 +796,7 @@ document.addEventListener('DOMContentLoaded', () => {
             newSkillName.value = '';
             newSkillDesc.value = '';
             newSkillCat.value = '';
+            document.getElementById('newSkillNoScript').checked = false;
             newSkillCat.classList.add('hidden');
             populateCategoryDropdown();
             newSkillCatSelect.value = '';
@@ -836,7 +837,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         name: id,
                         display_name: name,
                         description: desc,
-                        category: cat
+                        category: cat,
+                        no_script: document.getElementById('newSkillNoScript').checked
                     })
                 });
 
@@ -848,8 +850,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 logModule.addLog('SYS', `成功新建技能: ${data.skill_name}`);
                 closeCreateModal();
                 await rescan(); // Refresh list to show new skill
-                // Automatically open the new skill's drawer
-                setTimeout(() => openDrawer(data.skill_name), 300);
+                // Automatically open the new skill's drawer and switch to EDIT mode
+                setTimeout(() => {
+                    openDrawer(data.skill_name);
+                    // Explicitly switch to edit mode to ensure flow coherence
+                    const editBtn = document.getElementById('drawerEditBtn');
+                    if (editBtn) editBtn.click();
+                }, 400);
 
             } catch (e) {
                 createError.textContent = e.message;

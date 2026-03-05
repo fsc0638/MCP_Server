@@ -1116,11 +1116,9 @@ def rescan_skills():
 
 
 class CreateSkillRequest(BaseModel):
-    name: str           # Must be ASCII + hyphens only, e.g. "my-skill"
-    display_name: str   # Human-readable name (any language)
-    description: str    # Short description (any language)
     version: str = "1.0.0"
     category: str = ""  # Optional category tag
+    no_script: bool = False # Whether it's a pure LLM logic skill
 
 
 import re as _re
@@ -1167,7 +1165,37 @@ def create_skill(req: CreateSkillRequest):
         (skill_path / "references").mkdir()
         (skill_path / "assets").mkdir()
 
-        skill_md = f"""---
+        if req.no_script:
+            # specialized template for no-script skills
+            skill_md = f"""---
+name: {name}
+display_name: "{req.display_name}"
+description: "{req.description}"
+version: "{req.version}"
+category: "{req.category}"
+runtime_requirements: []
+risk_level: "low"
+---
+
+# {req.display_name} (純 LLM 邏輯技能)
+
+{req.description}
+
+## 思維邏輯 (Reasoning Flow)
+
+1. [第一步：分析...]
+2. [第二步：執行...]
+3. [第三步：產出...]
+
+## 操作指南 (Instructions)
+
+- 此技能「無需執行腳本」，完全依賴上述的思維邏輯進行處理。
+- 請在此定義 LLM 在處理此任務時應遵循的具體原則。
+- 若有參考範本，可置於 `assets/` 目錄，系統會自動參照。
+"""
+        else:
+            # default template with script placeholder
+            skill_md = f"""---
 name: {name}
 display_name: "{req.display_name}"
 description: "{req.description}"

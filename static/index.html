@@ -310,6 +310,14 @@
                     <input type="text" id="newSkillCat" placeholder="請輸入新分類名稱..." class="form-input hidden"
                         style="width:100%; padding:8px; border:1px solid var(--border-strong); border-radius:6px; font-size:13px;">
                 </div>
+                <!-- No-Script Feature -->
+                <div class="form-group" style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                    <input type="checkbox" id="newSkillNoScript" style="width: 16px; height: 16px; cursor: pointer;">
+                    <label for="newSkillNoScript"
+                        style="font-size: 13px; color: var(--cis-blue); font-weight: 600; cursor: pointer;">
+                        僅使用 LLM 語意邏輯處裡 (無需程式腳本)
+                    </label>
+                </div>
                 <div class="yaml-error hidden" id="createSkillError" style="margin-top: 8px;"></div>
             </div>
             <div class="modal-footer" style="justify-content: flex-end; gap: 8px;">
