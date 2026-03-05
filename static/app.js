@@ -800,11 +800,11 @@ document.addEventListener('DOMContentLoaded', () => {
             populateCategoryDropdown();
             newSkillCatSelect.value = '';
             createError.classList.add('hidden');
-            createModal.classList.remove('hidden');
+            createModal.classList.add('active');
         }
 
         function closeCreateModal() {
-            createModal.classList.add('hidden');
+            createModal.classList.remove('active');
         }
 
         async function submitCreateSkill() {
