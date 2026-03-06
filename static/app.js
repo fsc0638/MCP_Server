@@ -472,6 +472,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const yamlError = document.getElementById('yamlError');
         const yamlErrorMsg = document.getElementById('yamlErrorMsg');
 
+        let isSkillDirty = false;
+
         // Create skill elements
         const createSkillBtn = document.getElementById('createSkillBtn');
         const createModal = document.getElementById('createSkillModal');
@@ -601,6 +603,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // ── Drawer ────────────────────────────────────────────────────────────
         async function openDrawer(skillName) {
+            if (!drawer.classList.contains('hidden') && isSkillDirty) {
+                if (!confirm(`系統提示：\n你在「${currentSkill}」的變更尚未儲存。\n確定要放棄變更並切換到「${skillName}」嗎？`)) {
+                    return;
+                }
+            }
+            isSkillDirty = false;
+
             currentSkill = skillName;
             drawerTitle.textContent = skillName;
             drawerMeta.innerHTML = '<p style="color:var(--text-muted);font-size:12px">載入中...</p>';
@@ -820,6 +829,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else {
                     logModule.addLog('SKILL', `技能「${currentSkill}」已更新並備份`);
                     rollbackBtn.classList.remove('hidden');
+                    isSkillDirty = false;
                     showView();
                     // Refresh read view
                     openDrawer(currentSkill);
@@ -1064,8 +1074,18 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // ── Event wiring ──────────────────────────────────────────────────────
-        drawerClose.onclick = closeDrawer;
-        drawerOverlay.onclick = closeDrawer;
+        function handleDrawerClose() {
+            if (isSkillDirty) {
+                if (!confirm(`系統提示：\n你在「${currentSkill}」的變更尚未儲存。\n確定要放棄變更並關閉視窗嗎？`)) {
+                    return;
+                }
+            }
+            isSkillDirty = false;
+            closeDrawer();
+        }
+
+        drawerClose.onclick = handleDrawerClose;
+        drawerOverlay.onclick = handleDrawerClose;
         drawerViewBtn.onclick = showView;
         drawerEditBtn.onclick = showEdit;
         saveBtn.onclick = saveSkill;
@@ -1156,11 +1176,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const countFields = [
             { id: 'editSkillDisplayName', max: 128 },
             { id: 'editSkillDescription', max: 500 },
-            { id: 'editSkillCategory', max: 64 },
-            { id: 'editSkillVersion', max: 32 },
-            { id: 'editSkillContext', max: 500000 },
-            { id: 'editSkillReasoning', max: 500000 },
-            { id: 'editSkillInstructions', max: 500000 }
+            { id: 'editSkillPrompt', max: 1500000 }
         ];
 
         function updateCharCount(id, max) {
@@ -1175,6 +1191,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const el = document.getElementById(f.id);
             if (el) {
                 el.addEventListener('input', () => {
+                    isSkillDirty = true;
                     updateCharCount(f.id, f.max);
                     if (el.classList.contains('textarea')) {
                         el.style.height = 'auto'; // Reset height
@@ -1183,6 +1200,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
         });
+
+        if (skillEditor) {
+            skillEditor.addEventListener('input', () => {
+                isSkillDirty = true;
+            });
+        }
 
         function refreshAllCharCounts() {
             countFields.forEach(f => {
