@@ -355,6 +355,29 @@
         </div>
     </aside>
 
+    <!-- ===== GLOBAL LOADING MODAL ===== -->
+    <div id="globalLoadingModal" class="modal-overlay hidden" style="z-index: 9999;">
+        <div class="modal-card" style="max-width: 300px; text-align: center; padding: 32px;">
+            <div class="spinner"
+                style="margin: 0 auto 16px auto; width: 36px; height: 36px; border: 3px solid var(--border-light); border-top: 3px solid var(--cis-blue); border-radius: 50%; animation: spin 1s linear infinite;">
+            </div>
+            <h3 id="loadingModalTitle" style="margin: 0 0 8px 0; font-size: 16px; color: var(--text-primary);">處理中...
+            </h3>
+            <p id="loadingModalDesc" style="margin: 0; font-size: 13px; color: var(--text-secondary);">請稍候</p>
+        </div>
+    </div>
+    <style>
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+    </style>
+
     <!-- ===== AUTH MODAL ===== -->
     <div id="authModal" class="modal-overlay hidden">
         <div class="modal-card">

@@ -21,7 +21,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 import yaml
-from fastapi import FastAPI, HTTPException, Query, Request, Body, File, UploadFile, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Query, Request, Body, File, UploadFile, BackgroundTasks, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
@@ -1044,7 +1044,15 @@ def delete_skill(skill_name: str):
         retriever.delete_document(skill_name)
         
         # 3. Delete directory
-        shutil.rmtree(skill_path)
+        def remove_readonly(func, path, _):
+            import os, stat
+            try:
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+            except Exception:
+                pass
+
+        shutil.rmtree(skill_path, onerror=remove_readonly)
         
         # 4. Cleanup Registry and Cache
         uma.registry.skills.pop(skill_name.lower(), None)
@@ -1127,6 +1135,53 @@ def install_skill_deps(skill_name: str):
         "message": "安裝完成，請點擊「重新掃描」刷新技能狀態",
         "results": results
     }
+
+
+@app.post("/skills/{skill_name}/upload", tags=["Skill Management"])
+async def upload_skill_file(skill_name: str, file: UploadFile = File(...), file_type: str = Form(...)):
+    """
+    Upload a script or asset file directly into a skill's directory.
+    file_type must be either 'script' (saved to scripts/) or 'asset' (saved to assets/).
+    """
+    uma = get_uma()
+    skill = uma.registry.get_skill(skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    if file_type not in ["script", "asset"]:
+        raise HTTPException(status_code=400, detail="file_type must be 'script' or 'asset'")
+        
+    skills_home = uma.registry.skills_home.resolve()
+    skill_path = skill["path"].resolve()
+    
+    # Path safety
+    try:
+        skill_path.relative_to(skills_home)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path traversal denied")
+
+    # Determine destination dir
+    target_dir = skill_path / ("scripts" if file_type == "script" else "assets")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Sanitize filename
+    safe_name = sanitize_filename(file.filename)
+    dest_path = target_dir / safe_name
+    
+    try:
+        with open(dest_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        logger.info(f"File '{safe_name}' uploaded to {target_dir}")
+        return {
+            "status": "success",
+            "message": f"檔案已成功上傳至技能的 {target_dir.name} 目錄！",
+            "filename": safe_name,
+            "path": str(dest_path.relative_to(skills_home))
+        }
+    except Exception as e:
+        logger.error(f"Failed to upload {safe_name} to skill {skill_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/skills/rescan", tags=["Skill Management"])

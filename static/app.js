@@ -737,6 +737,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // ── Save SKILL.md ─────────────────────────────────────────────────────
+        // ── Loading Modal Helper ──────────────────────────────────────────────
+        function showLoadingModal(title, desc) {
+            const modal = document.getElementById('globalLoadingModal');
+            const titleEl = document.getElementById('loadingModalTitle');
+            const descEl = document.getElementById('loadingModalDesc');
+            if (modal && titleEl && descEl) {
+                titleEl.textContent = title || '處理中...';
+                descEl.textContent = desc || '請稍候';
+                modal.classList.remove('hidden');
+            }
+        }
+
+        function hideLoadingModal() {
+            const modal = document.getElementById('globalLoadingModal');
+            if (modal) modal.classList.add('hidden');
+        }
+
         async function saveSkill() {
             if (!currentSkill) return;
 
@@ -870,15 +887,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 const confirmed = await window.docModule.awaitDeleteConfirm(displayName, "技能");
                 if (!confirmed) return;
 
+                showLoadingModal('刪除中請稍候...', `正在移除 ${displayName} 及其相關設定`);
                 const res = await fetch(`/skills/${currentSkill}`, { method: 'DELETE' });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.detail || '刪除失敗');
 
                 logModule.addLog('SYS', `已永久刪除技能: ${currentSkill}`);
+                hideLoadingModal();
+                showAlertModal('刪除成功', `「${currentSkill}」已從系統中移除`, 'Success');
                 closeDrawer();
                 await rescan();
             } catch (e) {
-                alert(e.message);
+                hideLoadingModal();
+                showAlertModal('刪除失敗', e.message, 'Error');
             }
         }
 
@@ -1030,12 +1051,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // ── Rescan ────────────────────────────────────────────────────────────
         async function rescan() {
             rescanBtn.textContent = '…';
+            showLoadingModal('重新整理技能列...', '正在同步本機資料夾與索引');
             try {
                 await fetch('/skills/rescan', { method: 'POST' });
                 await loadSkills();
             } catch (e) {
-                logModule.addLog('ERR', '重新掃描失敗', 'error');
+                logModule.addLog('ERR', '重新整理技能失敗', 'error');
             } finally {
+                hideLoadingModal();
                 rescanBtn.textContent = '↺';
             }
         }
@@ -1049,6 +1072,11 @@ document.addEventListener('DOMContentLoaded', () => {
         rollbackBtn.onclick = rollbackSkill;
         rescanBtn.onclick = rescan;
         installBtn.onclick = () => installDeps(installBtn.getAttribute('data-skill'));
+
+        const deleteSkillBtn = document.getElementById('deleteSkillBtn');
+        if (deleteSkillBtn) {
+            deleteSkillBtn.onclick = deleteSkill;
+        }
 
         // Create modal wiring
         createSkillBtn.onclick = openCreateModal;
@@ -1178,11 +1206,42 @@ document.addEventListener('DOMContentLoaded', () => {
         const uploadCustomCodeInput = document.getElementById('uploadCustomCodeInput');
         const uploadReferenceFileInput = document.getElementById('uploadReferenceFileInput');
 
+        async function handleFileUpload(file, type) {
+            if (!currentSkill) {
+                showAlertModal('上傳失敗', '請先選取一個技能。', 'Error');
+                return;
+            }
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('file_type', type);
+
+            logModule.addLog('SYS', `開始上傳檔案：${file.name}...`);
+            try {
+                const res = await fetch(`/skills/${currentSkill}/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(data.detail || '上傳失敗');
+                }
+
+                showAlertModal('上傳成功', data.message, `路徑：${data.path}`);
+                logModule.addLog('SYS', `檔案 ${file.name} 已上傳（${type}）`);
+            } catch (e) {
+                showAlertModal('上傳失敗', e.message, 'Error');
+                logModule.addLog('ERR', `上傳檔案時發生錯誤：${e.message}`, 'error');
+            }
+        }
+
         if (uploadCustomCodeBtn && uploadCustomCodeInput) {
             uploadCustomCodeBtn.onclick = () => uploadCustomCodeInput.click();
             uploadCustomCodeInput.onchange = (e) => {
                 const file = e.target.files[0];
-                if (file) showAlertModal('檔案已選取', `你選擇了：${file.name}`, '等待實作後端上傳');
+                handleFileUpload(file, 'script');
                 e.target.value = ''; // Reset
             };
         }
@@ -1191,7 +1250,7 @@ document.addEventListener('DOMContentLoaded', () => {
             uploadReferenceFileBtn.onclick = () => uploadReferenceFileInput.click();
             uploadReferenceFileInput.onchange = (e) => {
                 const file = e.target.files[0];
-                if (file) showAlertModal('檔案已選取', `你選擇了：${file.name}`, '等待實作後端上傳');
+                handleFileUpload(file, 'asset');
                 e.target.value = ''; // Reset
             };
         }
