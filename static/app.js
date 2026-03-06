@@ -626,6 +626,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     rollbackBtn.classList.add('hidden');
                 }
 
+                // Load associated files for Knowledge, Scripts, Assets
+                await loadSkillFiles(skillName);
+
                 // Optimized Metadata and Body Loading Flow
                 const parts = data.raw_content.split('---');
                 if (parts.length >= 3) {
@@ -638,39 +641,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     document.getElementById('editSkillDisplayName').value = meta.display_name || meta.name || '';
                     document.getElementById('editSkillDescription').value = meta.description || '';
-                    document.getElementById('editSkillCategory').value = meta.category || '';
-                    document.getElementById('editSkillVersion').value = meta.version || '1.0.0';
 
                     // No-Script Badge
                     const isNoScript = meta.runtime_requirements && meta.runtime_requirements.length === 0;
                     if (isNoScript) drawerBadge.innerHTML += ' <span style="font-size:10px; opacity:0.7;">(純 LLM)</span>';
-                    // Regex patterns to capture Markdown sections
-                    const reasoningMatch = body.match(/## 思維邏輯\s*\(Reasoning Flow\)([\s\S]*?)(?=##|$)/i);
-                    const instructionsMatch = body.match(/## 操作指南\s*\(Instructions\)([\s\S]*?)(?=##|$)/i);
 
-                    // Extract Context (everything before the first ## header)
-                    const contextMatch = body.match(/^([\s\S]*?)(?=##)/);
-
-                    document.getElementById('editSkillContext').value = contextMatch ? contextMatch[1].trim() : "";
-                    document.getElementById('editSkillReasoning').value = reasoningMatch ? reasoningMatch[1].trim() : "";
-                    document.getElementById('editSkillInstructions').value = instructionsMatch ? instructionsMatch[1].trim() : "";
-
-                    // Parse and store metadata (Deprecated manual YAML parsing)
-                    // Robustness Check: If headings are missing, fallback to Raw Mode
-                    if (!reasoningMatch || !instructionsMatch) {
-                        switchToRawMode(true);
-                    } else {
-                        switchToStructuredMode();
-                        document.getElementById('editSkillContext').value = contextMatch ? contextMatch[1].trim() : "";
-                        document.getElementById('editSkillReasoning').value = reasoningMatch ? reasoningMatch[1].trim() : "";
-                        document.getElementById('editSkillInstructions').value = instructionsMatch ? instructionsMatch[1].trim() : "";
-                    }
+                    // Directly put the whole body into the new prompt textarea for editing
+                    document.getElementById('editSkillPrompt').value = body;
+                    switchToStructuredMode();
                 } else {
                     // Fallback
                     skillEditor.value = data.raw_content;
-                    document.getElementById('editSkillContext').value = "";
-                    document.getElementById('editSkillReasoning').value = "";
-                    document.getElementById('editSkillInstructions').value = "";
+                    document.getElementById('editSkillPrompt').value = "";
                     currentSkillMetadata = {};
                 }
 
@@ -757,13 +739,30 @@ document.addEventListener('DOMContentLoaded', () => {
         async function saveSkill() {
             if (!currentSkill) return;
 
+            // Fetch actual file lists dynamically to store as dependencies
+            let dependencies = {};
+            try {
+                const res = await fetch(`/skills/${currentSkill}/files`);
+                if (res.ok) {
+                    const data = await res.json();
+                    dependencies = {
+                        references: data.references || [],
+                        scripts: data.scripts || [],
+                        assets: data.assets || []
+                    };
+                }
+            } catch (e) {
+                console.warn("Failed to fetch dependencies during save", e);
+            }
+
             // 1. Update stored metadata with UI values
             const updatedMeta = { ...currentSkillMetadata };
             updatedMeta.name = currentSkill; // Ensure name stays correct
             updatedMeta.display_name = document.getElementById('editSkillDisplayName').value.trim();
             updatedMeta.description = document.getElementById('editSkillDescription').value.trim();
-            updatedMeta.category = document.getElementById('editSkillCategory').value.trim();
-            updatedMeta.version = document.getElementById('editSkillVersion').value.trim();
+
+            // Add or replace dependencies
+            updatedMeta.dependencies = dependencies;
 
             // 2. Reassemble YAML with proper escaping
             let yamlBlock = "---\n";
@@ -776,6 +775,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     yamlBlock += `${k}: ${JSON.stringify(v)}\n`;
                 } else if (typeof v === 'boolean') {
                     yamlBlock += `${k}: ${v}\n`;
+                } else if (typeof v === 'object' && v !== null) {
+                    yamlBlock += `${k}:\n`;
+                    for (const [subK, subV] of Object.entries(v)) {
+                        yamlBlock += `  ${subK}: ${JSON.stringify(subV)}\n`;
+                    }
                 } else {
                     // Use double quotes for all string fields in YAML for safety
                     yamlBlock += `${k}: "${escapeYaml(v)}"\n`;
@@ -792,14 +796,10 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 // Structured reassembly
                 const displayName = document.getElementById('editSkillDisplayName').value.trim();
-                const ctx = document.getElementById('editSkillContext').value.trim();
-                const reas = document.getElementById('editSkillReasoning').value.trim();
-                const inst = document.getElementById('editSkillInstructions').value.trim();
+                const prompt = document.getElementById('editSkillPrompt').value.trim();
 
                 bodyContent = `# ${displayName}\n\n`;
-                if (ctx) bodyContent += ctx + "\n\n";
-                bodyContent += `## 思維邏輯 (Reasoning Flow)\n${reas}\n\n`;
-                bodyContent += `## 操作指南 (Instructions)\n${inst}`;
+                if (prompt) bodyContent += prompt;
             }
 
             const content = yamlBlock + bodyContent.trim();
@@ -1201,8 +1201,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Upload Buttons Event Wireup
+        const uploadKnowledgeBtn = document.getElementById('uploadKnowledgeBtn');
         const uploadCustomCodeBtn = document.getElementById('uploadCustomCodeBtn');
         const uploadReferenceFileBtn = document.getElementById('uploadReferenceFileBtn');
+        const uploadKnowledgeInput = document.getElementById('uploadKnowledgeInput');
         const uploadCustomCodeInput = document.getElementById('uploadCustomCodeInput');
         const uploadReferenceFileInput = document.getElementById('uploadReferenceFileInput');
 
@@ -1218,6 +1220,7 @@ document.addEventListener('DOMContentLoaded', () => {
             formData.append('file_type', type);
 
             logModule.addLog('SYS', `開始上傳檔案：${file.name}...`);
+            showLoadingModal('上傳中...', '請稍候');
             try {
                 const res = await fetch(`/skills/${currentSkill}/upload`, {
                     method: 'POST',
@@ -1229,12 +1232,26 @@ document.addEventListener('DOMContentLoaded', () => {
                     throw new Error(data.detail || '上傳失敗');
                 }
 
+                hideLoadingModal();
                 showAlertModal('上傳成功', data.message, `路徑：${data.path}`);
                 logModule.addLog('SYS', `檔案 ${file.name} 已上傳（${type}）`);
+
+                // Refresh file lists
+                await loadSkillFiles(currentSkill);
             } catch (e) {
+                hideLoadingModal();
                 showAlertModal('上傳失敗', e.message, 'Error');
                 logModule.addLog('ERR', `上傳檔案時發生錯誤：${e.message}`, 'error');
             }
+        }
+
+        if (uploadKnowledgeBtn && uploadKnowledgeInput) {
+            uploadKnowledgeBtn.onclick = () => uploadKnowledgeInput.click();
+            uploadKnowledgeInput.onchange = (e) => {
+                const file = e.target.files[0];
+                handleFileUpload(file, 'knowledge');
+                e.target.value = ''; // Reset
+            };
         }
 
         if (uploadCustomCodeBtn && uploadCustomCodeInput) {
@@ -1254,6 +1271,68 @@ document.addEventListener('DOMContentLoaded', () => {
                 e.target.value = ''; // Reset
             };
         }
+
+        // --- File List Rendering ---
+        async function loadSkillFiles(skillName) {
+            if (!skillName) return;
+            try {
+                const res = await fetch(`/skills/${skillName}/files`);
+                if (!res.ok) return; // Silent fail if not supported yet
+                const data = await res.json();
+
+                renderFileList('knowledgeList', 'references', data.references || []);
+                renderFileList('scriptsList', 'scripts', data.scripts || []);
+                renderFileList('assetsList', 'assets', data.assets || []);
+            } catch (e) {
+                console.error("Failed to load skill files", e);
+            }
+        }
+
+        function renderFileList(containerId, folderName, files) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            if (!files || files.length === 0) {
+                container.innerHTML = '<div style="color:var(--text-muted); font-size:12px; font-style:italic; padding:4px 0;">(無檔案)</div>';
+                return;
+            }
+
+            container.innerHTML = files.map(f => `
+                <div class="file-capsule" title="${f}">
+                    <span class="file-icon">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+                    </span>
+                    <span class="file-name">${f}</span>
+                    <button class="file-delete-btn" title="刪除檔案" onclick="event.stopPropagation(); window.skillModule.deleteSkillFile('${folderName}', '${f}');">✕</button>
+                </div>
+            `).join('');
+        }
+
+        // Must be exposed globally so inline onclick can access it
+        window.skillModule = window.skillModule || {};
+        window.skillModule.deleteSkillFile = async function (folder, filename) {
+            if (!currentSkill) return;
+            if (!confirm(`確定要刪除檔案 ${filename} 嗎？此操作無法復原。`)) return;
+
+            showLoadingModal('刪除中...', '正在移除實體檔案');
+            try {
+                const res = await fetch(`/skills/${currentSkill}/files/${folder}/${filename}`, {
+                    method: 'DELETE'
+                });
+                const data = await res.json();
+
+                hideLoadingModal();
+                if (!res.ok) throw new Error(data.detail || '刪除失敗');
+
+                logModule.addLog('SYS', `檔案 ${filename} 已成功刪除`);
+                // reload files
+                await loadSkillFiles(currentSkill);
+            } catch (e) {
+                hideLoadingModal();
+                showAlertModal('刪除失敗', e.message, 'Error');
+                logModule.addLog('ERR', `刪除檔案失敗: ${e.message}`, 'error');
+            }
+        };
 
         return { loadSkills };
     })();

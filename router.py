@@ -1140,16 +1140,17 @@ def install_skill_deps(skill_name: str):
 @app.post("/skills/{skill_name}/upload", tags=["Skill Management"])
 async def upload_skill_file(skill_name: str, file: UploadFile = File(...), file_type: str = Form(...)):
     """
-    Upload a script or asset file directly into a skill's directory.
-    file_type must be either 'script' (saved to scripts/) or 'asset' (saved to assets/).
+    Upload a script, asset, or knowledge file directly into a skill's directory.
+    file_type must be either 'script' (saved to scripts/), 'asset' (saved to assets/), or 'knowledge' (saved to references/).
     """
     uma = get_uma()
     skill = uma.registry.get_skill(skill_name)
     if not skill:
         raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
 
-    if file_type not in ["script", "asset"]:
-        raise HTTPException(status_code=400, detail="file_type must be 'script' or 'asset'")
+    valid_types = {"script": "scripts", "asset": "assets", "knowledge": "references"}
+    if file_type not in valid_types:
+        raise HTTPException(status_code=400, detail="file_type must be 'script', 'asset', or 'knowledge'")
         
     skills_home = uma.registry.skills_home.resolve()
     skill_path = skill["path"].resolve()
@@ -1161,7 +1162,7 @@ async def upload_skill_file(skill_name: str, file: UploadFile = File(...), file_
         raise HTTPException(status_code=403, detail="Path traversal denied")
 
     # Determine destination dir
-    target_dir = skill_path / ("scripts" if file_type == "script" else "assets")
+    target_dir = skill_path / valid_types[file_type]
     target_dir.mkdir(parents=True, exist_ok=True)
     
     # Sanitize filename
@@ -1183,6 +1184,67 @@ async def upload_skill_file(skill_name: str, file: UploadFile = File(...), file_
         logger.error(f"Failed to upload {safe_name} to skill {skill_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/skills/{skill_name}/files", tags=["Skill Management"])
+async def get_skill_files(skill_name: str):
+    """
+    Return lists of files found in references/, scripts/, and assets/ for a given skill.
+    """
+    uma = get_uma()
+    skill = uma.registry.get_skill(skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    skill_path = Path(skill.get("path"))
+    result = {"references": [], "scripts": [], "assets": []}
+    
+    for folder in result.keys():
+        dir_path = skill_path / folder
+        if dir_path.is_dir():
+            # exclude hidden files/folders
+            files = [f.name for f in dir_path.iterdir() if f.is_file() and not f.name.startswith('.')]
+            result[folder] = sorted(files)
+            
+    return result
+
+
+@app.delete("/skills/{skill_name}/files/{folder}/{filename}", tags=["Skill Management"])
+async def delete_skill_file(skill_name: str, folder: str, filename: str):
+    """
+    Delete a specific file from a skill's directory (references, scripts, or assets).
+    """
+    uma = get_uma()
+    skill = uma.registry.get_skill(skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    valid_folders = ["references", "scripts", "assets"]
+    if folder not in valid_folders:
+        raise HTTPException(status_code=400, detail=f"Invalid folder. Must be one of: {', '.join(valid_folders)}")
+
+    skills_home = uma.registry.skills_home.resolve()
+    skill_path = Path(skill.get("path")).resolve()
+    
+    # Sanitize filename to prevent directory traversal
+    safe_name = sanitize_filename(filename)
+    target_file = skill_path / folder / safe_name
+    
+    # Ensure the target file is actually within the skill's folder directory
+    try:
+        target_file.relative_to(skill_path / folder)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path traversal denied")
+
+    if not target_file.exists() or not target_file.is_file():
+        raise HTTPException(status_code=404, detail=f"File '{safe_name}' not found in '{folder}'")
+
+    try:
+        target_file.unlink()
+        logger.info(f"File '{safe_name}' deleted from {skill_path / folder}")
+        return {"status": "success", "message": f"檔案 {safe_name} 已成功刪除"}
+    except Exception as e:
+        logger.error(f"Failed to delete {safe_name} from skill {skill_name}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/skills/rescan", tags=["Skill Management"])
 def rescan_skills():

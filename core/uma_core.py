@@ -161,10 +161,18 @@ class SkillRegistry:
                 # Here we generate a hash of the directory content as a Version ID
                 metadata["_internal_hash"] = self._generate_dir_hash(skill_dir)
                 
-                # 2. Dependency Validation
-                metadata["_env_ready"], metadata["_missing_deps"] = self._check_dependencies(
+                # 2. Dependency Validation (Python + File dependencies)
+                env_ready, missing_reqs = self._check_dependencies(
                     metadata.get("runtime_requirements", [])
                 )
+                
+                # Check file dependencies defined in 'dependencies' tag
+                file_ready, missing_files = self._check_file_dependencies(
+                    skill_dir, metadata.get("dependencies", {})
+                )
+                
+                metadata["_env_ready"] = env_ready and file_ready
+                metadata["_missing_deps"] = missing_reqs + missing_files
                 
                 # 3. Tag Extraction for dynamic tool selection (multilingual + weighted)
                 from adapters import extract_tags
@@ -202,7 +210,23 @@ class SkillRegistry:
             
             if importlib.util.find_spec(clean_req) is None:
                 missing.append(clean_req)
-        
+        return len(missing) == 0, missing
+
+    def _check_file_dependencies(self, skill_dir: Path, dependencies: Dict[str, List[str]]) -> (bool, List[str]):
+        """
+        Checks if the required files (scripts, assets, references) specified in SKILL.md actually exist.
+        """
+        if not dependencies:
+            return True, []
+            
+        missing = []
+        for folder, files in dependencies.items():
+            if not files: continue
+            for filename in files:
+                file_path = skill_dir / folder / filename
+                if not file_path.exists():
+                    missing.append(f"{folder}/{filename}")
+                    
         return len(missing) == 0, missing
 
     def _generate_dir_hash(self, dir_path: Path) -> str:

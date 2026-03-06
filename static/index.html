@@ -223,7 +223,7 @@
         </div>
 
         <!-- Read-only view -->
-        <div class="drawer-section" id="drawerReadView">
+        <div class="drawer-section hidden" id="drawerReadView">
             <div class="drawer-meta" id="drawerMeta"></div>
             <div class="drawer-skill-body" id="drawerBody"></div>
             <div class="drawer-footer-actions">
@@ -233,14 +233,14 @@
 
         <!-- Edit mode -->
         <div class="drawer-section hidden" id="drawerEditView">
-            <div class="edit-toolbar">
+            <div class="edit-toolbar hidden">
                 <span class="edit-notice">✏️ 編輯技能定義</span>
                 <span class="edit-hint">YAML 將自動產生</span>
             </div>
 
-            <div class="editor-tabs">
+            <div class="editor-tabs hidden">
                 <div class="editor-section-label">結構化內容</div>
-                <button class="raw-toggle-btn" id="rawModeToggle">🌐 切換原始模式 (Markdown)</button>
+                <button class="raw-toggle-btn hidden" id="rawModeToggle">🌐 切換原始模式 (Markdown)</button>
             </div>
 
             <!-- Skill Editor Fields (NotebookLM Style) -->
@@ -269,72 +269,61 @@
 
                 <div class="skill-field-block">
                     <div class="skill-field-header">
-                        <label>分類 <span class="info-icon" title="例如：文書處理">ⓘ</span></label>
+                        <label>角色定義 / 提示詞 <span class="info-icon" title="定義角色的最高指導原則與行為邊界">ⓘ</span></label>
                     </div>
                     <div class="skill-field-box">
-                        <input type="text" id="editSkillCategory" class="skill-field-input" placeholder="例如：文書處理"
-                            maxlength="64">
+                        <textarea id="editSkillPrompt" class="skill-field-input textarea"
+                            placeholder="在此貼上角色的具體行為指示、限制或任何 Markdown 語法..." maxlength="1500000"
+                            style="min-height: 250px;"></textarea>
                     </div>
-                    <div class="skill-field-count" id="count-editSkillCategory">0 / 64</div>
-                </div>
-
-                <div class="skill-field-block">
-                    <div class="skill-field-header">
-                        <label>版本號</label>
-                    </div>
-                    <div class="skill-field-box">
-                        <input type="text" id="editSkillVersion" class="skill-field-input" placeholder="例如：1.0.0"
-                            maxlength="32">
-                    </div>
-                    <div class="skill-field-count" id="count-editSkillVersion">0 / 32</div>
-                </div>
-
-                <div class="skill-field-block">
-                    <div class="skill-field-header">
-                        <label>背景與提示詞前綴 (Context / Prefix) <span class="info-icon"
-                                title="在此貼上技能背景或一般指示">ⓘ</span></label>
-                    </div>
-                    <div class="skill-field-box">
-                        <textarea id="editSkillContext" class="skill-field-input textarea"
-                            placeholder="在此貼上技能背景或一般指示..." maxlength="500000"></textarea>
-                    </div>
-                    <div class="skill-field-count" id="count-editSkillContext">0 / 500000</div>
-                </div>
-
-                <div class="skill-field-block">
-                    <div class="skill-field-header">
-                        <label>思維邏輯 (Reasoning Flow) <span class="info-icon" title="在此貼上思維步驟或 MD 語法">ⓘ</span></label>
-                    </div>
-                    <div class="skill-field-box">
-                        <textarea id="editSkillReasoning" class="skill-field-input textarea"
-                            placeholder="在此貼上思維步驟或 MD 語法..." maxlength="500000"></textarea>
-                    </div>
-                    <div class="skill-field-count" id="count-editSkillReasoning">0 / 500000</div>
-                </div>
-
-                <div class="skill-field-block">
-                    <div class="skill-field-header">
-                        <label>操作指南 (Instructions) <span class="info-icon" title="在此貼上具體操作指令或 MD 語法">ⓘ</span></label>
-                    </div>
-                    <div class="skill-field-box">
-                        <textarea id="editSkillInstructions" class="skill-field-input textarea"
-                            placeholder="在此貼上具體操作指令或 MD 語法..." maxlength="500000"></textarea>
-                    </div>
-                    <div class="skill-field-count" id="count-editSkillInstructions">0 / 500000</div>
+                    <div class="skill-field-count" id="count-editSkillPrompt">0 / 1500000</div>
                 </div>
             </div>
 
             <!-- Upload Mechanisms -->
             <div class="skill-upload-section">
-                <input type="file" id="uploadCustomCodeInput" class="hidden" accept=".py,.js,.sh,.txt">
-                <button class="action-btn btn-secondary upload-btn" id="uploadCustomCodeBtn">
-                    <span class="icon">💻</span> 上傳客製執行程式
-                </button>
+                <!-- 1. 知識 (References) -->
+                <div class="upload-group">
+                    <div class="upload-group-header">
+                        <span style="font-weight: 600; font-size: 13px; color: var(--text-primary);">知識
+                            (References)</span>
+                        <span class="info-icon" title="作為 LLM 回覆資訊的現有知識參考為前提">ⓘ</span>
+                    </div>
+                    <div id="knowledgeList" class="file-list-container"></div>
+                    <input type="file" id="uploadKnowledgeInput" class="hidden" accept=".pdf,.docx,.txt,.md,.csv">
+                    <button class="upload-action-btn" id="uploadKnowledgeBtn">
+                        <span style="font-size: 16px;">＋</span> 新增知識庫檔案
+                    </button>
+                </div>
 
-                <input type="file" id="uploadReferenceFileInput" class="hidden" accept=".pdf,.docx,.txt,.md,.csv">
-                <button class="action-btn btn-secondary upload-btn" id="uploadReferenceFileBtn">
-                    <span class="icon">📄</span> 上傳參照檔案
-                </button>
+                <!-- 2. 客製指令程式 (Scripts) -->
+                <div class="upload-group">
+                    <div class="upload-group-header">
+                        <span style="font-weight: 600; font-size: 13px; color: var(--text-primary);">客製指定程式
+                            (Scripts)</span>
+                        <span class="info-icon" title="當客製指示中有提到需要執行指定的程式時使用">ⓘ</span>
+                    </div>
+                    <div id="scriptsList" class="file-list-container"></div>
+                    <input type="file" id="uploadCustomCodeInput" class="hidden" accept=".py,.js,.sh,.txt">
+                    <button class="upload-action-btn" id="uploadCustomCodeBtn">
+                        <span style="font-size: 16px;">＋</span> 新增執行腳本
+                    </button>
+                </div>
+
+                <!-- 3. 參照檔案 (Assets) -->
+                <div class="upload-group">
+                    <div class="upload-group-header">
+                        <span style="font-weight: 600; font-size: 13px; color: var(--text-primary);">參照檔案
+                            (Assets)</span>
+                        <span class="info-icon" title="當客製指示有提到需要參照模板做資訊整理或匯出時參考使用">ⓘ</span>
+                    </div>
+                    <div id="assetsList" class="file-list-container"></div>
+                    <input type="file" id="uploadReferenceFileInput" class="hidden"
+                        accept=".pdf,.docx,.txt,.md,.csv,.xlsx">
+                    <button class="upload-action-btn" id="uploadReferenceFileBtn">
+                        <span style="font-size: 16px;">＋</span> 新增參照模板
+                    </button>
+                </div>
             </div>
 
 

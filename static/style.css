@@ -1972,7 +1972,7 @@ textarea::placeholder {
 .editor-notebook-style {
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 12px;
     padding: 16px;
 }
 
@@ -1982,7 +1982,7 @@ textarea::placeholder {
 }
 
 .skill-field-header {
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 
 .skill-field-header label {
@@ -2061,6 +2061,100 @@ textarea::placeholder {
     justify-content: center;
     gap: 8px;
     font-weight: 600;
+}
+
+.upload-group {
+    background: var(--surface-panel);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 12px;
+    flex: 1;
+    min-width: 200px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.upload-group-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 4px;
+}
+
+.file-list-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* 膠囊檔案樣式 (Gemini UI 風格) */
+.file-capsule {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background-color: var(--surface-bg);
+    /* 淺灰色膠囊背景 */
+    color: var(--text-primary);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    border: 1px solid var(--border-strong);
+    max-width: fit-content;
+    font-weight: 500;
+}
+
+.file-capsule .file-icon {
+    font-size: 14px;
+    color: var(--text-secondary);
+    /* 柔和圖示色彩 */
+}
+
+.file-capsule .file-name {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.file-capsule .file-delete-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0;
+    margin-left: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s;
+}
+
+.file-capsule .file-delete-btn:hover {
+    color: var(--red);
+}
+
+.upload-action-btn {
+    background: transparent;
+    border: 1px dashed var(--border-strong);
+    color: var(--text-primary);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: 600;
+    text-align: left;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.upload-action-btn:hover {
+    background: var(--surface-bg);
+    border-color: var(--cis-blue);
+    color: var(--cis-blue);
 }
 
 .editor-tabs {
