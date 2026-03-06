@@ -674,6 +674,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     currentSkillMetadata = {};
                 }
 
+                // Refresh character counts after loading
+                refreshAllCharCounts();
+
             } catch (e) {
                 drawerMeta.innerHTML = `<p style="color:var(--red)">載入失敗：${e.message}</p>`;
             }
@@ -1120,6 +1123,78 @@ document.addEventListener('DOMContentLoaded', () => {
                 switchToRawMode();
             }
         };
+
+        // ── Character Count & Textarea Auto Resize ─────────────────────────
+        const countFields = [
+            { id: 'editSkillDisplayName', max: 128 },
+            { id: 'editSkillDescription', max: 500 },
+            { id: 'editSkillCategory', max: 64 },
+            { id: 'editSkillVersion', max: 32 },
+            { id: 'editSkillContext', max: 500000 },
+            { id: 'editSkillReasoning', max: 500000 },
+            { id: 'editSkillInstructions', max: 500000 }
+        ];
+
+        function updateCharCount(id, max) {
+            const el = document.getElementById(id);
+            const countEl = document.getElementById('count-' + id);
+            if (el && countEl) {
+                countEl.textContent = `${el.value.length} / ${max}`;
+            }
+        }
+
+        countFields.forEach(f => {
+            const el = document.getElementById(f.id);
+            if (el) {
+                el.addEventListener('input', () => {
+                    updateCharCount(f.id, f.max);
+                    if (el.classList.contains('textarea')) {
+                        el.style.height = 'auto'; // Reset height
+                        el.style.height = (el.scrollHeight) + 'px';
+                    }
+                });
+            }
+        });
+
+        function refreshAllCharCounts() {
+            countFields.forEach(f => {
+                updateCharCount(f.id, f.max);
+                const el = document.getElementById(f.id);
+                // Also trigger height readjustment
+                if (el && el.classList.contains('textarea')) {
+                    el.style.height = 'auto';
+                    if (el.value) {
+                        el.style.height = (el.scrollHeight) + 'px';
+                    } else {
+                        el.style.height = '80px'; // default min-height
+                    }
+                }
+            });
+        }
+
+        // Upload Buttons Event Wireup
+        const uploadCustomCodeBtn = document.getElementById('uploadCustomCodeBtn');
+        const uploadReferenceFileBtn = document.getElementById('uploadReferenceFileBtn');
+        const uploadCustomCodeInput = document.getElementById('uploadCustomCodeInput');
+        const uploadReferenceFileInput = document.getElementById('uploadReferenceFileInput');
+
+        if (uploadCustomCodeBtn && uploadCustomCodeInput) {
+            uploadCustomCodeBtn.onclick = () => uploadCustomCodeInput.click();
+            uploadCustomCodeInput.onchange = (e) => {
+                const file = e.target.files[0];
+                if (file) showAlertModal('檔案已選取', `你選擇了：${file.name}`, '等待實作後端上傳');
+                e.target.value = ''; // Reset
+            };
+        }
+
+        if (uploadReferenceFileBtn && uploadReferenceFileInput) {
+            uploadReferenceFileBtn.onclick = () => uploadReferenceFileInput.click();
+            uploadReferenceFileInput.onchange = (e) => {
+                const file = e.target.files[0];
+                if (file) showAlertModal('檔案已選取', `你選擇了：${file.name}`, '等待實作後端上傳');
+                e.target.value = ''; // Reset
+            };
+        }
 
         return { loadSkills };
     })();

@@ -238,50 +238,105 @@
                 <span class="edit-hint">YAML 將自動產生</span>
             </div>
 
-            <!-- Metadata Fields (Structured) -->
-            <div class="editor-metadata-grid">
-                <div class="form-group" style="grid-column: span 2;">
-                    <label>顯示名稱</label>
-                    <input type="text" id="editSkillDisplayName" class="form-input" placeholder="例如：郵件分析專家">
-                </div>
-                <div class="form-group" style="grid-column: span 2;">
-                    <label>簡短描述</label>
-                    <textarea id="editSkillDescription" class="form-input" style="height:60px; resize:vertical;"
-                        placeholder="一句話描述這個技能的功能"></textarea>
-                </div>
-                <div class="form-group">
-                    <label>分類</label>
-                    <input type="text" id="editSkillCategory" class="form-input" placeholder="例如：文書處理">
-                </div>
-                <div class="form-group">
-                    <label>版本號</label>
-                    <input type="text" id="editSkillVersion" class="form-input" placeholder="例如：1.0.0">
-                </div>
-            </div>
-
             <div class="editor-tabs">
                 <div class="editor-section-label">結構化內容</div>
                 <button class="raw-toggle-btn" id="rawModeToggle">🌐 切換原始模式 (Markdown)</button>
             </div>
 
-            <!-- Granular Content Fields (Structured Mode) -->
-            <div id="structuredEditor">
-                <div class="form-group content-group">
-                    <label>背景與提示詞前綴 (Context / Prefix)</label>
-                    <textarea id="editSkillContext" class="form-input content-textarea"
-                        placeholder="在此貼上技能背景或一般指示..."></textarea>
+            <!-- Skill Editor Fields (NotebookLM Style) -->
+            <div id="structuredEditor" class="editor-notebook-style">
+                <div class="skill-field-block">
+                    <div class="skill-field-header">
+                        <label>顯示名稱</label>
+                    </div>
+                    <div class="skill-field-box">
+                        <input type="text" id="editSkillDisplayName" class="skill-field-input" placeholder="例如：郵件分析專家"
+                            maxlength="128">
+                    </div>
+                    <div class="skill-field-count" id="count-editSkillDisplayName">0 / 128</div>
                 </div>
-                <div class="form-group content-group">
-                    <label>思維邏輯 (Reasoning Flow)</label>
-                    <textarea id="editSkillReasoning" class="form-input content-textarea"
-                        placeholder="在此貼上思維步驟或 MD 語法..."></textarea>
+
+                <div class="skill-field-block">
+                    <div class="skill-field-header">
+                        <label>簡短描述 <span class="info-icon" title="一句話描述這個技能的功能">ⓘ</span></label>
+                    </div>
+                    <div class="skill-field-box">
+                        <textarea id="editSkillDescription" class="skill-field-input textarea"
+                            placeholder="一句話描述這個技能的功能" maxlength="500"></textarea>
+                    </div>
+                    <div class="skill-field-count" id="count-editSkillDescription">0 / 500</div>
                 </div>
-                <div class="form-group content-group">
-                    <label>操作指南 (Instructions)</label>
-                    <textarea id="editSkillInstructions" class="form-input content-textarea"
-                        placeholder="在此貼上具體操作指令或 MD 語法..."></textarea>
+
+                <div class="skill-field-block">
+                    <div class="skill-field-header">
+                        <label>分類 <span class="info-icon" title="例如：文書處理">ⓘ</span></label>
+                    </div>
+                    <div class="skill-field-box">
+                        <input type="text" id="editSkillCategory" class="skill-field-input" placeholder="例如：文書處理"
+                            maxlength="64">
+                    </div>
+                    <div class="skill-field-count" id="count-editSkillCategory">0 / 64</div>
+                </div>
+
+                <div class="skill-field-block">
+                    <div class="skill-field-header">
+                        <label>版本號</label>
+                    </div>
+                    <div class="skill-field-box">
+                        <input type="text" id="editSkillVersion" class="skill-field-input" placeholder="例如：1.0.0"
+                            maxlength="32">
+                    </div>
+                    <div class="skill-field-count" id="count-editSkillVersion">0 / 32</div>
+                </div>
+
+                <div class="skill-field-block">
+                    <div class="skill-field-header">
+                        <label>背景與提示詞前綴 (Context / Prefix) <span class="info-icon"
+                                title="在此貼上技能背景或一般指示">ⓘ</span></label>
+                    </div>
+                    <div class="skill-field-box">
+                        <textarea id="editSkillContext" class="skill-field-input textarea"
+                            placeholder="在此貼上技能背景或一般指示..." maxlength="500000"></textarea>
+                    </div>
+                    <div class="skill-field-count" id="count-editSkillContext">0 / 500000</div>
+                </div>
+
+                <div class="skill-field-block">
+                    <div class="skill-field-header">
+                        <label>思維邏輯 (Reasoning Flow) <span class="info-icon" title="在此貼上思維步驟或 MD 語法">ⓘ</span></label>
+                    </div>
+                    <div class="skill-field-box">
+                        <textarea id="editSkillReasoning" class="skill-field-input textarea"
+                            placeholder="在此貼上思維步驟或 MD 語法..." maxlength="500000"></textarea>
+                    </div>
+                    <div class="skill-field-count" id="count-editSkillReasoning">0 / 500000</div>
+                </div>
+
+                <div class="skill-field-block">
+                    <div class="skill-field-header">
+                        <label>操作指南 (Instructions) <span class="info-icon" title="在此貼上具體操作指令或 MD 語法">ⓘ</span></label>
+                    </div>
+                    <div class="skill-field-box">
+                        <textarea id="editSkillInstructions" class="skill-field-input textarea"
+                            placeholder="在此貼上具體操作指令或 MD 語法..." maxlength="500000"></textarea>
+                    </div>
+                    <div class="skill-field-count" id="count-editSkillInstructions">0 / 500000</div>
                 </div>
             </div>
+
+            <!-- Upload Mechanisms -->
+            <div class="skill-upload-section">
+                <input type="file" id="uploadCustomCodeInput" class="hidden" accept=".py,.js,.sh,.txt">
+                <button class="action-btn btn-secondary upload-btn" id="uploadCustomCodeBtn">
+                    <span class="icon">💻</span> 上傳客製執行程式
+                </button>
+
+                <input type="file" id="uploadReferenceFileInput" class="hidden" accept=".pdf,.docx,.txt,.md,.csv">
+                <button class="action-btn btn-secondary upload-btn" id="uploadReferenceFileBtn">
+                    <span class="icon">📄</span> 上傳參照檔案
+                </button>
+            </div>
+
 
             <!-- Raw Content Editor (Raw Mode - Hidden by default) -->
             <div id="rawEditorContainer" class="hidden">
