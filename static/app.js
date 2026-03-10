@@ -603,10 +603,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // ── Drawer ────────────────────────────────────────────────────────────
         async function openDrawer(skillName) {
+            if (!drawer.classList.contains('hidden') && skillName === currentSkill) {
+                return; // 已經開啟此技能，點擊相同項目不處置
+            }
+
             if (!drawer.classList.contains('hidden') && isSkillDirty) {
-                if (!confirm(`系統提示：\n你在「${currentSkill}」的變更尚未儲存。\n確定要放棄變更並切換到「${skillName}」嗎？`)) {
-                    return;
-                }
+                const confirmed = await window.docModule.awaitGeneralConfirm({
+                    title: "系統提示",
+                    subtitle: "未儲存變更",
+                    message: `你在「${currentSkill}」的變更尚未儲存。\n確定要放棄變更並切換到「${skillName}」嗎？`,
+                    confirmText: "確定放棄",
+                    cancelText: "取消",
+                    confirmBg: "var(--cis-orange)"
+                });
+                if (!confirmed) return;
             }
             isSkillDirty = false;
 
@@ -1074,11 +1084,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // ── Event wiring ──────────────────────────────────────────────────────
-        function handleDrawerClose() {
+        async function handleDrawerClose() {
             if (isSkillDirty) {
-                if (!confirm(`系統提示：\n你在「${currentSkill}」的變更尚未儲存。\n確定要放棄變更並關閉視窗嗎？`)) {
-                    return;
-                }
+                const confirmed = await window.docModule.awaitGeneralConfirm({
+                    title: "系統提示",
+                    subtitle: "未儲存變更",
+                    message: `你在「${currentSkill}」的變更尚未儲存。\n確定要放棄變更並關閉視窗嗎？`,
+                    confirmText: "確定放棄",
+                    cancelText: "取消",
+                    confirmBg: "var(--cis-orange)"
+                });
+                if (!confirmed) return;
             }
             isSkillDirty = false;
             closeDrawer();
