@@ -32,6 +32,21 @@ class SchemaConverter:
             return [self._strict_json_schema(item) for item in params]
         return params
 
+    def _gemini_json_schema(self, params: Any) -> Any:
+        """Gemini requires uppercase types: string -> STRING, object -> OBJECT."""
+        if isinstance(params, dict):
+            new_params = {}
+            for k, v in params.items():
+                if k == "type" and isinstance(v, str):
+                    # Mapping for Gemini expected uppercase types
+                    new_params[k] = v.upper()
+                else:
+                    new_params[k] = self._gemini_json_schema(v)
+            return new_params
+        elif isinstance(params, list):
+            return [self._gemini_json_schema(item) for item in params]
+        return params
+
     def to_openai(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
         Converts metadata to OpenAI Tool format.
@@ -65,14 +80,16 @@ class SchemaConverter:
         """
         desc = self.prune_description(metadata.get("description", ""), self.LIMIT_GEMINI)
         
+        raw_params = metadata.get("parameters", {
+            "type": "object",
+            "properties": {},
+            "required": []
+        })
+
         return {
             "name": metadata.get("name"),
             "description": desc,
-            "parameters": metadata.get("parameters", {
-                "type": "OBJECT",
-                "properties": {},
-                "required": []
-            })
+            "parameters": self._gemini_json_schema(raw_params)
         }
 
 if __name__ == "__main__":

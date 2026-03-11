@@ -129,6 +129,33 @@ def _delta_index_skills(uma, retriever) -> dict:
     return summary
 
 
+@app.get("/api/models", tags=["System"])
+def get_available_models():
+    """Return a list of available models based on .env configuration."""
+    models = []
+    
+    # Check OpenAI
+    if os.getenv("OPENAI_API_KEY"):
+        m = os.getenv("OPENAI_MODEL", "gpt-4o")
+        models.append({"provider": "openai", "model": m, "display_name": f"⚡ OpenAI ({m})"})
+        
+    # Check Gemini
+    if os.getenv("GEMINI_API_KEY"):
+        m = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        models.append({"provider": "gemini", "model": m, "display_name": f"✦ Google Gemini ({m})"})
+        
+    # Check Claude
+    if os.getenv("ANTHROPIC_API_KEY"):
+        m = os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
+        models.append({"provider": "claude", "model": m, "display_name": f"◆ Anthropic Claude ({m})"})
+        
+    # Fallback if no keys are set
+    if not models:
+        models.append({"provider": "openai", "model": "gpt-4o", "display_name": "⚡ OpenAI GPT-4o (No Key Set)"})
+        
+    return {"status": "success", "models": models}
+
+
 @app.on_event("startup")
 async def index_all_skills():
     """Plan A+C: Async startup — server is immediately available.
@@ -291,8 +318,14 @@ def _make_llm_callable():
     adapter = OpenAIAdapter(uma)
     if adapter.is_available:
         def caller(prompt: str) -> str:
-            r = adapter.simple_chat([{"role": "user", "content": prompt}])
-            return r.get("content", "") if r.get("status") == "success" else ""
+            # Since adapters now return generators, we need to consume it to get the final result
+            gen = adapter.simple_chat([{"role": "user", "content": prompt}])
+            final_text = ""
+            for chunk in gen:
+                if chunk.get("status") == "success":
+                    final_text = chunk.get("content", "")
+                    break
+            return final_text
         return caller
     return None  # Fallback: session.py will write turn-count placeholder
 
@@ -302,10 +335,13 @@ def _make_llm_callable():
 class ChatRequest(BaseModel):
     user_input: str
     session_id: Optional[str] = "default"
-    model: Optional[str] = "openai"
-    injected_skill: Optional[str] = None  # For "Attach Skill" feature
-    execute: Optional[bool] = False       # Switch to agent mode for executing skills
-    attached_file: Optional[str] = None   # Absolute path of uploaded workspace file
+    model: Optional[str] = "openai"           # Example: "openai", "gemini", or "gpt-4o", "ollama/llama3"
+    provider: Optional[str] = None            # Example: "openai", "gemini", "claude", or self-hosted
+    api_base: Optional[str] = None            # For custom endpoints (e.g. Ollama, vLLM, Groq)
+    api_key: Optional[str] = None             # For custom API keys
+    injected_skill: Optional[str] = None      # For "Attach Skill" feature
+    execute: Optional[bool] = False           # Switch to agent mode for executing skills
+    attached_file: Optional[str] = None       # Absolute path of uploaded workspace file
     selected_docs: Optional[List[str]] = None # List of filenames user selected in UI
 
 
@@ -357,7 +393,40 @@ def health_check():
     }
 
 
-# ─── UBER FILE UPLOAD MGR ─────────────────────────────────────────────────────
+# ─── API Routes ───────────────────────────────────────────────────────────────
+
+@app.get("/api/models", tags=["System"])
+def get_available_models():
+    """
+    動態回傳可用模型清單，讓前端動態渲染下拉選單。
+    如果 .env 裡面有特別設定，也可以動態讀取。
+    """
+    models = []
+    
+    # 1. Check OpenAI API Key or Custom Endpoint
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    openai_base = os.getenv("OPENAI_BASE_URL", "").strip()
+    # If key exists OR a custom base url is provided, enable OpenAI architecture models
+    if openai_key or openai_base:
+        default_model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        models.append({"provider": "openai", "model": default_model, "label": f"OpenAI ({default_model})"})
+        if openai_base:
+             # Just an example to show it's a custom endpoint, frontend can see the custom url if needed
+             models.append({"provider": "openai", "model": default_model, "label": f"Custom API ({default_model})", "isCustom": True})
+
+    # 2. Check Gemini
+    if os.getenv("GEMINI_API_KEY", "").strip():
+        models.append({"provider": "gemini", "model": "gemini-1.5-pro", "label": "Google Gemini 1.5 Pro"})
+        models.append({"provider": "gemini", "model": "gemini-1.5-flash", "label": "Google Gemini 1.5 Flash"})
+
+    # 3. Check Claude
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        models.append({"provider": "claude", "model": "claude-3-5-sonnet-20240620", "label": "Anthropic Claude 3.5"})
+        
+    return {"status": "success", "models": models}
+
+
+# ─── Health ───────────────────────────────────────────────────────────────────
 
 @app.post("/api/documents/upload", tags=["Documents"])
 async def upload_document(file: UploadFile = File(...), background_tasks: BackgroundTasks = BackgroundTasks()):
@@ -840,12 +909,34 @@ async def chat(req: ChatRequest):
 
     # 5. Select adapter and call appropriate mode (chat vs simple_chat)
     try:
-        if req.model == "openai":
-            adapter = OpenAIAdapter(uma)
-        elif req.model == "gemini":
-            adapter = GeminiAdapter(uma)
-        else:
+        # Resolve provider from model string if not explicit
+        provider = req.provider
+        model_name = req.model
+
+        if not provider:
+            if model_name.startswith("gemini"):
+                provider = "gemini"
+            elif model_name.startswith("claude"):
+                provider = "claude"
+            else:
+                provider = "openai" # Default to OpenAI architecture (which supports ollama, vllm, Custom URLs, Groq etc)
+
+        # Dynamic Provider Dispatch
+        if provider == "gemini":
+            from adapters.gemini_adapter import GeminiAdapter
+            adapter = GeminiAdapter(uma=uma, model=model_name)
+        elif provider == "claude":
+            from adapters.claude_adapter import ClaudeAdapter
+            # TODO: ClaudeAdapter model propagation if needed
             adapter = ClaudeAdapter(uma)
+        else:
+            # Universal OpenAI-compatible dispatch
+            adapter = OpenAIAdapter(
+                uma=uma, 
+                model=model_name, 
+                api_base=req.api_base, 
+                api_key=req.api_key
+            )
 
         if not adapter.is_available:
             return JSONResponse(status_code=503, content={
@@ -855,34 +946,73 @@ async def chat(req: ChatRequest):
 
         kwargs = {
             "session_id": req.session_id,
-            "attached_file": req.attached_file
+            "attached_file": req.attached_file,
+            "injected_skill": req.injected_skill
         }
 
-        if req.execute:
-            # Agent Mode -> full chat with tool calling
-            # D-12: Unified interface — all adapters receive agent_history + user_query
-            agent_history = [m for m in history_to_pass if m.get("role") != "system"]
-            result = adapter.chat(messages=agent_history, user_query=user_content, **kwargs)
-        else:
-            # Pure Chat Mode -> no tools
-            result = adapter.simple_chat(history_to_pass, **kwargs)
+        # Phase 3: Unify execution. Always use .chat if a skill is involved or as default intelligent mode.
+        # We filter out system messages from history to let the adapter handle system prompt building.
+        agent_history = [m for m in history_to_pass if m.get("role") != "system"]
+        
+        # Always use adapter.chat for auto tool-calling capabilities. 
+        # The adapter will decide based on the model's capabilities whether to use tools.
+        result_gen = adapter.chat(messages=agent_history, user_query=user_content, **kwargs)
 
     except Exception as e:
-        logger.error(f"Chat error: {e}")
+        logger.error(f"Chat setup error: {e}")
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
-    # 6. Append assistant reply to history Manager
-    if result.get("status") == "success":
-        # D-07: Unified SessionManager handles appending and compressing memory
+    from sse_starlette.sse import EventSourceResponse
+    import json
+    import asyncio
+
+    async def event_generator():
+        # Append user message immediately
         _session_mgr.append_message(req.session_id, "user", req.user_input)
-        _session_mgr.append_message(req.session_id, "assistant", result["content"])
+        
+        final_content = ""
+        accumulated_content = ""
+        
+        try:
+            for chunk in result_gen:
+                if chunk.get("status") == "success":
+                    final_content = chunk.get("content", "")
+                    yield dict(data=json.dumps(chunk, ensure_ascii=False))
+                    break
+                elif chunk.get("status") == "requires_approval":
+                    yield dict(data=json.dumps(chunk, ensure_ascii=False))
+                    break
+                elif chunk.get("status") == "streaming" and chunk.get("content"):
+                    text = chunk["content"]
+                    accumulated_content += text
+                    # 若為單純文字的 Streaming，則在後端強制打散為逐字渲染，製造穩定順暢的打字機體驗
+                    for char in text:
+                        char_chunk = {"status": "streaming", "content": char}
+                        yield dict(data=json.dumps(char_chunk, ensure_ascii=False))
+                        await asyncio.sleep(0.015)  # 調整此數值來控制打字機速度 (0.015s 約為每秒 60 字)
+                else:
+                    yield dict(data=json.dumps(chunk, ensure_ascii=False))
+                    await asyncio.sleep(0.01)
+                
+        except Exception as e:
+            logger.error(f"Stream rendering error: {e}")
+            yield dict(data=json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False))
+            return
+            
+        finally:
+            # 使用 finally 保證不論是正常 yield 完畢還是中途斷線，只要有產出都會寫入記憶
+            content_to_save = final_content if final_content else accumulated_content
+            
+            if content_to_save and not getattr(req, '_memory_saved', False):
+                _session_mgr.append_message(req.session_id, "assistant", content_to_save)
+                req._memory_saved = True
 
-        # Auto-flush every 5 messages using LLM summarization
-        conv_len = len(_session_mgr.get_or_create_conversation(req.session_id))
-        if conv_len > 0 and conv_len % 5 == 0:
-            _session_mgr.flush_with_llm_summary(req.session_id, _make_llm_callable())
+                # Auto-flush every 5 messages using LLM summarization
+                conv_len = len(_session_mgr.get_or_create_conversation(req.session_id))
+                if conv_len > 0 and conv_len % 5 == 0:
+                    _session_mgr.flush_with_llm_summary(req.session_id, _make_llm_callable())
 
-    return result
+    return EventSourceResponse(event_generator())
 
 
 @app.post("/chat/flush/{session_id}", tags=["Chat"])
@@ -897,6 +1027,14 @@ def clear_session(session_id: str):
     """Clear a conversation session (reset context)."""
     _session_mgr.clear_conversation(session_id)
     return {"status": "success", "message": f"Session '{session_id}' cleared"}
+
+@app.get("/chat/session/{session_id}", tags=["Chat"])
+def get_session_history(session_id: str):
+    """Get the conversation history for a session."""
+    history = _session_mgr.get_or_create_conversation(session_id)
+    # Filter out system prompts to only return user/assistant interaction
+    chat_history = [m for m in history if m.get("role") != "system"]
+    return {"status": "success", "history": chat_history}
 
 
 # ─── SKILL MANAGEMENT ─────────────────────────────────────────────────────────

@@ -170,6 +170,7 @@ class DocumentRetriever:
             if not docs:
                 return ""
 
+            logger.info(f"Retriever: query='{query}', k={top_k}, filter='{filter_type}'")
             context_parts = []
             for doc in docs:
                 filename = doc.metadata.get("filename", "Unknown")
@@ -180,18 +181,26 @@ class DocumentRetriever:
                 if filter_type == "skill" and has_ext:
                     continue
 
+                # Check if workspace file actually exists on disk (Self-healing)
+                if has_ext:
+                    if not (WORKSPACE_DIR / filename).exists():
+                        continue
+                
+                type_label = "File" if has_ext else "Skill"
                 keywords = doc.metadata.get("keywords", "")
                 chunk_idx = doc.metadata.get("chunk_index", 0)
                 
-                context_chunk = f"Document [{filename}#chunk_{chunk_idx}]:\n"
+                context_chunk = f"{type_label} [{filename}#chunk_{chunk_idx}]:\n"
                 if keywords:
                     context_chunk += f"(Keywords: {keywords})\n"
                 context_chunk += f"{doc.page_content}\n"
                 context_parts.append(context_chunk)
+                logger.debug(f"Retriever: Selected [{filename}] (type={type_label})")
 
                 if len(context_parts) >= top_k:
                     break
-
+            
+            logger.info(f"Retriever: Found {len(context_parts)} context parts.")
             return "\n---\n".join(context_parts)
             
         except Exception as e:
@@ -221,6 +230,11 @@ class DocumentRetriever:
                 continue
             if filename not in per_file:
                 continue
+            
+            # Self-healing: skip chunks from files missing on disk
+            if not (WORKSPACE_DIR / filename).exists():
+                continue
+
             per_file[filename].append(doc)
 
         # Phase 1: pick the best chunk from each file (round-robin diversity)
@@ -249,10 +263,17 @@ class DocumentRetriever:
         context_parts = []
         for doc in selected:
             filename = doc.metadata.get("filename", "Unknown")
+            has_ext = bool(Path(filename).suffix)
+            
+            # Self-healing: skip chunks from files missing on disk
+            if has_ext and not (WORKSPACE_DIR / filename).exists():
+                continue
+
+            type_label = "File" if has_ext else "Skill"
             keywords = doc.metadata.get("keywords", "")
             chunk_idx = doc.metadata.get("chunk_index", 0)
 
-            context_chunk = f"Document [{filename}#chunk_{chunk_idx}]:\n"
+            context_chunk = f"{type_label} [{filename}#chunk_{chunk_idx}]:\n"
             if keywords:
                 context_chunk += f"(Keywords: {keywords})\n"
             context_chunk += f"{doc.page_content}\n"

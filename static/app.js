@@ -36,6 +36,32 @@ document.addEventListener('DOMContentLoaded', () => {
         const userInput = document.getElementById('userInput');
         const sendBtn = document.getElementById('sendBtn');
         const modelSelector = document.getElementById('modelSelector');
+        let availableModels = [];
+
+        // Fetch dynamic models
+        async function loadModels() {
+            try {
+                const res = await fetch('/api/models');
+                const data = await res.json();
+                if (data.status === 'success') {
+                    availableModels = data.models;
+                    modelSelector.innerHTML = '';
+                    availableModels.forEach(m => {
+                        const opt = document.createElement('option');
+                        // Store the provider and model together, or just use index
+                        opt.value = JSON.stringify({ provider: m.provider, model: m.model });
+                        opt.textContent = m.display_name;
+                        modelSelector.appendChild(opt);
+                    });
+                }
+            } catch (e) {
+                console.warn('Failed to load dynamic models, using default.');
+            }
+        }
+
+        // Load models on init
+        loadModels();
+
         const welcomeBlock = document.getElementById('welcomeBlock');
         const clearChatBtn = document.getElementById('clearChatBtn');
         const attachSelect = document.getElementById('attachSkillSelect');
@@ -43,8 +69,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const clearAttach = document.getElementById('clearAttach');
 
         // New Sandbox DOM elements
-        const executeSwitchWrapper = document.getElementById('executeSwitchWrapper');
-        const executeSkillSwitch = document.getElementById('executeSkillSwitch');
         const fileChipContainer = document.getElementById('fileChipContainer');
         const attachedFileName = document.getElementById('attachedFileName');
         const uploadProgressBar = document.getElementById('uploadProgressBar');
@@ -128,12 +152,30 @@ document.addEventListener('DOMContentLoaded', () => {
             localStorage.setItem(SESSION_KEY, sessionId);
         }
 
-        function appendMessage(role, text) {
+        // Fetch and rendering history on load
+        async function loadHistory() {
+            try {
+                const res = await fetch(`/chat/session/${sessionId}`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.status === 'success' && data.history && data.history.length > 0) {
+                    if (welcomeBlock) welcomeBlock.style.display = 'none';
+                    data.history.forEach(msg => {
+                        appendMessage(msg.role, msg.content, true); // true as skip scrolling
+                    });
+                    setTimeout(() => { chatViewport.scrollTop = chatViewport.scrollHeight; }, 100);
+                }
+            } catch (e) {
+                console.warn('Failed to load chat history:', e);
+            }
+        }
+
+        function appendMessage(role, text, skipScroll = false) {
             if (welcomeBlock) welcomeBlock.style.display = 'none';
             const div = document.createElement('div');
             div.className = `message ${role}`;
             if (role === 'assistant') {
-                let html = marked.parse(text);
+                let html = typeof marked !== 'undefined' ? marked.parse(text) : text;
                 html = processWorkspaceLinks(html);
 
                 // Citation rendering: [1] or [FileName#chunk_x]
@@ -148,8 +190,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             msgContainer.appendChild(div);
             // Add a small delay for dom render to scroll accurately
-            setTimeout(() => { chatViewport.scrollTop = chatViewport.scrollHeight; }, 50);
+            if (!skipScroll) {
+                setTimeout(() => { chatViewport.scrollTop = chatViewport.scrollHeight; }, 50);
+            }
         }
+
+        loadHistory();
 
         function appendErrorMsg(text) {
             const div = document.createElement('div');
@@ -185,32 +231,25 @@ document.addEventListener('DOMContentLoaded', () => {
             appendMessage('user', displayMsg);
             logModule.addLog('USER', `發送：${displayMsg}`);
 
-            const model = modelSelector.value;
+            const selectedModelData = modelSelector.value ? JSON.parse(modelSelector.value) : { provider: 'openai', model: 'gpt-4o' };
             const attachedSkill = attachSelect.value || null;
-            const executeMode = executeSkillSwitch.checked;
 
             userInput.disabled = true;
             sendBtn.disabled = true;
-            if (executeMode) {
-                sendBtn.innerHTML = '<span style="font-size:11px; white-space:nowrap;">腳本執行中...</span>';
-                sendBtn.style.width = 'auto';
-                sendBtn.style.padding = '0 12px';
-                sendBtn.style.borderRadius = '16px';
-            }
             showTypingIndicator();
 
             try {
                 const payload = {
                     user_input: text,
                     session_id: sessionId,
-                    model: model,
+                    provider: selectedModelData.provider,
+                    model: selectedModelData.model,
                     injected_skill: attachedSkill,
-                    execute: executeMode,
                     attached_file: attachedFilePath,
                     selected_docs: window.docModule ? window.docModule.getSelectedDocs() : []
                 };
                 console.log('[CHAT] Sending payload:', JSON.stringify(payload, null, 2));
-                logModule.addLog('SYS', `發送模式: execute=${executeMode}, 檔案=${attachedFilePath ? attachedFilePath.split('/').pop() : '無'}`);
+                logModule.addLog('SYS', `發送訊息 (自動工具調用已啟用), 檔案=${attachedFilePath ? attachedFilePath.split('/').pop() : '無'}`);
 
                 const res = await fetch('/chat', {
                     method: 'POST',
@@ -227,23 +266,84 @@ document.addEventListener('DOMContentLoaded', () => {
                 sendBtn.style.borderRadius = '50%';
 
                 if (!res.ok) {
-                    const err = await res.json().catch(() => ({ message: `HTTP ${res.status}` }));
-                    throw new Error(err.message || `HTTP ${res.status}`);
+                    const errText = await res.text();
+                    throw new Error(`HTTP ${res.status}: ${errText}`);
                 }
 
-                const data = await res.json();
-                console.log('[CHAT] Response data:', data);
-                logModule.addLog('SYS', `AI 回覆: status=${data.status}`);
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let done = false;
 
-                if (data.status === 'success') {
-                    appendMessage('assistant', data.content);
-                    logModule.addLog('AI', '回覆完成');
-                    if (attachedSkill) {
-                        logModule.addLog('INFO', `附加技能「${attachedSkill}」的 metadata 已注入本輪對話`);
+                // Create a container for the assistant's message
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'message assistant';
+                msgContainer.appendChild(msgDiv);
+
+                let currentText = "";
+                let buffer = "";
+
+                while (!done) {
+                    const { value, done: readerDone } = await reader.read();
+                    done = readerDone;
+                    if (value) {
+                        buffer += decoder.decode(value, { stream: true });
+                        const parts = buffer.split('\r\n\r\n');
+                        buffer = parts.pop(); // Keep incomplete piece in buffer
+
+                        for (let part of parts) {
+                            // SSE format can be separated by \n or \r\n
+                            const lines = part.split(/\r?\n/);
+                            for (let line of lines) {
+                                if (line.startsWith('data: ')) {
+                                    const dataStr = line.substring(6).trim();
+                                    if (dataStr === '[DONE]') continue;
+                                    try {
+                                        const data = JSON.parse(dataStr);
+                                        if (data.status === 'streaming') {
+                                            currentText += data.content || '';
+                                            if (typeof marked !== 'undefined') {
+                                                msgDiv.innerHTML = marked.parse(currentText);
+                                            } else {
+                                                msgDiv.innerText = currentText;
+                                            }
+                                            chatViewport.scrollTop = chatViewport.scrollHeight;
+                                        } else if (data.status === 'success') {
+                                            // The final success chunk might have the full_content or final metadata.
+                                            // Ensure we render the final content (in case there's anything missed)
+                                            if (data.content && data.content !== currentText && !data.content.includes(currentText)) {
+                                                currentText = data.content;
+                                                if (typeof marked !== 'undefined') {
+                                                    msgDiv.innerHTML = marked.parse(currentText);
+                                                } else {
+                                                    msgDiv.innerText = currentText;
+                                                }
+                                            }
+                                            logModule.addLog('AI', '回覆完成');
+                                            if (attachedSkill) {
+                                                logModule.addLog('INFO', `附加技能「${attachedSkill}」的 metadata 已注入本輪對話`);
+                                            }
+                                        } else if (data.status === 'error') {
+                                            const errText = data.message || '未知錯誤';
+                                            currentText += `\n\n⚠ 錯誤: ${errText}`;
+                                            msgDiv.innerText = currentText;
+                                            logModule.addLog('ERR', errText, 'error');
+                                        } else if (data.status === 'requires_approval') {
+                                            currentText += `\n\n⚠ 需要同意執行高風險操作: ${data.tool_name}`;
+                                            msgDiv.innerText = currentText;
+                                            logModule.addLog('WARN', `需要同意執行: ${data.tool_name}`);
+                                        }
+                                    } catch (e) {
+                                        console.warn('SSE Parse error', e, dataStr);
+                                    }
+                                }
+                            }
+                        }
                     }
-                } else {
-                    appendErrorMsg(data.message || '未知錯誤');
-                    logModule.addLog('ERR', data.message || '未知錯誤', 'error');
+                }
+
+                // Final decode if anything left in buffer
+                if (buffer) {
+                    // usually nothing important, but good practice
                 }
 
             } catch (e) {
@@ -275,18 +375,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (attachSelect) attachSelect.onchange = () => {
             const v = attachSelect.value;
             attachHint.textContent = v ? `準備載入「${v}」的相關資訊` : '';
-            if (v) {
-                executeSwitchWrapper.classList.remove('hidden');
-            } else {
-                executeSwitchWrapper.classList.add('hidden');
-                executeSkillSwitch.checked = false;
-            }
         };
         if (clearAttach) clearAttach.onclick = () => {
             attachSelect.value = '';
             attachHint.textContent = '';
-            executeSwitchWrapper.classList.add('hidden');
-            executeSkillSwitch.checked = false;
         };
 
         // Workspace Attach File Logic
