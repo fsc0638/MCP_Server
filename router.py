@@ -1051,6 +1051,9 @@ async def chat(req: ChatRequest):
             hname = os.path.basename(p)
             visual_docs_display_names[p] = fn_map.get(hname, hname)
 
+        # Extract system prompt for Gemini (system msg is filtered from agent_history)
+        _system_prompt_text = build_system_prompt(req.selected_docs)
+
         kwargs = {
             "session_id": req.session_id,
             "attached_file": req.attached_file,
@@ -1058,11 +1061,13 @@ async def chat(req: ChatRequest):
             "temperature": current_temp,
             "visual_docs": visual_docs,
             "visual_docs_display_names": visual_docs_display_names,
+            "system_prompt": _system_prompt_text,
         }
 
-        # Phase 3: Unify execution. Always use .chat if a skill is involved or as default intelligent mode.
-        # We filter out system messages from history to let the adapter handle system prompt building.
-        agent_history = [m for m in history_to_pass if m.get("role") != "system"]
+        # Phase 3: Pass full history including system message to adapters.
+        # Each adapter is responsible for handling the system message in its own way.
+        # Gemini reads it via kwargs["system_prompt"]; OpenAI/Claude use messages[0].
+        agent_history = history_to_pass
         
         # Always use adapter.chat for auto tool-calling capabilities. 
         # The adapter will decide based on the model's capabilities whether to use tools.

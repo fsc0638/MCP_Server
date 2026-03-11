@@ -133,29 +133,19 @@ class ClaudeAdapter:
 
         tools = self.get_tools(user_query=user_query)
 
-        # D-12: Use agent system prompt (not the pure-chat one)
-        agent_system = system_prompt or (
-            "You are a high-performance Autonomous AI Agent. 請以繁體中文回覆。\n"
-            "知識庫說明：\n"
-            "- 'File [...]' 代表使用者工作區實體檔案內容（包含圖片原生視覺內容）。\n"
-            "- 'Skill [...]' 代表您擁有的技能/工具文件內容。\n"
-            "請優先根據參考資料回答，並嚴格區分「檔案內容」與「技能定義」。"
-        )
-
-        # Dynamic RAG Context Retrieval
-        from core.retriever import retriever
-        retrieved_context = retriever.search_context(user_query)
-        
-        if retrieved_context:
-            user_query = f"""[System Instruction]
-請務必根據下方提供的參考資料來回答問題。在回答時，若有引用資料片斷，請嚴格遵守標示出處格式，例如 "[文件或技能名稱#chunk_0:片段]"。
-注意：資料來源標註為 'File [...]' 表實體文件；'Skill [...]' 表您的技能手冊。
-
-[Reference Context]
-{retrieved_context}
-
-[User Question]
-{user_query}"""
+        # Extract system prompt from messages (router.py sets messages[0] = system with build_system_prompt)
+        agent_system = ""
+        if messages:
+            for msg in messages:
+                if msg.get("role") == "system":
+                    agent_system = msg["content"]
+                    break
+        # Fallback if not provided
+        if not agent_system:
+            agent_system = kwargs.get("system_prompt") or (
+                "You are a high-performance Autonomous AI Agent. 請以繁體中文回覆。\n"
+                "請優先根據參考資料回答，並嚴格區分「檔案內容」與「技能定義」。"
+            )
 
         # Multimodal Vision (NotebookLM Style)
         visual_docs = kwargs.get("visual_docs", [])
