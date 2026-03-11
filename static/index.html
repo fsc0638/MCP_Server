@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+TC:wght@400;500;600;700&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+JP:wght@400;500;700&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Sans+TC:wght@400;500;600;700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="style.css?v=27">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -40,7 +40,7 @@
                     <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
                     <polyline points="9 22 9 12 15 12 15 22"/>
                 </svg>
-                研發組工作台
+                <span data-i18n="topbar.workspace">研發組工作台</span>
             </div>
         </div>
 
@@ -49,7 +49,7 @@
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
             </svg>
-            搜尋對話或輸入指令…
+            <span data-i18n="topbar.search">搜尋對話或輸入指令…</span>
             <kbd>⌘K</kbd>
         </button>
 
@@ -59,6 +59,15 @@
                 <option value="openai">OpenAI GPT-4o</option>
                 <option value="gemini">Google Gemini 2.0</option>
                 <option value="claude">Anthropic Claude 3.5</option>
+            </select>
+
+            <select class="lang-select lang-switcher"
+                    onchange="window.I18n && window.I18n.setLang(this.value)"
+                    aria-label="Language / 語言">
+                <option value="zh-TW">繁中</option>
+                <option value="en">EN</option>
+                <option value="ja">日本語</option>
+                <option value="ko">한국어</option>
             </select>
 
             <button class="page-chat-topbar-icon-btn" title="通知">
@@ -79,7 +88,7 @@
 
             <!-- Header -->
             <div class="page-chat-sidebar-header">
-                <span class="page-chat-sidebar-title">技能控管</span>
+                <span class="page-chat-sidebar-title" data-i18n="sidebar.skills.title">技能控管</span>
                 <div style="display:flex;gap:4px;align-items:center;">
                     <button class="icon-btn" id="createSkillBtn" title="新增技能"
                         style="width:26px;height:26px;font-size:15px;">+</button>
@@ -96,7 +105,7 @@
 
             <!-- Skills accordion -->
             <div class="accordion-section-header" id="skillAccordionBtn">
-                <span class="page-chat-sidebar-title" style="flex:1;">已載入技能</span>
+                <span class="page-chat-sidebar-title" style="flex:1;" data-i18n="sidebar.loaded.skills">已載入技能</span>
                 <span class="badge skill-count" id="skillCount">0</span>
                 <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="6 9 12 15 18 9"></polyline>
@@ -115,7 +124,7 @@
             <!-- Docs accordion -->
             <div class="accordion-section-header" id="docAccordionBtn"
                 style="border-top:1px solid var(--border-subtle);">
-                <span class="page-chat-sidebar-title" style="flex:1;">知識庫文件</span>
+                <span class="page-chat-sidebar-title" style="flex:1;" data-i18n="sidebar.knowledge">知識庫文件</span>
                 <span class="badge doc-count" id="docCount">0</span>
                 <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="6 9 12 15 18 9"></polyline>
@@ -129,13 +138,13 @@
             <!-- Add source -->
             <div style="padding:10px 10px;border-top:1px solid var(--border-subtle);flex-shrink:0;">
                 <button class="page-chat-new-btn" id="openAddSourceBtn" style="margin:0;width:100%;">
-                    <span style="font-size:14px;">+</span> 新增來源
+                    <span style="font-size:14px;">+</span> <span data-i18n="sidebar.add.source">新增來源</span>
                 </button>
             </div>
 
             <!-- Version footer -->
             <div class="panel-footer">
-                <span class="footer-label">版本</span>
+                <span class="footer-label" data-i18n="sidebar.version">版本</span>
                 <span class="footer-val">2.0.0-UMA</span>
             </div>
         </aside>
@@ -146,8 +155,8 @@
             <!-- Sub-topbar -->
             <div class="page-chat-main-topbar">
                 <div class="page-chat-main-title-wrap">
-                    <span class="page-chat-main-title">UMA 工作台</span>
-                    <span class="badge badge-blue" style="font-size:0.66rem;padding:2px 7px;">進行中</span>
+                    <span class="page-chat-main-title" data-i18n="main.title">UMA 工作台</span>
+                    <span class="badge badge-blue" style="font-size:0.66rem;padding:2px 7px;" data-i18n="main.badge">進行中</span>
                 </div>
                 <div class="page-chat-main-actions">
                     <button class="page-chat-action-btn" id="clearChatBtn" title="清除對話紀錄">
@@ -169,28 +178,28 @@
                             <path d="M16 24h16M24 16v16" stroke="#f68300" stroke-width="3" stroke-linecap="round"/>
                         </svg>
                     </div>
-                    <h2>今天想聊什麼？</h2>
-                    <p>直接與 AI 對話，若需要技能輔助可從底部選單附加。</p>
+                    <h2 data-i18n="welcome.heading">今天想聊什麼？</h2>
+                    <p data-i18n="welcome.desc">直接與 AI 對話，若需要技能輔助可從底部選單附加。</p>
                     <div class="page-chat-suggestion-grid">
-                        <div class="page-chat-suggestion-card" onclick="insertSugg('說明 SKILL.md 的 YAML 格式規範')">
+                        <div class="page-chat-suggestion-card" data-sugg-key="sugg.skillmd.query" onclick="insertSuggI18n(this)">
                             <div class="page-chat-suggestion-icon">📋</div>
-                            <div class="page-chat-suggestion-title">SKILL.md 格式說明</div>
-                            <div class="page-chat-suggestion-desc">查看 YAML 格式規範</div>
+                            <div class="page-chat-suggestion-title" data-i18n="sugg.skillmd.title">SKILL.md 格式說明</div>
+                            <div class="page-chat-suggestion-desc" data-i18n="sugg.skillmd.desc">查看 YAML 格式規範</div>
                         </div>
-                        <div class="page-chat-suggestion-card" onclick="insertSugg('如何新增一個 MCP Skill？')">
+                        <div class="page-chat-suggestion-card" data-sugg-key="sugg.addskill.query" onclick="insertSuggI18n(this)">
                             <div class="page-chat-suggestion-icon">➕</div>
-                            <div class="page-chat-suggestion-title">如何新增 Skill</div>
-                            <div class="page-chat-suggestion-desc">學習新增技能的步驟</div>
+                            <div class="page-chat-suggestion-title" data-i18n="sugg.addskill.title">如何新增 Skill</div>
+                            <div class="page-chat-suggestion-desc" data-i18n="sugg.addskill.desc">學習新增技能的步驟</div>
                         </div>
-                        <div class="page-chat-suggestion-card" onclick="insertSugg('解釋 UMA 架構的設計理念')">
+                        <div class="page-chat-suggestion-card" data-sugg-key="sugg.uma.query" onclick="insertSuggI18n(this)">
                             <div class="page-chat-suggestion-icon">🏗</div>
-                            <div class="page-chat-suggestion-title">UMA 架構解說</div>
-                            <div class="page-chat-suggestion-desc">了解設計理念與架構</div>
+                            <div class="page-chat-suggestion-title" data-i18n="sugg.uma.title">UMA 架構解說</div>
+                            <div class="page-chat-suggestion-desc" data-i18n="sugg.uma.desc">了解設計理念與架構</div>
                         </div>
-                        <div class="page-chat-suggestion-card" onclick="insertSugg('目前有哪些技能可以使用？')">
+                        <div class="page-chat-suggestion-card" data-sugg-key="sugg.skills.query" onclick="insertSuggI18n(this)">
                             <div class="page-chat-suggestion-icon">🔍</div>
-                            <div class="page-chat-suggestion-title">技能總覽</div>
-                            <div class="page-chat-suggestion-desc">查看所有可用技能</div>
+                            <div class="page-chat-suggestion-title" data-i18n="sugg.skills.title">技能總覽</div>
+                            <div class="page-chat-suggestion-desc" data-i18n="sugg.skills.desc">查看所有可用技能</div>
                         </div>
                     </div>
                 </div>
@@ -200,16 +209,16 @@
 
             <!-- Attach Skill Bar -->
             <div class="attach-skill-bar" id="attachSkillBar">
-                <span class="attach-label">附加技能：</span>
+                <span class="attach-label" data-i18n="attach.label">附加技能：</span>
                 <select id="attachSkillSelect" class="attach-select">
-                    <option value="">無（純對話）</option>
+                    <option value="" data-i18n="attach.none">無（純對話）</option>
                 </select>
                 <div class="execute-switch-wrapper hidden" id="executeSwitchWrapper">
                     <label class="toggle-switch">
                         <input type="checkbox" id="executeSkillSwitch">
                         <span class="slider"></span>
                     </label>
-                    <span class="switch-label">🚀 啟用執行模式</span>
+                    <span class="switch-label" data-i18n="execute.label">🚀 啟用執行模式</span>
                 </div>
                 <button class="attach-clear-btn" id="clearAttach" title="清除附加技能">✕</button>
                 <span class="attach-hint" id="attachHint"></span>
@@ -235,7 +244,9 @@
                 <div class="page-chat-input-box" id="inputWrapper">
                     <input type="file" id="workspaceFileInput" class="hidden">
                     <textarea id="userInput" class="page-chat-textarea"
-                        placeholder="開始輸入…（Enter 送出，Shift+Enter 換行）" rows="1" disabled></textarea>
+                        placeholder="開始輸入…（Enter 送出，Shift+Enter 換行）"
+                        data-i18n-placeholder="input.placeholder"
+                        rows="1" disabled></textarea>
                     <div class="page-chat-input-toolbar">
                         <div class="page-chat-input-tools">
                             <span class="source-count-hint hidden" id="sourceCountHint">0 個來源</span>
@@ -259,7 +270,7 @@
                         </div>
                     </div>
                 </div>
-                <p class="page-chat-input-footer">
+                <p class="page-chat-input-footer" data-i18n-html="input.footer.html">
                     <kbd>Enter</kbd> 送出 · <kbd>Shift+Enter</kbd> 換行 · AI 可能有誤差，重要決策請自行驗證
                 </p>
             </section>
@@ -269,7 +280,7 @@
         <aside class="page-chat-sidebar-right" aria-label="系統面板">
 
             <div class="page-chat-panel-header">
-                <span class="page-chat-sidebar-title">工作面板</span>
+                <span class="page-chat-sidebar-title" data-i18n="panel.title">工作面板</span>
                 <div style="display:flex;gap:4px;">
                     <button class="icon-btn" id="clearLog" title="清除日誌"
                         style="width:26px;height:26px;">🗑</button>
@@ -280,11 +291,11 @@
 
             <div class="page-chat-panel-tabs" role="tablist">
                 <button class="page-chat-tab-btn" role="tab"
-                    onclick="switchRightTab(this,'info')">資訊</button>
+                    onclick="switchRightTab(this,'info')" data-i18n="tab.info">資訊</button>
                 <button class="page-chat-tab-btn" role="tab"
-                    onclick="switchRightTab(this,'tools')">工具</button>
+                    onclick="switchRightTab(this,'tools')" data-i18n="tab.tools">工具</button>
                 <button class="page-chat-tab-btn is-active" role="tab"
-                    onclick="switchRightTab(this,'log')">紀錄</button>
+                    onclick="switchRightTab(this,'log')" data-i18n="tab.log">紀錄</button>
             </div>
 
             <div class="page-chat-panel-body">
@@ -292,7 +303,7 @@
                 <!-- Info tab -->
                 <div id="rtab-info" style="display:none;">
                     <section class="page-chat-info-section">
-                        <div class="page-chat-info-section-title">連線狀態</div>
+                        <div class="page-chat-info-section-title" data-i18n="info.conn.title">連線狀態</div>
                         <div class="page-chat-info-card">
                             <div class="page-chat-stat-row">
                                 <span class="page-chat-stat-row-label">MCP Server</span>
@@ -301,26 +312,26 @@
                         </div>
                     </section>
                     <section class="page-chat-info-section">
-                        <div class="page-chat-info-section-title">目前模型</div>
+                        <div class="page-chat-info-section-title" data-i18n="info.model.title">目前模型</div>
                         <div class="page-chat-info-card">
                             <div class="page-chat-info-card-title" id="infoModelName">OpenAI GPT-4o</div>
-                            <div class="page-chat-info-card-desc">可從輸入框右下角切換 AI 模型</div>
+                            <div class="page-chat-info-card-desc" data-i18n="info.model.desc">可從輸入框右下角切換 AI 模型</div>
                         </div>
                     </section>
                     <section class="page-chat-info-section">
-                        <div class="page-chat-info-section-title">隔離說明</div>
+                        <div class="page-chat-info-section-title" data-i18n="info.isolation.title">隔離說明</div>
                         <div class="page-chat-info-card">
-                            <div class="page-chat-info-card-title">完全隔離模式</div>
-                            <div class="page-chat-info-card-desc">
+                            <div class="page-chat-info-card-title" data-i18n="info.isolation.name">完全隔離模式</div>
+                            <div class="page-chat-info-card-desc" data-i18n="info.isolation.desc">
                                 此對話面板與技能執行完全隔離。AI 僅接收對話內容，不存取技能庫。
                             </div>
                         </div>
                     </section>
                     <section class="page-chat-info-section">
-                        <div class="page-chat-info-section-title">版本資訊</div>
+                        <div class="page-chat-info-section-title" data-i18n="info.version.title">版本資訊</div>
                         <div class="page-chat-info-card">
                             <div class="page-chat-info-card-title">MCP Agent Console</div>
-                            <div class="page-chat-info-card-desc">v2.0.0-UMA · 研發組</div>
+                            <div class="page-chat-info-card-desc" data-i18n="info.version.desc">v2.0.0-UMA · 研發組</div>
                         </div>
                     </section>
                 </div>
@@ -328,7 +339,7 @@
                 <!-- Tools tab -->
                 <div id="rtab-tools" style="display:none;">
                     <section class="page-chat-info-section">
-                        <div class="page-chat-info-section-title">已載入技能</div>
+                        <div class="page-chat-info-section-title" data-i18n="tools.skills.title">已載入技能</div>
                         <div id="toolsSkillList">
                             <div class="page-chat-info-card">
                                 <div class="page-chat-info-card-desc" style="text-align:center;padding:8px 0;">掃描中...</div>
@@ -336,10 +347,10 @@
                         </div>
                     </section>
                     <section class="page-chat-info-section">
-                        <div class="page-chat-info-section-title">知識庫</div>
+                        <div class="page-chat-info-section-title" data-i18n="tools.kb.title">知識庫</div>
                         <div class="page-chat-info-card">
                             <div class="page-chat-stat-row">
-                                <span class="page-chat-stat-row-label">已載入文件</span>
+                                <span class="page-chat-stat-row-label" data-i18n="tools.kb.docs">已載入文件</span>
                                 <span class="page-chat-stat-row-value" id="toolsDocCount">0</span>
                             </div>
                         </div>
@@ -353,7 +364,7 @@
                             <span class="log-badge badge-sys">SYS</span>
                             <div class="log-body">
                                 <span class="log-time" id="initTime"></span>
-                                <span class="log-msg">系統就緒，純對話模式啟用。</span>
+                                <span class="log-msg" data-i18n="log.ready">系統就緒，純對話模式啟用。</span>
                             </div>
                         </div>
                     </div>
@@ -375,9 +386,9 @@
             </div>
         </div>
         <div class="drawer-actions">
-            <button class="drawer-btn btn-view" id="drawerViewBtn">🔍 唯讀</button>
-            <button class="drawer-btn btn-edit" id="drawerEditBtn">✏️ 編輯</button>
-            <button class="icon-btn" id="drawerCloseBtn" title="關閉" style="width:28px;height:28px;">✕</button>
+            <button class="drawer-btn btn-view" id="drawerViewBtn" data-i18n="drawer.btn.view">🔍 唯讀</button>
+            <button class="drawer-btn btn-edit" id="drawerEditBtn" data-i18n="drawer.btn.edit">✏️ 編輯</button>
+            <button class="icon-btn" id="drawerCloseBtn" data-i18n-title="drawer.close.title" title="關閉" style="width:28px;height:28px;">✕</button>
         </div>
     </div>
 
@@ -386,47 +397,50 @@
         <div class="drawer-meta" id="drawerMeta"></div>
         <div class="drawer-skill-body" id="drawerBody"></div>
         <div class="drawer-footer-actions">
-            <button class="action-btn btn-install hidden" id="installDepsBtn">⬇ 安裝缺失依賴</button>
+            <button class="action-btn btn-install hidden" id="installDepsBtn" data-i18n="drawer.install.deps">⬇ 安裝缺失依賴</button>
         </div>
     </div>
 
     <!-- Edit mode -->
     <div class="drawer-section hidden" id="drawerEditView">
         <div class="edit-toolbar hidden">
-            <span class="edit-notice">✏️ 編輯技能定義</span>
-            <span class="edit-hint">YAML 將自動產生</span>
+            <span class="edit-notice" data-i18n="drawer.edit.notice">✏️ 編輯技能定義</span>
+            <span class="edit-hint" data-i18n="drawer.edit.hint">YAML 將自動產生</span>
         </div>
         <div class="editor-tabs hidden">
-            <div class="editor-section-label">結構化內容</div>
-            <button class="raw-toggle-btn hidden" id="rawModeToggle">🌐 切換原始模式 (Markdown)</button>
+            <div class="editor-section-label" data-i18n="drawer.section.structured">結構化內容</div>
+            <button class="raw-toggle-btn hidden" id="rawModeToggle" data-i18n="drawer.raw.toggle">🌐 切換原始模式 (Markdown)</button>
         </div>
 
         <!-- Structured editor -->
         <div id="structuredEditor" class="editor-notebook-style">
             <div class="skill-field-block">
-                <div class="skill-field-header"><label>顯示名稱</label></div>
+                <div class="skill-field-header"><label data-i18n="drawer.field.displayname">顯示名稱</label></div>
                 <div class="skill-field-box">
                     <input type="text" id="editSkillDisplayName" class="skill-field-input"
+                        data-i18n-placeholder="drawer.field.displayname.ph"
                         placeholder="例如：郵件分析專家" maxlength="128">
                 </div>
                 <div class="skill-field-count" id="count-editSkillDisplayName">0 / 128</div>
             </div>
             <div class="skill-field-block">
                 <div class="skill-field-header">
-                    <label>簡短描述 <span class="info-icon" title="一句話描述這個技能的功能">ⓘ</span></label>
+                    <label data-i18n="drawer.field.desc">簡短描述</label> <span class="info-icon" data-i18n-title="drawer.field.desc.info" title="一句話描述這個技能的功能">ⓘ</span>
                 </div>
                 <div class="skill-field-box">
                     <textarea id="editSkillDescription" class="skill-field-input textarea"
+                        data-i18n-placeholder="drawer.field.desc.ph"
                         placeholder="一句話描述這個技能的功能" maxlength="500"></textarea>
                 </div>
                 <div class="skill-field-count" id="count-editSkillDescription">0 / 500</div>
             </div>
             <div class="skill-field-block">
                 <div class="skill-field-header">
-                    <label>角色定義 / 提示詞 <span class="info-icon" title="定義角色的最高指導原則與行為邊界">ⓘ</span></label>
+                    <label data-i18n="drawer.field.prompt">角色定義 / 提示詞</label> <span class="info-icon" data-i18n-title="drawer.field.prompt.info" title="定義角色的最高指導原則與行為邊界">ⓘ</span>
                 </div>
                 <div class="skill-field-box">
                     <textarea id="editSkillPrompt" class="skill-field-input textarea"
+                        data-i18n-placeholder="drawer.field.prompt.ph"
                         placeholder="在此貼上角色的具體行為指示、限制或任何 Markdown 語法..." maxlength="1500000"
                         style="min-height:250px;"></textarea>
                 </div>
@@ -438,36 +452,36 @@
         <div class="skill-upload-section">
             <div class="upload-group">
                 <div class="upload-group-header">
-                    <span style="font-weight:600;font-size:13px;color:var(--text-primary);">知識 (References)</span>
-                    <span class="info-icon" title="作為 LLM 回覆資訊的現有知識參考">ⓘ</span>
+                    <span style="font-weight:600;font-size:13px;color:var(--text-primary);" data-i18n="drawer.upload.knowledge">知識 (References)</span>
+                    <span class="info-icon" data-i18n-title="drawer.upload.knowledge.info" title="作為 LLM 回覆資訊的現有知識參考">ⓘ</span>
                 </div>
                 <div id="knowledgeList" class="file-list-container"></div>
                 <input type="file" id="uploadKnowledgeInput" class="hidden" accept=".pdf,.docx,.txt,.md,.csv">
                 <button class="upload-action-btn" id="uploadKnowledgeBtn">
-                    <span>＋</span> 新增知識庫檔案
+                    <span>＋</span> <span data-i18n="drawer.upload.knowledge.btn">新增知識庫檔案</span>
                 </button>
             </div>
             <div class="upload-group">
                 <div class="upload-group-header">
-                    <span style="font-weight:600;font-size:13px;color:var(--text-primary);">客製指定程式 (Scripts)</span>
-                    <span class="info-icon" title="當客製指示中有提到需要執行指定的程式時使用">ⓘ</span>
+                    <span style="font-weight:600;font-size:13px;color:var(--text-primary);" data-i18n="drawer.upload.scripts">客製指定程式 (Scripts)</span>
+                    <span class="info-icon" data-i18n-title="drawer.upload.scripts.info" title="當客製指示中有提到需要執行指定的程式時使用">ⓘ</span>
                 </div>
                 <div id="scriptsList" class="file-list-container"></div>
                 <input type="file" id="uploadCustomCodeInput" class="hidden" accept=".py,.js,.sh,.txt">
                 <button class="upload-action-btn" id="uploadCustomCodeBtn">
-                    <span>＋</span> 新增執行腳本
+                    <span>＋</span> <span data-i18n="drawer.upload.scripts.btn">新增執行腳本</span>
                 </button>
             </div>
             <div class="upload-group">
                 <div class="upload-group-header">
-                    <span style="font-weight:600;font-size:13px;color:var(--text-primary);">參照檔案 (Assets)</span>
-                    <span class="info-icon" title="當客製指示有提到需要參照模板做資訊整理或匯出時參考使用">ⓘ</span>
+                    <span style="font-weight:600;font-size:13px;color:var(--text-primary);" data-i18n="drawer.upload.assets">參照檔案 (Assets)</span>
+                    <span class="info-icon" data-i18n-title="drawer.upload.assets.info" title="當客製指示有提到需要參照模板做資訊整理或匯出時參考使用">ⓘ</span>
                 </div>
                 <div id="assetsList" class="file-list-container"></div>
                 <input type="file" id="uploadReferenceFileInput" class="hidden"
                     accept=".pdf,.docx,.txt,.md,.csv,.xlsx">
                 <button class="upload-action-btn" id="uploadReferenceFileBtn">
-                    <span>＋</span> 新增參照模板
+                    <span>＋</span> <span data-i18n="drawer.upload.assets.btn">新增參照模板</span>
                 </button>
             </div>
         </div>
@@ -475,6 +489,7 @@
         <!-- Raw editor -->
         <div id="rawEditorContainer" class="hidden">
             <textarea id="skillEditor" class="skill-editor" spellcheck="false"
+                data-i18n-placeholder="drawer.raw.ph"
                 placeholder="在此編輯完整的 SKILL.md Markdown 內容..."></textarea>
         </div>
 
@@ -482,9 +497,9 @@
             <span id="yamlErrorMsg"></span>
         </div>
         <div class="drawer-footer-actions">
-            <button class="action-btn btn-delete" id="deleteSkillBtn">刪除技能</button>
-            <button class="action-btn btn-rollback hidden" id="rollbackBtn">↩ 還原版本</button>
-            <button class="action-btn btn-save" id="saveSkillBtn">儲存</button>
+            <button class="action-btn btn-delete" id="deleteSkillBtn" data-i18n="drawer.btn.delete">刪除技能</button>
+            <button class="action-btn btn-rollback hidden" id="rollbackBtn" data-i18n="drawer.btn.rollback">↩ 還原版本</button>
+            <button class="action-btn btn-save" id="saveSkillBtn" data-i18n="drawer.btn.save">儲存</button>
         </div>
     </div>
 </aside>
@@ -504,8 +519,8 @@
         <div class="modal-card-header">
             <div class="modal-warning-badge">⚠</div>
             <div>
-                <h2 class="modal-title">需要授權</h2>
-                <p class="modal-subtitle">高風險操作請求</p>
+                <h2 class="modal-title" data-i18n="auth.title">需要授權</h2>
+                <p class="modal-subtitle" data-i18n="auth.subtitle">高風險操作請求</p>
             </div>
         </div>
         <div class="modal-body">
@@ -513,8 +528,8 @@
             <div class="detail-code" id="authDetails"></div>
         </div>
         <div class="modal-footer">
-            <button class="btn-secondary" id="denyBtn">拒絕</button>
-            <button class="btn-primary" id="approveBtn">授權執行</button>
+            <button class="btn-secondary" id="denyBtn" data-i18n="auth.btn.deny">拒絕</button>
+            <button class="btn-primary" id="approveBtn" data-i18n="auth.btn.approve">授權執行</button>
         </div>
     </div>
 </div>
@@ -524,42 +539,43 @@
     <div class="modal-card">
         <div class="modal-card-header">
             <div>
-                <h2 class="modal-title">新增技能</h2>
-                <p class="modal-subtitle">建立一個新的 MCP Skill 模板</p>
+                <h2 class="modal-title" data-i18n="create.title">新增技能</h2>
+                <p class="modal-subtitle" data-i18n="create.subtitle">建立一個新的 MCP Skill 模板</p>
             </div>
-            <button class="icon-btn" id="closeCreateModalBtn" title="關閉" style="width:28px;height:28px;margin-left:auto;">✕</button>
+            <button class="icon-btn" id="closeCreateModalBtn" data-i18n-title="create.close.title" title="關閉" style="width:28px;height:28px;margin-left:auto;">✕</button>
         </div>
         <div class="modal-body" style="display:flex;flex-direction:column;gap:12px;">
             <div class="form-group">
-                <label class="form-label">技能識別碼 (ID)*</label>
-                <input type="text" id="newSkillId" placeholder="例如: web-scraper (只能英文/數字/連字號)"
+                <label class="form-label" data-i18n="create.label.id">技能識別碼 (ID)*</label>
+                <input type="text" id="newSkillId" data-i18n-placeholder="create.ph.id"
+                    placeholder="例如: web-scraper (只能英文/數字/連字號)"
                     class="form-input" style="font-family:var(--font-mono);">
-                <span style="font-size:11px;color:var(--text-muted);display:block;margin-top:4px;">自動加上 `mcp-` 前綴，將成為資料夾名稱</span>
+                <span style="font-size:11px;color:var(--text-muted);display:block;margin-top:4px;" data-i18n="create.hint.id">自動加上 `mcp-` 前綴，將成為資料夾名稱</span>
             </div>
             <div class="form-group">
-                <label class="form-label">顯示名稱*</label>
-                <input type="text" id="newSkillName" placeholder="例如: 網頁爬蟲" class="form-input">
+                <label class="form-label" data-i18n="create.label.name">顯示名稱*</label>
+                <input type="text" id="newSkillName" data-i18n-placeholder="create.ph.name" placeholder="例如: 網頁爬蟲" class="form-input">
             </div>
             <div class="form-group">
-                <label class="form-label">簡短描述*</label>
-                <input type="text" id="newSkillDesc" placeholder="說明這個技能的功能..." class="form-input">
+                <label class="form-label" data-i18n="create.label.desc">簡短描述*</label>
+                <input type="text" id="newSkillDesc" data-i18n-placeholder="create.ph.desc" placeholder="說明這個技能的功能..." class="form-input">
             </div>
             <div class="form-group">
-                <label class="form-label">分類</label>
+                <label class="form-label" data-i18n="create.label.cat">分類</label>
                 <select id="newSkillCatSelect" class="form-input" style="margin-bottom:4px;"></select>
-                <input type="text" id="newSkillCat" placeholder="請輸入新分類名稱..." class="form-input hidden">
+                <input type="text" id="newSkillCat" data-i18n-placeholder="create.ph.cat" placeholder="請輸入新分類名稱..." class="form-input hidden">
             </div>
             <div class="form-group" style="flex-direction:row;align-items:center;gap:8px;margin-top:4px;">
                 <input type="checkbox" id="newSkillNoScript" style="width:15px;height:15px;accent-color:var(--kway-blue);cursor:pointer;">
-                <label for="newSkillNoScript" style="font-size:13px;color:var(--kway-blue);font-weight:600;cursor:pointer;">
+                <label for="newSkillNoScript" style="font-size:13px;color:var(--kway-blue);font-weight:600;cursor:pointer;" data-i18n="create.noscript.label">
                     僅使用 LLM 語意邏輯處理 (無需程式腳本)
                 </label>
             </div>
             <div class="yaml-error hidden" id="createSkillError" style="margin-top:8px;"></div>
         </div>
         <div class="modal-footer">
-            <button class="btn-secondary" id="cancelCreateBtn">取消</button>
-            <button class="btn-primary" id="confirmCreateBtn">建立</button>
+            <button class="btn-secondary" id="cancelCreateBtn" data-i18n="create.btn.cancel">取消</button>
+            <button class="btn-primary" id="confirmCreateBtn" data-i18n="create.btn.confirm">建立</button>
         </div>
     </div>
 </div>
@@ -573,37 +589,37 @@
         <div class="modal-header">
             <div class="modal-header-center">
                 <h1 class="modal-title">
-                    從您的 <span class="highlight-container" id="sourceHighlight">
-                        <span class="highlight-text active">網頁</span>
-                        <span class="highlight-text">文件</span>
-                        <span class="highlight-text">文本</span>
+                    <span data-i18n="source.modal.prefix">從您的</span> <span class="highlight-container" id="sourceHighlight">
+                        <span class="highlight-text active" data-i18n="source.highlight.web">網頁</span>
+                        <span class="highlight-text" data-i18n="source.highlight.doc">文件</span>
+                        <span class="highlight-text" data-i18n="source.highlight.text">文本</span>
                     </span>
-                    建構知識庫
+                    <span data-i18n="source.modal.suffix">建構知識庫</span>
                 </h1>
             </div>
         </div>
         <div class="modal-body">
             <div class="source-search-wrap">
                 <span class="search-icon">🔍</span>
-                <textarea class="source-search-input" id="webSearchInput" placeholder="在網路上搜尋新來源" rows="1"></textarea>
+                <textarea class="source-search-input" id="webSearchInput" data-i18n-placeholder="source.search.ph" placeholder="在網路上搜尋新來源" rows="1"></textarea>
                 <div class="search-chips">
-                    <button class="search-chip search-google-btn" id="googleSearchBtn">搜尋</button>
+                    <button class="search-chip search-google-btn" id="googleSearchBtn" data-i18n="source.search.btn">搜尋</button>
                 </div>
             </div>
             <div class="source-drop-zone" id="sourceDropZone">
                 <div class="drop-content">
-                    <p class="drop-text">或者將檔案拖放到這裡</p>
-                    <p class="drop-hint">PDF、圖片、文件、音訊等 (上限 50 份)</p>
+                    <p class="drop-text" data-i18n="source.drop.text">或者將檔案拖放到這裡</p>
+                    <p class="drop-hint" data-i18n="source.drop.hint">PDF、圖片、文件、音訊等 (上限 50 份)</p>
                 </div>
                 <div class="source-actions-inline">
                     <button class="source-action-pill mat-stroked" id="uploadFileBtnAction">
-                        <span class="pill-label">上傳檔案</span>
+                        <span class="pill-label" data-i18n="source.pill.upload">上傳檔案</span>
                     </button>
                     <button class="source-action-pill mat-stroked" id="addUrlBtnAction">
-                        <span class="pill-label">網站連結</span>
+                        <span class="pill-label" data-i18n="source.pill.url">網站連結</span>
                     </button>
                     <button class="source-action-pill mat-stroked" id="copyPasteBtnAction">
-                        <span class="pill-label">複製文字</span>
+                        <span class="pill-label" data-i18n="source.pill.paste">複製文字</span>
                     </button>
                 </div>
             </div>
@@ -623,7 +639,7 @@
 <div class="modal-overlay" id="researchingModalOverlay">
     <div class="researching-pill">
         <div class="spinner-small"></div>
-        <span class="researching-text">正在分析並搜尋相關網頁...</span>
+        <span class="researching-text" data-i18n="modal.researching">正在分析並搜尋相關網頁...</span>
     </div>
 </div>
 
@@ -631,7 +647,7 @@
 <div class="modal-overlay" id="creatingSkillModalOverlay">
     <div class="researching-pill">
         <div class="spinner-small"></div>
-        <span class="researching-text">正在建立新技能並優化 SKILL.md...</span>
+        <span class="researching-text" data-i18n="modal.creating.skill">正在建立新技能並優化 SKILL.md...</span>
     </div>
 </div>
 
@@ -645,7 +661,7 @@
                 <label class="checkbox-container">
                     <input type="checkbox" id="selectAllSources" checked>
                     <span class="checkmark"></span>
-                    選取所有來源
+                    <span data-i18n="selection.select.all">選取所有來源</span>
                 </label>
             </div>
             <button class="modal-close-simple" id="closeSelectionBtn">&times;</button>
@@ -654,8 +670,8 @@
             <div id="sourceListContainer" class="source-selection-list"></div>
         </div>
         <div class="modal-footer-selection">
-            <div class="selection-stats">已選取 <span id="selectedCountText">0</span> 件來源</div>
-            <button class="import-btn active" id="confirmImportBtn">匯入</button>
+            <div class="selection-stats"><span data-i18n="selection.stats.pre">已選取</span> <span id="selectedCountText">0</span> <span data-i18n="selection.stats.post">件來源</span></div>
+            <button class="import-btn active" id="confirmImportBtn" data-i18n="selection.import">匯入</button>
         </div>
     </div>
 </div>
@@ -667,19 +683,19 @@
     <div class="modal-container source-sub-modal">
         <div class="sub-modal-header">
             <button class="sub-modal-back" id="closeAddUrlBtn">&larr;</button>
-            <h2 class="sub-modal-title">網站與 YouTube 連結</h2>
+            <h2 class="sub-modal-title" data-i18n="url.title">網站與 YouTube 連結</h2>
             <button class="modal-close" id="closeAddUrlBtn2">&times;</button>
         </div>
-        <p class="sub-modal-desc">將網站或 YouTube 的 URL 貼到以下欄位，作為知識庫的來源。</p>
+        <p class="sub-modal-desc" data-i18n="url.desc">將網站或 YouTube 的 URL 貼到以下欄位，作為知識庫的來源。</p>
         <div class="sub-modal-body">
-            <textarea id="sourceUrlInput" class="sub-modal-textarea" placeholder="貼上連結..." rows="6"></textarea>
+            <textarea id="sourceUrlInput" class="sub-modal-textarea" data-i18n-placeholder="url.ph" placeholder="貼上連結..." rows="6"></textarea>
             <ul class="sub-modal-hints">
-                <li>複數 URL 請以換行或空格分隔。</li>
-                <li>目前僅支援公開可存取的網頁內容。</li>
+                <li data-i18n="url.hint.1">複數 URL 請以換行或空格分隔。</li>
+                <li data-i18n="url.hint.2">目前僅支援公開可存取的網頁內容。</li>
             </ul>
         </div>
         <div class="sub-modal-footer">
-            <button class="sub-modal-action-btn" id="confirmAddUrlBtn">插入</button>
+            <button class="sub-modal-action-btn" id="confirmAddUrlBtn" data-i18n="url.btn.insert">插入</button>
         </div>
     </div>
 </div>
@@ -689,16 +705,16 @@
     <div class="modal-container source-sub-modal">
         <div class="sub-modal-header">
             <button class="sub-modal-back" id="closeAddTextBtn">&larr;</button>
-            <h2 class="sub-modal-title">貼上文字</h2>
+            <h2 class="sub-modal-title" data-i18n="text.title">貼上文字</h2>
             <button class="modal-close" id="closeAddTextBtn2">&times;</button>
         </div>
-        <p class="sub-modal-desc">將文字內容貼到以下欄位，作為知識庫的來源。</p>
+        <p class="sub-modal-desc" data-i18n="text.desc">將文字內容貼到以下欄位，作為知識庫的來源。</p>
         <div class="sub-modal-body">
-            <input type="text" id="sourceTextName" class="sub-modal-input" placeholder="來源名稱（選填）">
-            <textarea id="sourceTextContent" class="sub-modal-textarea" placeholder="在此貼上文字內容..." rows="8"></textarea>
+            <input type="text" id="sourceTextName" class="sub-modal-input" data-i18n-placeholder="text.ph.name" placeholder="來源名稱（選填）">
+            <textarea id="sourceTextContent" class="sub-modal-textarea" data-i18n-placeholder="text.ph.content" placeholder="在此貼上文字內容..." rows="8"></textarea>
         </div>
         <div class="sub-modal-footer">
-            <button class="sub-modal-action-btn" id="confirmAddTextBtn">插入</button>
+            <button class="sub-modal-action-btn" id="confirmAddTextBtn" data-i18n="text.btn.insert">插入</button>
         </div>
     </div>
 </div>
@@ -717,7 +733,7 @@
             <p class="risk-text" id="alertModalMessage">訊息內容</p>
         </div>
         <div class="modal-footer">
-            <button class="btn-secondary" id="alertModalOkBtn">確定</button>
+            <button class="btn-secondary" id="alertModalOkBtn" data-i18n="alert.btn.ok">確定</button>
         </div>
     </div>
 </div>
@@ -731,6 +747,7 @@
     <span id="toastMsg">操作成功</span>
 </div>
 
+<script src="i18n.js"></script>
 <script src="app.js?v=26"></script>
 <script>
     /* ── Model label data ── */

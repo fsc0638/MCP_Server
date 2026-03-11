@@ -56,7 +56,7 @@
   --transition: 0.20s cubic-bezier(0.4, 0, 0.2, 1);
 
   /* Typography */
-  --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, sans-serif;
+  --font-sans: 'Inter', 'Noto Sans TC', 'Noto Sans JP', 'Noto Sans KR', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
   /* Layout */
@@ -197,6 +197,25 @@ button, input, select, textarea { font-family: var(--font-sans); }
 
 /* Hidden model selector (kept for app.js) */
 .topbar-model-select { display: none; }
+
+/* ── Language Switcher ──────────────────────────────────────── */
+.lang-switcher {
+  padding: 4px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-family: var(--font-sans);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.10);
+  color: rgba(255, 255, 255, 0.88);
+  cursor: pointer;
+  outline: none;
+  transition: var(--transition);
+  appearance: auto;
+}
+.lang-switcher:hover  { background: rgba(255, 255, 255, 0.20); border-color: rgba(255,255,255,0.45); }
+.lang-switcher:focus  { background: rgba(255, 255, 255, 0.18); border-color: rgba(255,255,255,0.55); }
+.lang-switcher option { background: var(--kway-blue-dark); color: #fff; }
 
 /* ── BODY (3-column grid) ────────────────────────────────────── */
 .page-chat-body {
