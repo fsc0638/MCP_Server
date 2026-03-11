@@ -155,6 +155,8 @@ class GeminiAdapter:
         Send a chat request with function calling support.
         D-09: Supports multi-turn tool calls (up to MAX_ITERATIONS).
         D-12: Unified interface — accepts messages list + user_query.
+        ARCHITECTURE: Uses router.py's pre-built RAG context and system prompt.
+                      Does NOT do its own RAG retrieval.
         """
         if not self.is_available:
             return {"status": "error", "message": "Gemini adapter is not available"}
@@ -179,10 +181,23 @@ class GeminiAdapter:
         if not user_query:
             return {"status": "error", "message": "No user query provided"}
 
-        # Dynamic RAG Context Retrieval
-        from core.retriever import retriever
-        retrieved_context = retriever.search_context(user_query)
-        
+        # Extract system instruction — priority:
+        # 1. system_prompt passed by router.py (contains full skill list from build_system_prompt)
+        # 2. system message from history (fallback)
+        # 3. built-in default
+        system_instruction_text = kwargs.get("system_prompt", None)
+        if not system_instruction_text:
+            system_instruction_text = (
+                "You are a high-performance AI Assistant. 請以繁體中文回覆。\n"
+                "【重要規則】回答技能問題時，必須使用系統狀態中的「完整技能清單」。\n"
+                "嚴禁將技能說明認定為知識庫文件，嚴禁將知識庫文件混入技能清單。"
+            )
+            if messages:
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        system_instruction_text = msg["content"]
+                        break
+
         visual_parts = []
         visual_docs = kwargs.get("visual_docs", [])
         visual_docs_display_names = kwargs.get("visual_docs_display_names", {})
@@ -198,22 +213,12 @@ class GeminiAdapter:
             visual_parts.append(f"[圖片名稱: {display_name}]")
             visual_parts.extend(self._handle_attached_file(doc_path, session_id))
 
-        if retrieved_context:
-            augmented_query = f"""[System Instruction]
-請務必根據下方提供的參考資料來回答問題。在回答時，若有引用資料片斷，請嚴格遵守標示出處格式，例如 "[文件或技能名稱#chunk_0:片段]"。
-注意：資料來源標註為 'File [...]' 表實體文件；'Skill [...]' 表您的技能手冊。
+        # Use user_query as-is since RAG context is already embedded by router.py
+        augmented_query = user_query
 
-[Reference Context]
-{retrieved_context}
-
-[User Question]
-{user_query}"""
-        else:
-            augmented_query = user_query
-
-        # Multi-modal injection
+        # Multi-modal injection: ONLY add images when visual_docs is present
+        # (do not let images pollute non-image queries)
         if visual_parts:
-            # We wrap the augmented_query with images as parts
             augmented_query = visual_parts + [augmented_query]
 
         tools = self.get_tools(user_query=user_query)
@@ -232,23 +237,26 @@ class GeminiAdapter:
 
             gemini_tools = genai.protos.Tool(function_declarations=function_declarations) if function_declarations else None
 
+            # === DEBUG: Print system_instruction summary ===
+            skill_count_hint = system_instruction_text.count("✅") + system_instruction_text.count("⚠")
+            logger.warning(f"[GEMINI DEBUG] system_instruction length={len(system_instruction_text)}, skill_markers={skill_count_hint}")
+            logger.warning(f"[GEMINI DEBUG] system_instruction preview: {system_instruction_text[:300]}")
+            logger.warning(f"[GEMINI DEBUG] visual_parts count={len(visual_parts)}, user_query[:80]={user_query[:80]}")
+            # === END DEBUG ===
+
             model = genai.GenerativeModel(
                 model_name=self.model_name,
                 tools=[gemini_tools] if gemini_tools else None,
-                system_instruction=(
-                    "You are a high-performance Autonomous AI Agent. 請以繁體中文回覆。\n"
-                    "知識庫說明：\n"
-                    "- 'File [...]' 代表使用者工作區實體檔案內容（包含圖片原生視覺內容）。\n"
-                    "- 'Skill [...]' 代表您擁有的技能/工具文件內容。\n"
-                    "請優先根據參考資料回答，並嚴格區分「檔案內容」與「技能定義」。"
-                ),
+                system_instruction=system_instruction_text,
                 generation_config={"temperature": temperature}
             )
 
             # Build Gemini history from messages (excluding the last one which is current turn)
+            # Also strip system message since it's handled by system_instruction
             gemini_history = []
             if messages and len(messages) > 1:
-                gemini_history = self._build_gemini_history(messages[:-1])
+                non_system_msgs = [m for m in messages if m.get("role") != "system"]
+                gemini_history = self._build_gemini_history(non_system_msgs[:-1])
             
             chat = model.start_chat(history=gemini_history)
             
