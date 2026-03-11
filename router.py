@@ -129,6 +129,33 @@ def _delta_index_skills(uma, retriever) -> dict:
     return summary
 
 
+@app.get("/api/models", tags=["System"])
+def get_available_models():
+    """Return a list of available models based on .env configuration."""
+    models = []
+    
+    # Check OpenAI
+    if os.getenv("OPENAI_API_KEY"):
+        m = os.getenv("OPENAI_MODEL", "gpt-4o")
+        models.append({"provider": "openai", "model": m, "display_name": f"⚡ OpenAI ({m})"})
+        
+    # Check Gemini
+    if os.getenv("GEMINI_API_KEY"):
+        m = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        models.append({"provider": "gemini", "model": m, "display_name": f"✦ Google Gemini ({m})"})
+        
+    # Check Claude
+    if os.getenv("ANTHROPIC_API_KEY"):
+        m = os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
+        models.append({"provider": "claude", "model": m, "display_name": f"◆ Anthropic Claude ({m})"})
+        
+    # Fallback if no keys are set
+    if not models:
+        models.append({"provider": "openai", "model": "gpt-4o", "display_name": "⚡ OpenAI GPT-4o (No Key Set)"})
+        
+    return {"status": "success", "models": models}
+
+
 @app.on_event("startup")
 async def index_all_skills():
     """Plan A+C: Async startup — server is immediately available.
@@ -245,8 +272,12 @@ def build_system_prompt(selected_docs: list = None) -> str:
                 doc_names.append(f"  - {original_name}")
         except Exception:
             doc_names = [f"  - {f.name}" for f in doc_files]
-
-    doc_block = "\n".join(doc_names) if doc_names else "  （無已上傳文件）"
+        doc_block = "\n".join(doc_names)
+    else:
+        if not all_doc_files:
+            doc_block = "  （資料區目前為空，無任何文件）"
+        else:
+            doc_block = "  （注意：您目前「未勾選」任何文件進行對話分析）"
 
     prompt = (
         "你是研發組 MCP Agent Console 的 AI 助理。\n"
@@ -291,8 +322,14 @@ def _make_llm_callable():
     adapter = OpenAIAdapter(uma)
     if adapter.is_available:
         def caller(prompt: str) -> str:
-            r = adapter.simple_chat([{"role": "user", "content": prompt}])
-            return r.get("content", "") if r.get("status") == "success" else ""
+            # Since adapters now return generators, we need to consume it to get the final result
+            gen = adapter.simple_chat([{"role": "user", "content": prompt}])
+            final_text = ""
+            for chunk in gen:
+                if chunk.get("status") == "success":
+                    final_text = chunk.get("content", "")
+                    break
+            return final_text
         return caller
     return None  # Fallback: session.py will write turn-count placeholder
 
@@ -302,11 +339,15 @@ def _make_llm_callable():
 class ChatRequest(BaseModel):
     user_input: str
     session_id: Optional[str] = "default"
-    model: Optional[str] = "openai"
-    injected_skill: Optional[str] = None  # For "Attach Skill" feature
-    execute: Optional[bool] = False       # Switch to agent mode for executing skills
-    attached_file: Optional[str] = None   # Absolute path of uploaded workspace file
+    model: Optional[str] = "openai"           # Example: "openai", "gemini", or "gpt-4o", "ollama/llama3"
+    provider: Optional[str] = None            # Example: "openai", "gemini", "claude", or self-hosted
+    api_base: Optional[str] = None            # For custom endpoints (e.g. Ollama, vLLM, Groq)
+    api_key: Optional[str] = None             # For custom API keys
+    injected_skill: Optional[str] = None      # For "Attach Skill" feature
+    execute: Optional[bool] = False           # Switch to agent mode for executing skills
+    attached_file: Optional[str] = None       # Absolute path of uploaded workspace file
     selected_docs: Optional[List[str]] = None # List of filenames user selected in UI
+    temperature: Optional[float] = 0.7        # LLM temperature
 
 
 class RenameRequest(BaseModel):
@@ -357,7 +398,40 @@ def health_check():
     }
 
 
-# ─── UBER FILE UPLOAD MGR ─────────────────────────────────────────────────────
+# ─── API Routes ───────────────────────────────────────────────────────────────
+
+@app.get("/api/models", tags=["System"])
+def get_available_models():
+    """
+    動態回傳可用模型清單，讓前端動態渲染下拉選單。
+    如果 .env 裡面有特別設定，也可以動態讀取。
+    """
+    models = []
+    
+    # 1. Check OpenAI API Key or Custom Endpoint
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    openai_base = os.getenv("OPENAI_BASE_URL", "").strip()
+    # If key exists OR a custom base url is provided, enable OpenAI architecture models
+    if openai_key or openai_base:
+        default_model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        models.append({"provider": "openai", "model": default_model, "label": f"OpenAI ({default_model})"})
+        if openai_base:
+             # Just an example to show it's a custom endpoint, frontend can see the custom url if needed
+             models.append({"provider": "openai", "model": default_model, "label": f"Custom API ({default_model})", "isCustom": True})
+
+    # 2. Check Gemini
+    if os.getenv("GEMINI_API_KEY", "").strip():
+        models.append({"provider": "gemini", "model": "gemini-1.5-pro", "label": "Google Gemini 1.5 Pro"})
+        models.append({"provider": "gemini", "model": "gemini-1.5-flash", "label": "Google Gemini 1.5 Flash"})
+
+    # 3. Check Claude
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        models.append({"provider": "claude", "model": "claude-3-5-sonnet-20240620", "label": "Anthropic Claude 3.5"})
+        
+    return {"status": "success", "models": models}
+
+
+# ─── Health ───────────────────────────────────────────────────────────────────
 
 @app.post("/api/documents/upload", tags=["Documents"])
 async def upload_document(file: UploadFile = File(...), background_tasks: BackgroundTasks = BackgroundTasks()):
@@ -467,6 +541,15 @@ async def add_url_source(req: UrlSourcingRequest):
         
         final_path.write_text(md_content, encoding="utf-8")
         
+        # Persist original name to .names.json
+        names_file = WORKSPACE_DIR / ".names.json"
+        try:
+            names = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
+            names[filename] = title
+            names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Failed to update .names.json for URL: {e}")
+
         return {
             "status": "success",
             "filename": filename,
@@ -618,6 +701,15 @@ async def add_text_source(req: TextSourcingRequest):
         
         final_path.write_text(content, encoding="utf-8")
         
+        # Persist original name to .names.json
+        names_file = WORKSPACE_DIR / ".names.json"
+        try:
+            names = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
+            names[filename] = name
+            names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Failed to update .names.json for pasted text: {e}")
+
         return {
             "status": "success",
             "filename": filename,
@@ -681,6 +773,19 @@ def delete_document_endpoint(filename: str):
 
     # Remove from disk
     target.unlink()
+
+    # Clean up .names.json registry
+    names_file = WORKSPACE_DIR / ".names.json"
+    if names_file.exists():
+        try:
+            names = json.loads(names_file.read_text(encoding="utf-8"))
+            if filename in names:
+                del names[filename]
+                names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+                logger.info(f"Removed metadata entry from .names.json: {filename}")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup .names.json during deletion: {e}")
+
     logger.info(f"Deleted file and FAISS index: {filename}")
     invalidate_prompt_cache()  # Doc count changed
     return {"status": "success", "message": f"'{filename}' 已刪除"}
@@ -796,38 +901,104 @@ async def chat(req: ChatRequest):
             meta = skill_data["metadata"]
             skill_context = f"\n\n[技能參考 — {req.injected_skill}] {meta.get('description', '無描述')}"
 
-    # 3.5. RAG: Semantic heuristic — Dual check for Workspace Docs and Skills
+    # 3.5. RAG & Vision Routing: Distinguish between text docs (RAG) and images (Native Vision)
     from core.retriever import retriever as _retriever
     rag_context = ""
-    # Only try to retrieve if at least one doc is unchecked, or if there's no selected_docs array (empty array means no docs allowed)
-    should_retrieve_docs = req.selected_docs is None or len(req.selected_docs) > 0
+    visual_docs = []
+    
+    # Load original filename registry
+    names_file = WORKSPACE_DIR / ".names.json"
+    try:
+        fn_map = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
+    except Exception:
+        fn_map = {}
+    
+    # Identify images for Native Vision (NotebookLM Style)
+    text_docs = []
+    if req.selected_docs:
+        for doc in req.selected_docs:
+            if doc.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                # Convert to absolute path for Adapter
+                img_path = WORKSPACE_DIR / doc
+                if img_path.exists():
+                    visual_docs.append(str(img_path))
+            else:
+                text_docs.append(doc)
+    else:
+        text_docs = None # Implies all if not empty selection
+
+    # Handle Empty Selection
+    is_empty_selection = req.selected_docs is not None and len(req.selected_docs) == 0
+    should_retrieve_docs = not is_empty_selection and (text_docs is None or len(text_docs) > 0)
+    
+    # NEW: Detect if user is specifically asking "What's in the knowledge base?"
+    knowledge_query_keywords = {"知識庫", "文件", "哪些", "有什麼", "檔名", "清單", "list", "documents", "knowledge base"}
+    is_strict_knowledge_query = any(k in req.user_input for k in knowledge_query_keywords)
+
+    current_temp = req.temperature if req.temperature is not None else 0.7
+
+    if is_empty_selection:
+        rag_context = "\n\n[核心狀態：未選取文件]\n注意：您目前「未選取」任何知識庫文件進行分析。如果用戶詢問文件內容，請誠實回答未選取文件。\n"
+
     if _should_trigger_rag(req.user_input):
         doc_results = ""
         if should_retrieve_docs:
-            # Dynamic top_k: at least 1 chunk per selected file + 2 extra for depth
-            num_docs = len(req.selected_docs) if req.selected_docs else 3
+            num_docs = len(text_docs) if text_docs else 3
             doc_top_k = max(3, num_docs + 2)
-            doc_results = _retriever.search_context(req.user_input, top_k=doc_top_k, filter_type="workspace", allowed_filenames=req.selected_docs)
-        skill_results = _retriever.search_context(req.user_input, top_k=2, filter_type="skill")
+            doc_results = _retriever.search_context(req.user_input, top_k=doc_top_k, filter_type="workspace", allowed_filenames=text_docs)
         
-        if doc_results or skill_results:
-            rag_context = "\n\n[語意檢索結果]\n"
+        # LOGIC CHANGE: If it's a knowledge list query and no docs are selected, 
+        # DO NOT inject skills to prevent AI from "filling the gap" with skills.
+        skill_results = ""
+        if not (is_strict_knowledge_query and is_empty_selection):
+            skill_results = _retriever.search_context(req.user_input, top_k=2, filter_type="skill")
+        
+        if doc_results or skill_results or visual_docs:
+            current_temp = 0.1 
+            rag_context = "\n\n[檢索資料分集]\n"
+            
             if doc_results:
+                # POWERFUL PRE-PROCESSOR: Replace all hashed filenames with original names IN THE CHUNKS
+                # This ensures the LLM NEVER sees the hash, only the original name.
+                import re
+                def _restore_name(match):
+                    hname = match.group(1)
+                    # Support both [hash#chunk] and [hash]
+                    real_name = fn_map.get(hname, hname)
+                    return f"File [{real_name}"
+
+                # Pattern: matches "File [anything_before_#_or_]"
+                processed_docs = re.sub(r'File \[([a-z0-9.]+)(?=[#\]])', _restore_name, doc_results)
+                
+                rag_context += f"### A. 【知識庫文字內容】\n{processed_docs}\n\n"
+            
+            if visual_docs:
+                img_lines = []
+                for p in visual_docs:
+                    hname = os.path.basename(p)
+                    oname = fn_map.get(hname, hname)
+                    img_lines.append(f"  - 原始名稱: 【{oname}】（內部 ID 勿外露: {hname}）")
+
                 rag_context += (
-                    f"【知識庫文件內容】（請以此為分析基底，如 NotebookLM 重點參照）\n{doc_results}\n\n"
+                    f"### B. 【知識庫視覺內容】\n"
+                    f"以下圖片已透過原生視覺管道傳入，請直接觀看分析。\n"
+                    f"【重要】回覆時必須使用「原始名稱」稱呼圖片，嚴禁使用「內部 ID」！\n"
+                    f"{chr(10).join(img_lines)}\n\n"
                 )
+
             if skill_results:
                 rag_context += (
-                    f"【內部技能設定參考】\n{skill_results}\n\n"
+                    f"### C. 【系統可用技能說明】 (注意：這不是使用者文件)\n"
+                    f"這部分僅供您了解有哪些數位工具可用，請勿將其內容列入「文件」清單：\n{skill_results}\n\n"
                 )
             
             rag_context += (
                 f"---\n"
-                f"【分析與回答準則】\n"
-                f"1. NotebookLM 風格：你的回答應「深度依賴」上述【知識庫文件內容】。使用者會依據這些文件來設計工作流程與系統技能，請以這些文件作為分析與評估的首要基底。\n"
-                f"2. 允許使用者同時查閱「技能」與「文件」，請根據問題語意自行判斷應查閱與比對哪一部分。\n"
-                f"3. 強制引用：引用知識庫內容時，句末必須標示來源，格式：[filename#chunk_x: 引用片段]。\n"
-                f"4. 若檢索結果不包含使用者所問的資訊，請明白告知「知識庫中缺乏相關資訊」，絕不可自行編造。\n"
+                f"【回答框架要求】\n"
+                f"1. 原始名稱優先：回覆時請務必使用檔案的「原始檔名」（如 _DSC9239.jpg），而非系統雜湊 ID。\n"
+                f"2. 嚴格分類：回覆時請明確建立「文件分析」與「系統技能」兩大範疇，禁止交叉混淆。\n"
+                f"3. 承認視覺存有：若 B 區有圖片，請主動說明您已『看見』該圖片並據此分析，展現原生視覺能力。\n"
+                f"4. 深度解析：對 A、B 區內容請進行詳盡且長篇幅的解說（如同論文分析或專業報告）。\n"
             )
 
     # 4. Append user message
@@ -840,12 +1011,33 @@ async def chat(req: ChatRequest):
 
     # 5. Select adapter and call appropriate mode (chat vs simple_chat)
     try:
-        if req.model == "openai":
-            adapter = OpenAIAdapter(uma)
-        elif req.model == "gemini":
-            adapter = GeminiAdapter(uma)
+        # Resolve provider from model string if not explicit
+        provider = req.provider
+        model_name = req.model
+
+        if not provider:
+            if model_name.startswith("gemini"):
+                provider = "gemini"
+            elif model_name.startswith("claude"):
+                provider = "claude"
+            else:
+                provider = "openai" # Default to OpenAI architecture (which supports ollama, vllm, Custom URLs, Groq etc)
+
+        # Dynamic Provider Dispatch
+        if provider == "gemini":
+            from adapters.gemini_adapter import GeminiAdapter
+            adapter = GeminiAdapter(uma=uma, model=model_name)
+        elif provider == "claude":
+            from adapters.claude_adapter import ClaudeAdapter
+            adapter = ClaudeAdapter(uma=uma, model=model_name)
         else:
-            adapter = ClaudeAdapter(uma)
+            # Universal OpenAI-compatible dispatch
+            adapter = OpenAIAdapter(
+                uma=uma, 
+                model=model_name, 
+                api_base=req.api_base, 
+                api_key=req.api_key
+            )
 
         if not adapter.is_available:
             return JSONResponse(status_code=503, content={
@@ -853,36 +1045,84 @@ async def chat(req: ChatRequest):
                 "message": f"模型 {req.model} 無法使用，請確認 API Key 是否設定於 .env"
             })
 
+        # Build display-name mapping for visual docs (path -> original name)
+        visual_docs_display_names = {}
+        for p in visual_docs:
+            hname = os.path.basename(p)
+            visual_docs_display_names[p] = fn_map.get(hname, hname)
+
         kwargs = {
             "session_id": req.session_id,
-            "attached_file": req.attached_file
+            "attached_file": req.attached_file,
+            "injected_skill": req.injected_skill,
+            "temperature": current_temp,
+            "visual_docs": visual_docs,
+            "visual_docs_display_names": visual_docs_display_names,
         }
 
-        if req.execute:
-            # Agent Mode -> full chat with tool calling
-            # D-12: Unified interface — all adapters receive agent_history + user_query
-            agent_history = [m for m in history_to_pass if m.get("role") != "system"]
-            result = adapter.chat(messages=agent_history, user_query=user_content, **kwargs)
-        else:
-            # Pure Chat Mode -> no tools
-            result = adapter.simple_chat(history_to_pass, **kwargs)
+        # Phase 3: Unify execution. Always use .chat if a skill is involved or as default intelligent mode.
+        # We filter out system messages from history to let the adapter handle system prompt building.
+        agent_history = [m for m in history_to_pass if m.get("role") != "system"]
+        
+        # Always use adapter.chat for auto tool-calling capabilities. 
+        # The adapter will decide based on the model's capabilities whether to use tools.
+        result_gen = adapter.chat(messages=agent_history, user_query=user_content, **kwargs)
 
     except Exception as e:
-        logger.error(f"Chat error: {e}")
+        logger.error(f"Chat setup error: {e}")
         return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
-    # 6. Append assistant reply to history Manager
-    if result.get("status") == "success":
-        # D-07: Unified SessionManager handles appending and compressing memory
+    from sse_starlette.sse import EventSourceResponse
+    import json
+    import asyncio
+
+    async def event_generator():
+        # Append user message immediately
         _session_mgr.append_message(req.session_id, "user", req.user_input)
-        _session_mgr.append_message(req.session_id, "assistant", result["content"])
+        
+        final_content = ""
+        accumulated_content = ""
+        
+        try:
+            for chunk in result_gen:
+                if chunk.get("status") == "success":
+                    final_content = chunk.get("content", "")
+                    yield dict(data=json.dumps(chunk, ensure_ascii=False))
+                    break
+                elif chunk.get("status") == "requires_approval":
+                    yield dict(data=json.dumps(chunk, ensure_ascii=False))
+                    break
+                elif chunk.get("status") == "streaming" and chunk.get("content"):
+                    text = chunk["content"]
+                    accumulated_content += text
+                    # 若為單純文字的 Streaming，則在後端強制打散為逐字渲染，製造穩定順暢的打字機體驗
+                    for char in text:
+                        char_chunk = {"status": "streaming", "content": char}
+                        yield dict(data=json.dumps(char_chunk, ensure_ascii=False))
+                        await asyncio.sleep(0.015)  # 調整此數值來控制打字機速度 (0.015s 約為每秒 60 字)
+                else:
+                    yield dict(data=json.dumps(chunk, ensure_ascii=False))
+                    await asyncio.sleep(0.01)
+                
+        except Exception as e:
+            logger.error(f"Stream rendering error: {e}")
+            yield dict(data=json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False))
+            return
+            
+        finally:
+            # 使用 finally 保證不論是正常 yield 完畢還是中途斷線，只要有產出都會寫入記憶
+            content_to_save = final_content if final_content else accumulated_content
+            
+            if content_to_save and not getattr(req, '_memory_saved', False):
+                _session_mgr.append_message(req.session_id, "assistant", content_to_save)
+                req._memory_saved = True
 
-        # Auto-flush every 5 messages using LLM summarization
-        conv_len = len(_session_mgr.get_or_create_conversation(req.session_id))
-        if conv_len > 0 and conv_len % 5 == 0:
-            _session_mgr.flush_with_llm_summary(req.session_id, _make_llm_callable())
+                # Auto-flush every 5 messages using LLM summarization
+                conv_len = len(_session_mgr.get_or_create_conversation(req.session_id))
+                if conv_len > 0 and conv_len % 5 == 0:
+                    _session_mgr.flush_with_llm_summary(req.session_id, _make_llm_callable())
 
-    return result
+    return EventSourceResponse(event_generator())
 
 
 @app.post("/chat/flush/{session_id}", tags=["Chat"])
@@ -897,6 +1137,14 @@ def clear_session(session_id: str):
     """Clear a conversation session (reset context)."""
     _session_mgr.clear_conversation(session_id)
     return {"status": "success", "message": f"Session '{session_id}' cleared"}
+
+@app.get("/chat/session/{session_id}", tags=["Chat"])
+def get_session_history(session_id: str):
+    """Get the conversation history for a session."""
+    history = _session_mgr.get_or_create_conversation(session_id)
+    # Filter out system prompts to only return user/assistant interaction
+    chat_history = [m for m in history if m.get("role") != "system"]
+    return {"status": "success", "history": chat_history}
 
 
 # ─── SKILL MANAGEMENT ─────────────────────────────────────────────────────────

@@ -20,9 +20,10 @@ except ImportError:
 class GeminiAdapter:
     """Adapter for Google Gemini models with function calling support."""
 
-    def __init__(self, uma):
+    def __init__(self, uma, model: Optional[str] = None):
         self.uma = uma
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        # 1. Resolve Model: use passed model or fallback to env var
+        self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
         self.model = None
         self._uploaded_files_cache = {}
 
@@ -31,12 +32,80 @@ class GeminiAdapter:
             if api_key:
                 genai.configure(api_key=api_key)
                 logger.info(f"Gemini adapter initialized with model: {self.model_name}")
+                print(f"[RELOAD] GeminiAdapter initialized (Model: {self.model_name})")
             else:
                 logger.warning("GEMINI_API_KEY not set. Gemini adapter disabled.")
 
     @property
     def is_available(self) -> bool:
         return GEMINI_AVAILABLE and os.getenv("GEMINI_API_KEY") is not None
+
+    def _extract_text(self, content: Any) -> str:
+        """Extracts plain text from either string or OpenAI-style multi-modal content list."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            text_parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text_parts.append(part.get("text", ""))
+                elif isinstance(part, str):
+                    text_parts.append(part)
+            return " ".join(text_parts)
+        return str(content)
+
+    def _build_gemini_history(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Builds a valid Gemini history from OpenAI-style messages.
+        - Filters out 'system' roles (used in model init).
+        - Merges consecutive messages with the same role.
+        - Ensures roles alternate (user -> model -> user).
+        - Ensures parts are never empty.
+        """
+        if not messages:
+            return []
+
+        cleaned_history = []
+        for m in messages:
+            role = m.get("role")
+            if role == "system":
+                continue
+            
+            gemini_role = "model" if role == "assistant" else "user"
+            parts = self._to_gemini_parts(m.get("content", ""))
+            
+            # Ensure parts is never empty
+            if not parts:
+                parts = ["(no text content)"]
+
+            if cleaned_history and cleaned_history[-1]["role"] == gemini_role:
+                # Merge consecutive same-role messages
+                cleaned_history[-1]["parts"].extend(parts)
+            else:
+                cleaned_history.append({"role": gemini_role, "parts": parts})
+
+        # Gemini history MUST start with 'user'
+        while cleaned_history and cleaned_history[0]["role"] != "user":
+            cleaned_history.pop(0)
+
+        return cleaned_history
+
+    def _to_gemini_parts(self, content: Any) -> list:
+        """Converts OpenAI-style multi-modal content to Gemini parts list."""
+        if isinstance(content, str):
+            return [content]
+        if isinstance(content, list):
+            gemini_parts = []
+            for part in content:
+                if isinstance(part, str):
+                    gemini_parts.append(part)
+                elif isinstance(part, dict):
+                    if part.get("type") == "text":
+                        gemini_parts.append(part.get("text", ""))
+                    # Note: image_url or blocks are handled separately via upload in Gemini
+                    # but we keep text for history context
+            return gemini_parts
+        return [str(content)]
 
     def _handle_attached_file(self, attached_file: Optional[str], session_id: Optional[str]) -> list:
         """Uploads file to Google AI (or uses cached) and returns parts list."""
@@ -81,7 +150,7 @@ class GeminiAdapter:
 
         return all_tools
 
-    def chat(self, messages: Any = None, user_query: Optional[str] = None, user_message: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None) -> Dict[str, Any]:
+    def chat(self, messages: Any = None, user_query: Optional[str] = None, user_message: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7, **kwargs) -> Dict[str, Any]:
         """
         Send a chat request with function calling support.
         D-09: Supports multi-turn tool calls (up to MAX_ITERATIONS).
@@ -101,8 +170,11 @@ class GeminiAdapter:
         if not user_query and messages:
             for msg in reversed(messages):
                 if msg.get("role") == "user":
-                    user_query = msg["content"]
+                    user_query = self._extract_text(msg["content"])
                     break
+
+        # Ensure user_query is a string for RAG and tool selection
+        user_query = self._extract_text(user_query) if user_query else ""
 
         if not user_query:
             return {"status": "error", "message": "No user query provided"}
@@ -111,18 +183,38 @@ class GeminiAdapter:
         from core.retriever import retriever
         retrieved_context = retriever.search_context(user_query)
         
+        visual_parts = []
+        visual_docs = kwargs.get("visual_docs", [])
+        visual_docs_display_names = kwargs.get("visual_docs_display_names", {})
+        import os as _os
+        
+        # Process attached_file (Legacy/Upload)
+        if attached_file:
+            visual_parts.extend(self._handle_attached_file(attached_file, session_id))
+            
+        # Process visual_docs (New: NotebookLM Style selected docs)
+        for doc_path in visual_docs:
+            display_name = visual_docs_display_names.get(doc_path, _os.path.basename(doc_path))
+            visual_parts.append(f"[圖片名稱: {display_name}]")
+            visual_parts.extend(self._handle_attached_file(doc_path, session_id))
+
         if retrieved_context:
             augmented_query = f"""[System Instruction]
-請務必根據下方提供的參考資料來回答問題。在回答時，若有引用資料片斷，請嚴格遵守標示出處格式，例如 "[文件名稱#chunk_0:片段]"。
-若參考資料未能解答問題，請老實回答不知道或根據您的既有知識依現狀客觀回答。
+請務必根據下方提供的參考資料來回答問題。在回答時，若有引用資料片斷，請嚴格遵守標示出處格式，例如 "[文件或技能名稱#chunk_0:片段]"。
+注意：資料來源標註為 'File [...]' 表實體文件；'Skill [...]' 表您的技能手冊。
 
-[Reference Documents]
+[Reference Context]
 {retrieved_context}
 
 [User Question]
 {user_query}"""
         else:
             augmented_query = user_query
+
+        # Multi-modal injection
+        if visual_parts:
+            # We wrap the augmented_query with images as parts
+            augmented_query = visual_parts + [augmented_query]
 
         tools = self.get_tools(user_query=user_query)
 
@@ -142,70 +234,125 @@ class GeminiAdapter:
 
             model = genai.GenerativeModel(
                 model_name=self.model_name,
-                tools=[gemini_tools] if gemini_tools else None
+                tools=[gemini_tools] if gemini_tools else None,
+                system_instruction=(
+                    "You are a high-performance Autonomous AI Agent. 請以繁體中文回覆。\n"
+                    "知識庫說明：\n"
+                    "- 'File [...]' 代表使用者工作區實體檔案內容（包含圖片原生視覺內容）。\n"
+                    "- 'Skill [...]' 代表您擁有的技能/工具文件內容。\n"
+                    "請優先根據參考資料回答，並嚴格區分「檔案內容」與「技能定義」。"
+                ),
+                generation_config={"temperature": temperature}
             )
 
-            chat = model.start_chat()
+            # Build Gemini history from messages (excluding the last one which is current turn)
+            gemini_history = []
+            if messages and len(messages) > 1:
+                gemini_history = self._build_gemini_history(messages[:-1])
+            
+            chat = model.start_chat(history=gemini_history)
             
             upload_parts = self._handle_attached_file(attached_file, session_id)
-            if upload_parts:
-                message_parts = upload_parts + [augmented_query]
-                response = chat.send_message(message_parts)
-            else:
-                response = chat.send_message(augmented_query)
+            message_parts = upload_parts + [augmented_query] if upload_parts else augmented_query
+
+            response = chat.send_message(message_parts, stream=True)
+            logger.info(f"Gemini: Message sent. Parts={len(message_parts) if isinstance(message_parts, list) else 1}")
 
             tool_calls_made = 0
             MAX_ITERATIONS = 10
 
+            full_content = ""
             for _ in range(MAX_ITERATIONS):
                 has_function_call = False
-                if response.candidates[0].content.parts:
-                    for part in response.candidates[0].content.parts:
-                        if hasattr(part, "function_call") and part.function_call:
-                            has_function_call = True
-                            fn_call = part.function_call
-                            fn_name = fn_call.name
-                            fn_args = dict(fn_call.args) if fn_call.args else {}
+                pending_calls = []
+                
+                try:
+                    # 1. Consume current stream exhaustively
+                    for chunk in response:
+                        if not chunk.candidates:
+                            continue
+                        
+                        cand = chunk.candidates[0]
+                        if cand.content and cand.content.parts:
+                            for part in cand.content.parts:
+                                # Handle text
+                                if hasattr(part, "text") and part.text:
+                                    full_content += part.text
+                                    yield {"status": "streaming", "content": part.text}
+                                
+                                # Handle function calls
+                                fn_call = getattr(part, "function_call", None)
+                                if fn_call:
+                                    has_function_call = True
+                                    fn_name = fn_call.name if hasattr(fn_call, "name") else fn_call.get("name")
+                                    fn_args = dict(fn_call.args) if hasattr(fn_call, "args") else dict(fn_call.get("args", {}))
+                                    pending_calls.append((fn_name, fn_args))
+                                    
+                                    logger.info(f"Gemini detected tool: {fn_name}")
+                                    yield {"status": "streaming", "content": f"\n\n⚙️ 執行技能: `{fn_name}`\n"}
 
-                            logger.info(f"Gemini function call: {fn_name}({fn_args})")
-                            result = self.uma.execute_tool_call(fn_name, fn_args)
+                    # 2. If no function calls, we are done
+                    if not has_function_call:
+                        yield {
+                            "status": "success",
+                            "content": full_content,
+                            "tool_calls_made": tool_calls_made
+                        }
+                        return
 
-                            if result.get("status") == "requires_approval":
-                                return {
-                                    "status": "requires_approval",
-                                    "tool_name": fn_name,
-                                    "risk_description": result.get("risk_description", "High-risk operation detected"),
-                                    "pending_args": fn_args
-                                }
+                    # 3. Execute all detected calls
+                    tool_results_parts = []
+                    for fn_name, fn_args in pending_calls:
+                        result = self.uma.execute_tool_call(fn_name, fn_args)
 
-                            # Send function result back and continue loop
-                            response = chat.send_message(
-                                genai.protos.Content(
-                                    parts=[genai.protos.Part(
-                                        function_response=genai.protos.FunctionResponse(
-                                            name=fn_name,
-                                            response={"result": result}
-                                        )
-                                    )]
+                        # Check for approval requirement
+                        if result.get("status") == "requires_approval":
+                            yield {
+                                "status": "requires_approval",
+                                "tool_name": fn_name,
+                                "risk_description": result.get("risk_description", "High-risk operation"),
+                                "pending_args": fn_args
+                            }
+                            return
+
+                        tool_results_parts.append(
+                            genai.protos.Part(
+                                function_response=genai.protos.FunctionResponse(
+                                    name=fn_name,
+                                    response={"result": result}
                                 )
                             )
-                            tool_calls_made += 1
-                            break  # Re-check the new response for more tool calls
+                        )
 
-                if not has_function_call:
-                    break  # No more tool calls, exit loop
+                    # 4. Send all results back in one go
+                    response = chat.send_message(
+                        genai.protos.Content(parts=tool_results_parts),
+                        stream=True
+                    )
+                    tool_calls_made += 1
 
-            return {
+                except Exception as stream_err:
+                    import traceback
+                    logger.error(f"Gemini stream error: {stream_err}\n{traceback.format_exc()}")
+                    if "SAFETY" in str(stream_err):
+                        yield {"status": "error", "message": "內容觸發 Gemini 安全過濾機制。"}
+                        return
+                    raise stream_err
+
+            yield {
                 "status": "success",
-                "content": response.text if hasattr(response, "text") else str(response),
+                "content": full_content + f"\n\n(已達最大工具呼叫次數 {MAX_ITERATIONS} 輪，強制結束)",
                 "tool_calls_made": tool_calls_made
             }
+            return
 
         except Exception as e:
-            logger.error(f"Gemini chat error: {e}")
-            return {"status": "error", "message": str(e)}
+            import traceback
+            error_details = traceback.format_exc()
+            logger.error(f"Gemini chat error: {e}\n{error_details}")
+            yield {"status": "error", "message": f"Gemini Error: {str(e)}"}
 
-    def simple_chat(self, session_history: list, session_id: Optional[str] = None, attached_file: Optional[str] = None) -> dict:
+    def simple_chat(self, session_history: list, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7) -> dict:
         """
         Pure LLM conversation — NO tools, NO skill schema injection.
         Strictly isolated from skill execution.
@@ -232,12 +379,13 @@ class GeminiAdapter:
                 elif role == "assistant":
                     role = "model"
                 if content:
-                    gemini_history.append({"role": role, "parts": [content]})
+                    gemini_history.append({"role": role, "parts": self._to_gemini_parts(content)})
                     if role == "user":
-                        last_user_msg = content
+                        last_user_msg = self._extract_text(content)
 
             model = genai.GenerativeModel(
-                model_name=self.model_name
+                model_name=self.model_name,
+                generation_config={"temperature": temperature}
                 # NOTE: No tools= passed — strictly isolated
             )
             chat = model.start_chat(history=gemini_history[:-1] if len(gemini_history) > 1 else [])
@@ -262,12 +410,17 @@ class GeminiAdapter:
             upload_parts = self._handle_attached_file(attached_file, session_id)
             if upload_parts:
                 message_parts = upload_parts + [augmented_msg]
-                response = chat.send_message(message_parts)
+                response = chat.send_message(message_parts, stream=True)
             else:
-                response = chat.send_message(augmented_msg)
+                response = chat.send_message(augmented_msg, stream=True)
                 
-            return {"status": "success", "content": response.text}
+            full_content = ""
+            for chunk in response:
+                if chunk.text:
+                    full_content += chunk.text
+                    yield {"status": "streaming", "content": chunk.text}
+
+            yield {"status": "success", "content": full_content}
         except Exception as e:
             logger.error(f"Gemini simple_chat error: {e}")
-            return {"status": "error", "message": str(e)}
-
+            yield {"status": "error", "message": str(e)}

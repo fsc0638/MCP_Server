@@ -156,6 +156,14 @@ class DocumentRetriever:
         """
         if self.vectorstore is None:
             return ""
+        
+        # Load filename mapping from .names.json (original name registry)
+        import json
+        _names_file = WORKSPACE_DIR / ".names.json"
+        try:
+            _fn_map = json.loads(_names_file.read_text(encoding="utf-8")) if _names_file.exists() else {}
+        except Exception:
+            _fn_map = {}
             
         try:
             # When we have specific files selected, ensure we get chunks from EACH file
@@ -170,6 +178,7 @@ class DocumentRetriever:
             if not docs:
                 return ""
 
+            logger.info(f"Retriever: query='{query}', k={top_k}, filter='{filter_type}'")
             context_parts = []
             for doc in docs:
                 filename = doc.metadata.get("filename", "Unknown")
@@ -180,18 +189,29 @@ class DocumentRetriever:
                 if filter_type == "skill" and has_ext:
                     continue
 
+                # Check if workspace file actually exists on disk (Self-healing)
+                if has_ext:
+                    if not (WORKSPACE_DIR / filename).exists():
+                        continue
+                
+                type_label = "File" if has_ext else "Skill"
                 keywords = doc.metadata.get("keywords", "")
                 chunk_idx = doc.metadata.get("chunk_index", 0)
                 
-                context_chunk = f"Document [{filename}#chunk_{chunk_idx}]:\n"
+                # Use original name from registry if available
+                display_name = _fn_map.get(filename, filename) if has_ext else filename
+                
+                context_chunk = f"{type_label} [{display_name}#chunk_{chunk_idx}]:\n"
                 if keywords:
                     context_chunk += f"(Keywords: {keywords})\n"
                 context_chunk += f"{doc.page_content}\n"
                 context_parts.append(context_chunk)
+                logger.debug(f"Retriever: Selected [{filename}] (type={type_label})")
 
                 if len(context_parts) >= top_k:
                     break
-
+            
+            logger.info(f"Retriever: Found {len(context_parts)} context parts.")
             return "\n---\n".join(context_parts)
             
         except Exception as e:
@@ -203,6 +223,14 @@ class DocumentRetriever:
         Diversified retrieval: guarantees at least 1 chunk per selected file,
         then fills remaining slots with globally most relevant chunks.
         """
+        # Load filename mapping from .names.json (original name registry)
+        import json
+        _names_file = WORKSPACE_DIR / ".names.json"
+        try:
+            _fn_map = json.loads(_names_file.read_text(encoding="utf-8")) if _names_file.exists() else {}
+        except Exception:
+            _fn_map = {}
+
         # Fetch a large pool of candidates
         num_files = len(allowed_filenames)
         fetch_k = max(top_k, num_files) * 20
@@ -221,6 +249,11 @@ class DocumentRetriever:
                 continue
             if filename not in per_file:
                 continue
+            
+            # Self-healing: skip chunks from files missing on disk
+            if not (WORKSPACE_DIR / filename).exists():
+                continue
+
             per_file[filename].append(doc)
 
         # Phase 1: pick the best chunk from each file (round-robin diversity)
@@ -249,10 +282,20 @@ class DocumentRetriever:
         context_parts = []
         for doc in selected:
             filename = doc.metadata.get("filename", "Unknown")
+            has_ext = bool(Path(filename).suffix)
+            
+            # Self-healing: skip chunks from files missing on disk
+            if has_ext and not (WORKSPACE_DIR / filename).exists():
+                continue
+
+            type_label = "File" if has_ext else "Skill"
             keywords = doc.metadata.get("keywords", "")
             chunk_idx = doc.metadata.get("chunk_index", 0)
 
-            context_chunk = f"Document [{filename}#chunk_{chunk_idx}]:\n"
+            # Use original name from registry if available
+            display_name = _fn_map.get(filename, filename) if has_ext else filename
+
+            context_chunk = f"{type_label} [{display_name}#chunk_{chunk_idx}]:\n"
             if keywords:
                 context_chunk += f"(Keywords: {keywords})\n"
             context_chunk += f"{doc.page_content}\n"

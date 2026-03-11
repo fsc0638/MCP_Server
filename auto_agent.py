@@ -70,7 +70,7 @@ def run_with_adapter(adapter, adapter_name, user_input, conversation_history):
         if adapter_name == "openai":
             # OpenAI adapter accepts messages list (multi-turn)
             conversation_history.append({"role": "user", "content": user_input})
-            result = adapter.chat(
+            result_gen = adapter.chat(
                 messages=list(conversation_history),  # send a copy
                 user_query=user_input
             )
@@ -89,7 +89,16 @@ def run_with_adapter(adapter, adapter_name, user_input, conversation_history):
             else:
                 full_prompt = user_input
             conversation_history.append({"role": "user", "content": user_input})
-            result = adapter.chat(full_prompt)
+            result_gen = adapter.chat(full_prompt)
+
+        # Consume generator to get final result
+        result = None
+        for chunk in result_gen:
+            if chunk.get("status") in ("success", "error", "requires_approval"):
+                result = chunk
+            # CLI mode: optionally print streaming content
+            if chunk.get("status") == "streaming" and chunk.get("content"):
+                print(chunk["content"], end="", flush=True)
 
         if result and result.get("status") == "success":
             # Save assistant response to history
@@ -129,12 +138,19 @@ def generate_session_summary(adapter, adapter_name, conversation_history, turn_c
 
     try:
         if adapter_name == "openai":
-            result = adapter.chat(
+            result_gen = adapter.chat(
                 messages=[{"role": "user", "content": summary_prompt}],
                 user_query=None  # No tool injection for summary
             )
         else:
-            result = adapter.chat(summary_prompt)
+            result_gen = adapter.chat(summary_prompt)
+
+        # Consume generator
+        result = None
+        for chunk in result_gen:
+            if chunk.get("status") == "success":
+                result = chunk
+                break
 
         if result and result.get("status") == "success":
             return result.get("content", "").strip()
