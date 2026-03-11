@@ -1781,3 +1781,18 @@ def search_resource(skill_name: str, file_name: str, request: SearchRequest):
     if result["status"] != "success":
         raise HTTPException(status_code=404, detail=result.get("message"))
     return result
+
+
+# ─── LINE Connector Integration ────────────────────────────────────────────────
+# Graceful degraded-mode: server starts normally even without line-bot-sdk.
+try:
+    from line_connector import router as _line_router
+    app.include_router(_line_router)
+    logger.info("[Startup] LINE Connector loaded — /api/line/webhook is active.")
+except ImportError:
+    logger.info(
+        "[Startup] LINE Connector skipped (line-bot-sdk not installed). "
+        "Run 'pip install line-bot-sdk>=3.0.0' to enable."
+    )
+except Exception as _e:
+    logger.warning(f"[Startup] LINE Connector failed to load: {_e}")
