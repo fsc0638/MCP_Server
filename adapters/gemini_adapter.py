@@ -150,7 +150,7 @@ class GeminiAdapter:
 
         return all_tools
 
-    def chat(self, messages: Any = None, user_query: Optional[str] = None, user_message: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    def chat(self, messages: Any = None, user_query: Optional[str] = None, user_message: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7, **kwargs) -> Dict[str, Any]:
         """
         Send a chat request with function calling support.
         D-09: Supports multi-turn tool calls (up to MAX_ITERATIONS).
@@ -183,6 +183,21 @@ class GeminiAdapter:
         from core.retriever import retriever
         retrieved_context = retriever.search_context(user_query)
         
+        visual_parts = []
+        visual_docs = kwargs.get("visual_docs", [])
+        visual_docs_display_names = kwargs.get("visual_docs_display_names", {})
+        import os as _os
+        
+        # Process attached_file (Legacy/Upload)
+        if attached_file:
+            visual_parts.extend(self._handle_attached_file(attached_file, session_id))
+            
+        # Process visual_docs (New: NotebookLM Style selected docs)
+        for doc_path in visual_docs:
+            display_name = visual_docs_display_names.get(doc_path, _os.path.basename(doc_path))
+            visual_parts.append(f"[圖片名稱: {display_name}]")
+            visual_parts.extend(self._handle_attached_file(doc_path, session_id))
+
         if retrieved_context:
             augmented_query = f"""[System Instruction]
 請務必根據下方提供的參考資料來回答問題。在回答時，若有引用資料片斷，請嚴格遵守標示出處格式，例如 "[文件或技能名稱#chunk_0:片段]"。
@@ -195,6 +210,11 @@ class GeminiAdapter:
 {user_query}"""
         else:
             augmented_query = user_query
+
+        # Multi-modal injection
+        if visual_parts:
+            # We wrap the augmented_query with images as parts
+            augmented_query = visual_parts + [augmented_query]
 
         tools = self.get_tools(user_query=user_query)
 
@@ -218,10 +238,11 @@ class GeminiAdapter:
                 system_instruction=(
                     "You are a high-performance Autonomous AI Agent. 請以繁體中文回覆。\n"
                     "知識庫說明：\n"
-                    "- 'File [...]' 代表使用者工作區實體檔案內容。\n"
+                    "- 'File [...]' 代表使用者工作區實體檔案內容（包含圖片原生視覺內容）。\n"
                     "- 'Skill [...]' 代表您擁有的技能/工具文件內容。\n"
                     "請優先根據參考資料回答，並嚴格區分「檔案內容」與「技能定義」。"
-                )
+                ),
+                generation_config={"temperature": temperature}
             )
 
             # Build Gemini history from messages (excluding the last one which is current turn)
@@ -331,7 +352,7 @@ class GeminiAdapter:
             logger.error(f"Gemini chat error: {e}\n{error_details}")
             yield {"status": "error", "message": f"Gemini Error: {str(e)}"}
 
-    def simple_chat(self, session_history: list, session_id: Optional[str] = None, attached_file: Optional[str] = None) -> dict:
+    def simple_chat(self, session_history: list, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7) -> dict:
         """
         Pure LLM conversation — NO tools, NO skill schema injection.
         Strictly isolated from skill execution.
@@ -363,7 +384,8 @@ class GeminiAdapter:
                         last_user_msg = self._extract_text(content)
 
             model = genai.GenerativeModel(
-                model_name=self.model_name
+                model_name=self.model_name,
+                generation_config={"temperature": temperature}
                 # NOTE: No tools= passed — strictly isolated
             )
             chat = model.start_chat(history=gemini_history[:-1] if len(gemini_history) > 1 else [])

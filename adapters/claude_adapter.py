@@ -20,10 +20,10 @@ except ImportError:
 class ClaudeAdapter:
     """Adapter for Anthropic Claude models with tool use support."""
 
-    def __init__(self, uma):
+    def __init__(self, uma, model: Optional[str] = None):
         self.uma = uma
         self.client = None
-        self.model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+        self.model = model or os.getenv("CLAUDE_MODEL", "claude-3-7-sonnet-20250219")
 
         if CLAUDE_AVAILABLE:
             api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -135,8 +135,11 @@ class ClaudeAdapter:
 
         # D-12: Use agent system prompt (not the pure-chat one)
         agent_system = system_prompt or (
-            "You are a helpful AI assistant with access to tools. "
-            "Use the provided tools to complete tasks. 請以繁體中文回覆。"
+            "You are a high-performance Autonomous AI Agent. 請以繁體中文回覆。\n"
+            "知識庫說明：\n"
+            "- 'File [...]' 代表使用者工作區實體檔案內容（包含圖片原生視覺內容）。\n"
+            "- 'Skill [...]' 代表您擁有的技能/工具文件內容。\n"
+            "請優先根據參考資料回答，並嚴格區分「檔案內容」與「技能定義」。"
         )
 
         # Dynamic RAG Context Retrieval
@@ -154,10 +157,27 @@ class ClaudeAdapter:
 [User Question]
 {user_query}"""
 
-        try:
-            # Build initial user message with potential image
-            img_part = self._handle_attached_file(attached_file)
+        # Multimodal Vision (NotebookLM Style)
+        visual_docs = kwargs.get("visual_docs", [])
+        visual_docs_display_names = kwargs.get("visual_docs_display_names", {})
+        import os as _os
+        all_visual_parts = []
+        
+        # 1. Attached file (Legacy)
+        img_part = self._handle_attached_file(attached_file)
+        if img_part:
+            all_visual_parts.append(img_part)
             
+        # 2. Selected Docs (New: visual_docs)
+        for doc_path in visual_docs:
+            display_name = visual_docs_display_names.get(doc_path, _os.path.basename(doc_path))
+            # Prepend text label, then image part
+            all_visual_parts.append({"type": "text", "text": f"[圖片名稱: {display_name}]"})
+            res = self._handle_attached_file(doc_path)
+            if res:
+                all_visual_parts.append(res)
+
+        try:
             # Start with provided history or just current query
             if messages:
                 claude_messages = []
@@ -181,19 +201,19 @@ class ClaudeAdapter:
                             claude_messages[i]["content"] = user_query
                         break
 
-                # Attach image to the LAST user message if applicable
-                if img_part:
+                # Attach all images to the LAST user message if applicable
+                if all_visual_parts:
                     for i in range(len(claude_messages)-1, -1, -1):
                         if claude_messages[i]["role"] == "user":
                             orig_c = claude_messages[i]["content"]
                             new_content = [{"type": "text", "text": orig_c}] if isinstance(orig_c, str) else orig_c
-                            new_content.append(img_part)
+                            new_content.extend(all_visual_parts)
                             claude_messages[i]["content"] = new_content
                             break
             else:
                 user_content = [{"type": "text", "text": user_query}]
-                if img_part:
-                    user_content.append(img_part)
+                if all_visual_parts:
+                    user_content.extend(all_visual_parts)
                 claude_messages = [{"role": "user", "content": user_content}]
             
             tool_calls_made = 0

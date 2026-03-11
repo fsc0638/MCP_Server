@@ -272,8 +272,12 @@ def build_system_prompt(selected_docs: list = None) -> str:
                 doc_names.append(f"  - {original_name}")
         except Exception:
             doc_names = [f"  - {f.name}" for f in doc_files]
-
-    doc_block = "\n".join(doc_names) if doc_names else "  （無已上傳文件）"
+        doc_block = "\n".join(doc_names)
+    else:
+        if not all_doc_files:
+            doc_block = "  （資料區目前為空，無任何文件）"
+        else:
+            doc_block = "  （注意：您目前「未勾選」任何文件進行對話分析）"
 
     prompt = (
         "你是研發組 MCP Agent Console 的 AI 助理。\n"
@@ -343,6 +347,7 @@ class ChatRequest(BaseModel):
     execute: Optional[bool] = False           # Switch to agent mode for executing skills
     attached_file: Optional[str] = None       # Absolute path of uploaded workspace file
     selected_docs: Optional[List[str]] = None # List of filenames user selected in UI
+    temperature: Optional[float] = 0.7        # LLM temperature
 
 
 class RenameRequest(BaseModel):
@@ -536,6 +541,15 @@ async def add_url_source(req: UrlSourcingRequest):
         
         final_path.write_text(md_content, encoding="utf-8")
         
+        # Persist original name to .names.json
+        names_file = WORKSPACE_DIR / ".names.json"
+        try:
+            names = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
+            names[filename] = title
+            names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Failed to update .names.json for URL: {e}")
+
         return {
             "status": "success",
             "filename": filename,
@@ -687,6 +701,15 @@ async def add_text_source(req: TextSourcingRequest):
         
         final_path.write_text(content, encoding="utf-8")
         
+        # Persist original name to .names.json
+        names_file = WORKSPACE_DIR / ".names.json"
+        try:
+            names = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
+            names[filename] = name
+            names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.warning(f"Failed to update .names.json for pasted text: {e}")
+
         return {
             "status": "success",
             "filename": filename,
@@ -750,6 +773,19 @@ def delete_document_endpoint(filename: str):
 
     # Remove from disk
     target.unlink()
+
+    # Clean up .names.json registry
+    names_file = WORKSPACE_DIR / ".names.json"
+    if names_file.exists():
+        try:
+            names = json.loads(names_file.read_text(encoding="utf-8"))
+            if filename in names:
+                del names[filename]
+                names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
+                logger.info(f"Removed metadata entry from .names.json: {filename}")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup .names.json during deletion: {e}")
+
     logger.info(f"Deleted file and FAISS index: {filename}")
     invalidate_prompt_cache()  # Doc count changed
     return {"status": "success", "message": f"'{filename}' 已刪除"}
@@ -865,38 +901,104 @@ async def chat(req: ChatRequest):
             meta = skill_data["metadata"]
             skill_context = f"\n\n[技能參考 — {req.injected_skill}] {meta.get('description', '無描述')}"
 
-    # 3.5. RAG: Semantic heuristic — Dual check for Workspace Docs and Skills
+    # 3.5. RAG & Vision Routing: Distinguish between text docs (RAG) and images (Native Vision)
     from core.retriever import retriever as _retriever
     rag_context = ""
-    # Only try to retrieve if at least one doc is unchecked, or if there's no selected_docs array (empty array means no docs allowed)
-    should_retrieve_docs = req.selected_docs is None or len(req.selected_docs) > 0
+    visual_docs = []
+    
+    # Load original filename registry
+    names_file = WORKSPACE_DIR / ".names.json"
+    try:
+        fn_map = json.loads(names_file.read_text(encoding="utf-8")) if names_file.exists() else {}
+    except Exception:
+        fn_map = {}
+    
+    # Identify images for Native Vision (NotebookLM Style)
+    text_docs = []
+    if req.selected_docs:
+        for doc in req.selected_docs:
+            if doc.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                # Convert to absolute path for Adapter
+                img_path = WORKSPACE_DIR / doc
+                if img_path.exists():
+                    visual_docs.append(str(img_path))
+            else:
+                text_docs.append(doc)
+    else:
+        text_docs = None # Implies all if not empty selection
+
+    # Handle Empty Selection
+    is_empty_selection = req.selected_docs is not None and len(req.selected_docs) == 0
+    should_retrieve_docs = not is_empty_selection and (text_docs is None or len(text_docs) > 0)
+    
+    # NEW: Detect if user is specifically asking "What's in the knowledge base?"
+    knowledge_query_keywords = {"知識庫", "文件", "哪些", "有什麼", "檔名", "清單", "list", "documents", "knowledge base"}
+    is_strict_knowledge_query = any(k in req.user_input for k in knowledge_query_keywords)
+
+    current_temp = req.temperature if req.temperature is not None else 0.7
+
+    if is_empty_selection:
+        rag_context = "\n\n[核心狀態：未選取文件]\n注意：您目前「未選取」任何知識庫文件進行分析。如果用戶詢問文件內容，請誠實回答未選取文件。\n"
+
     if _should_trigger_rag(req.user_input):
         doc_results = ""
         if should_retrieve_docs:
-            # Dynamic top_k: at least 1 chunk per selected file + 2 extra for depth
-            num_docs = len(req.selected_docs) if req.selected_docs else 3
+            num_docs = len(text_docs) if text_docs else 3
             doc_top_k = max(3, num_docs + 2)
-            doc_results = _retriever.search_context(req.user_input, top_k=doc_top_k, filter_type="workspace", allowed_filenames=req.selected_docs)
-        skill_results = _retriever.search_context(req.user_input, top_k=2, filter_type="skill")
+            doc_results = _retriever.search_context(req.user_input, top_k=doc_top_k, filter_type="workspace", allowed_filenames=text_docs)
         
-        if doc_results or skill_results:
-            rag_context = "\n\n[語意檢索結果]\n"
+        # LOGIC CHANGE: If it's a knowledge list query and no docs are selected, 
+        # DO NOT inject skills to prevent AI from "filling the gap" with skills.
+        skill_results = ""
+        if not (is_strict_knowledge_query and is_empty_selection):
+            skill_results = _retriever.search_context(req.user_input, top_k=2, filter_type="skill")
+        
+        if doc_results or skill_results or visual_docs:
+            current_temp = 0.1 
+            rag_context = "\n\n[檢索資料分集]\n"
+            
             if doc_results:
+                # POWERFUL PRE-PROCESSOR: Replace all hashed filenames with original names IN THE CHUNKS
+                # This ensures the LLM NEVER sees the hash, only the original name.
+                import re
+                def _restore_name(match):
+                    hname = match.group(1)
+                    # Support both [hash#chunk] and [hash]
+                    real_name = fn_map.get(hname, hname)
+                    return f"File [{real_name}"
+
+                # Pattern: matches "File [anything_before_#_or_]"
+                processed_docs = re.sub(r'File \[([a-z0-9.]+)(?=[#\]])', _restore_name, doc_results)
+                
+                rag_context += f"### A. 【知識庫文字內容】\n{processed_docs}\n\n"
+            
+            if visual_docs:
+                img_lines = []
+                for p in visual_docs:
+                    hname = os.path.basename(p)
+                    oname = fn_map.get(hname, hname)
+                    img_lines.append(f"  - 原始名稱: 【{oname}】（內部 ID 勿外露: {hname}）")
+
                 rag_context += (
-                    f"【知識庫文件內容】（請以此為分析基底，如 NotebookLM 重點參照）\n{doc_results}\n\n"
+                    f"### B. 【知識庫視覺內容】\n"
+                    f"以下圖片已透過原生視覺管道傳入，請直接觀看分析。\n"
+                    f"【重要】回覆時必須使用「原始名稱」稱呼圖片，嚴禁使用「內部 ID」！\n"
+                    f"{chr(10).join(img_lines)}\n\n"
                 )
+
             if skill_results:
                 rag_context += (
-                    f"【內部技能設定參考】\n{skill_results}\n\n"
+                    f"### C. 【系統可用技能說明】 (注意：這不是使用者文件)\n"
+                    f"這部分僅供您了解有哪些數位工具可用，請勿將其內容列入「文件」清單：\n{skill_results}\n\n"
                 )
             
             rag_context += (
                 f"---\n"
-                f"【分析與回答準則】\n"
-                f"1. NotebookLM 風格：你的回答應「深度依賴」上述【知識庫文件內容】。使用者會依據這些文件來設計工作流程與系統技能，請以這些文件作為分析與評估的首要基底。\n"
-                f"2. 允許使用者同時查閱「技能」與「文件」，請根據問題語意自行判斷應查閱與比對哪一部分。\n"
-                f"3. 強制引用：引用知識庫內容時，句末必須標示來源，格式：[filename#chunk_x: 引用片段]。\n"
-                f"4. 若檢索結果不包含使用者所問的資訊，請明白告知「知識庫中缺乏相關資訊」，絕不可自行編造。\n"
+                f"【回答框架要求】\n"
+                f"1. 原始名稱優先：回覆時請務必使用檔案的「原始檔名」（如 _DSC9239.jpg），而非系統雜湊 ID。\n"
+                f"2. 嚴格分類：回覆時請明確建立「文件分析」與「系統技能」兩大範疇，禁止交叉混淆。\n"
+                f"3. 承認視覺存有：若 B 區有圖片，請主動說明您已『看見』該圖片並據此分析，展現原生視覺能力。\n"
+                f"4. 深度解析：對 A、B 區內容請進行詳盡且長篇幅的解說（如同論文分析或專業報告）。\n"
             )
 
     # 4. Append user message
@@ -927,8 +1029,7 @@ async def chat(req: ChatRequest):
             adapter = GeminiAdapter(uma=uma, model=model_name)
         elif provider == "claude":
             from adapters.claude_adapter import ClaudeAdapter
-            # TODO: ClaudeAdapter model propagation if needed
-            adapter = ClaudeAdapter(uma)
+            adapter = ClaudeAdapter(uma=uma, model=model_name)
         else:
             # Universal OpenAI-compatible dispatch
             adapter = OpenAIAdapter(
@@ -944,10 +1045,19 @@ async def chat(req: ChatRequest):
                 "message": f"模型 {req.model} 無法使用，請確認 API Key 是否設定於 .env"
             })
 
+        # Build display-name mapping for visual docs (path -> original name)
+        visual_docs_display_names = {}
+        for p in visual_docs:
+            hname = os.path.basename(p)
+            visual_docs_display_names[p] = fn_map.get(hname, hname)
+
         kwargs = {
             "session_id": req.session_id,
             "attached_file": req.attached_file,
-            "injected_skill": req.injected_skill
+            "injected_skill": req.injected_skill,
+            "temperature": current_temp,
+            "visual_docs": visual_docs,
+            "visual_docs_display_names": visual_docs_display_names,
         }
 
         # Phase 3: Unify execution. Always use .chat if a skill is involved or as default intelligent mode.

@@ -284,7 +284,8 @@
                         <span class="info-icon" title="作為 LLM 回覆資訊的現有知識參考為前提">ⓘ</span>
                     </div>
                     <div id="knowledgeList" class="file-list-container"></div>
-                    <input type="file" id="uploadKnowledgeInput" class="hidden" accept=".pdf,.docx,.txt,.md,.csv">
+                    <input type="file" id="uploadKnowledgeInput" class="hidden"
+                        accept=".pdf,.docx,.txt,.md,.csv,.jpg,.jpeg,.png,.webp">
                     <button class="upload-action-btn" id="uploadKnowledgeBtn">
                         <span style="font-size: 16px;">＋</span> 新增知識庫檔案
                     </button>
@@ -465,14 +466,7 @@
             </div>
 
             <div class="modal-body">
-                <div class="source-search-wrap">
-                    <span class="search-icon">🔍</span>
-                    <textarea class="source-search-input" id="webSearchInput" placeholder="在網路上搜尋新來源"
-                        rows="1"></textarea>
-                    <div class="search-chips">
-                        <button class="search-chip search-google-btn" id="googleSearchBtn">搜尋</button>
-                    </div>
-                </div>
+
 
                 <div class="source-drop-zone" id="sourceDropZone">
                     <div class="drop-content">
@@ -553,7 +547,8 @@
         </div>
     </div>
 
-    <input type="file" id="sourceFileInput" style="display:none" multiple accept=".pdf,.docx,.txt,.md">
+    <input type="file" id="sourceFileInput" style="display:none" multiple
+        accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.webp">
 
     <!-- URL Sub-Modal (NotebookLM style) -->
     <div class="modal-overlay" id="addUrlModalOverlay" style="z-index: 1001;">

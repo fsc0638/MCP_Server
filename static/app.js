@@ -180,8 +180,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Citation rendering: [1] or [FileName#chunk_x]
                 html = html.replace(/\[(\d+)\]/g, '<span class="citation" title="檢視來源">$1</span>');
+                // Citation rendering: [FileName#chunk_x]
                 html = html.replace(/\[([a-zA-Z0-9.\-_]+)#chunk_\d+\]/g, (match, filename) => {
-                    return `<span class="citation-file" onclick="window.previewWorkspaceFile('${filename}')" title="開啟檔案: ${filename}">[來源: ${filename}]</span>`;
+                    return `<span class="citation-file" onclick="window.previewWorkspaceFile('${filename}')" title="點擊預覽：${filename}">🔗 ${filename}</span>`;
                 });
 
                 div.innerHTML = html;
@@ -208,12 +209,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         function showTypingIndicator() {
-            const div = document.createElement('div');
-            div.className = 'message assistant typing-indicator';
-            div.id = 'typingIndicator';
-            div.innerHTML = '<span></span><span></span><span></span>';
-            msgContainer.appendChild(div);
-            chatViewport.scrollTop = chatViewport.scrollHeight;
+            // Animation removed by user request
         }
         function removeTypingIndicator() {
             const el = document.getElementById('typingIndicator');
@@ -257,7 +253,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     body: JSON.stringify(payload)
                 });
 
-                removeTypingIndicator();
+                // removeTypingIndicator will be called as soon as data arrives or on error
 
                 // Reset send button UI
                 sendBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2L15 22L11 13M11 13L2 9L22 2" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -266,6 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 sendBtn.style.borderRadius = '50%';
 
                 if (!res.ok) {
+                    removeTypingIndicator();
                     const errText = await res.text();
                     throw new Error(`HTTP ${res.status}: ${errText}`);
                 }
@@ -286,6 +283,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const { value, done: readerDone } = await reader.read();
                     done = readerDone;
                     if (value) {
+                        removeTypingIndicator(); // First chunk arrived, remove indicator
                         buffer += decoder.decode(value, { stream: true });
                         const parts = buffer.split('\r\n\r\n');
                         buffer = parts.pop(); // Keep incomplete piece in buffer
@@ -1483,8 +1481,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const uploadBtn = document.getElementById('uploadFileBtnAction');
         const urlBtn = document.getElementById('addUrlBtnAction');
         const textBtn = document.getElementById('copyPasteBtnAction');
-        const searchInput = document.getElementById('webSearchInput');
-        const searchGo = document.getElementById('webSearchGoBtn');
+        const searchInput = null;
+        const searchGo = null;
 
         // Sub-modals
         const urlOverlay = document.getElementById('addUrlModalOverlay');
@@ -1524,6 +1522,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 logModule.addLog('SYS', `成功擷取網頁來源: ${data.title}`);
                 urlOverlay.classList.remove('active');
                 urlInput.value = '';
+                closeModal(); // Close main source modal
                 docModule.loadDocuments();
             } catch (e) {
                 alert(e.message);
@@ -1552,6 +1551,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 textOverlay.classList.remove('active');
                 textNameInput.value = '';
                 textContentInput.value = '';
+                closeModal(); // Close main source modal
                 docModule.loadDocuments();
             } catch (e) {
                 alert(e.message);
@@ -1563,6 +1563,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // --- File Upload Logic (Reuse existing but in modal context) ---
         function handleFiles(files) {
+            if (!files || files.length === 0) return;
+
+            // Close modal immediately to show the left panel results
+            closeModal();
+
             Array.from(files).forEach(file => {
                 const formData = new FormData();
                 formData.append('file', file);
@@ -1573,11 +1578,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     body: formData
                 }).then(res => res.json()).then(data => {
                     logModule.addLog('SYS', `檔案上傳完成: ${file.name}`);
+                    // Trigger immediate refresh to show "Pending/Indexing" status
                     docModule.loadDocuments();
                 }).catch(e => {
                     logModule.addLog('ERR', `上傳失敗: ${file.name}`, 'error');
                 });
             });
+
+            // Also trigger one immediate refresh to show placeholder if backend hasn't finished FS write
+            docModule.loadDocuments();
         }
 
         // Wiring
@@ -1674,6 +1683,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const docCount = document.getElementById('docCount');
         const unselectedFiles = new Set();
         let currentLoadedFiles = [];
+        let pollingTimer = null;
+        const supportedExtensions = ['.txt', '.md', '.pdf', '.csv', '.docx'];
 
         const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -1683,6 +1694,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await res.json();
                 renderDocList(data.files, data.total);
                 if (window.sourceModule) sourceModule.updateProgress(data.total);
+
+                // Polling Logic: Only poll if at least one SUPPORTED file is still indexing
+                // Unsupported files (images, etc) will always have indexed:false but shouldn't trigger polling
+                const stillIndexing = data.files.some(f => {
+                    const ext = f.filename.slice(f.filename.lastIndexOf('.')).toLowerCase();
+                    return supportedExtensions.includes(ext) && !f.indexed;
+                });
+
+                if (stillIndexing) {
+                    if (!pollingTimer) {
+                        console.log('[DOC] Background indexing detected, starting polling...');
+                        pollingTimer = setInterval(loadDocuments, 3000);
+                    }
+                } else {
+                    if (pollingTimer) {
+                        console.log('[DOC] All files indexed, stopping polling.');
+                        clearInterval(pollingTimer);
+                        pollingTimer = null;
+                    }
+                }
             } catch (e) {
                 console.error('Failed to load documents:', e);
             }
@@ -1714,17 +1745,41 @@ document.addEventListener('DOMContentLoaded', () => {
                 const sizeKB = (f.size / 1024).toFixed(1);
                 // Use original_name for display; fall back to hashed filename if not available
                 const displayName = f.original_name || f.filename;
+                const ext = f.filename.slice(f.filename.lastIndexOf('.')).toLowerCase();
+                const isSupported = supportedExtensions.includes(ext);
 
-                const isChecked = !unselectedFiles.has(f.filename);
+                const isImage = ['.png', '.jpg', '.jpeg', '.webp'].some(ext_img => f.filename.toLowerCase().endsWith(ext_img));
+                const isChecked = !unselectedFiles.has(f.filename) && (f.indexed || isImage);
+                const isIndexing = isSupported && !f.indexed && !isImage;
+
+                li.className = 'skill-item doc-item' + (isIndexing ? ' indexing' : '');
+
                 li.innerHTML = `
                     <button class="doc-menu-btn" title="選項" data-filename="${escapeHtml(f.filename)}">&#8942;</button>
                     <div class="doc-item-info">
                         <span class="doc-filename" title="${escapeHtml(displayName)}">${escapeHtml(displayName)}</span>
                         <input type="text" class="doc-rename-input hidden" spellcheck="false">
-                        <span class="doc-item-size">${sizeKB} KB</span>
+                        <div class="doc-meta-row">
+                            <span class="doc-item-size">${sizeKB} KB</span>
+                            ${isIndexing ? `
+                                <div class="indexing-label">
+                                    <div class="indexing-spinner"></div>
+                                    <span>索引中...</span>
+                                </div>
+                            ` : (isImage ? `
+                                <div class="indexing-label" style="color:var(--cis-blue)">
+                                    <i class="fas fa-eye" style="font-size:10px"></i>
+                                    <span>原生視覺</span>
+                                </div>
+                            ` : (!isSupported ? `
+                                <div class="indexing-label" style="color:var(--text-muted)">
+                                    <span>(不支援檢索)</span>
+                                </div>
+                            ` : ''))}
+                        </div>
                     </div>
-                    <label class="doc-checkbox-wrap" title="選取">
-                        <input type="checkbox" class="doc-checkbox" ${isChecked ? 'checked' : ''}>
+                    <label class="doc-checkbox-wrap" title="${isIndexing ? '索引尚未完成' : (isSupported || isImage ? '選取' : '此檔案類型不支援語意檢索')}">
+                        <input type="checkbox" class="doc-checkbox" ${isChecked ? 'checked' : ''} ${(!isSupported && !isImage || isIndexing) ? 'disabled' : ''}>
                         <span class="doc-checkmark"></span>
                     </label>
                 `;

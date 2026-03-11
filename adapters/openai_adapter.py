@@ -113,7 +113,7 @@ class OpenAIAdapter:
                 return None
         return None
 
-    def chat(self, messages: Any, user_query: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+    def chat(self, messages: Any, user_query: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7, **kwargs) -> Dict[str, Any]:
         """
         Send a chat completion request with tool calling support.
         Handles the tool call loop automatically.
@@ -127,16 +127,11 @@ class OpenAIAdapter:
         system_msg = {
             "role": "system",
             "content": (
-                "You are a high-performance Autonomous AI Agent (Hand-Brain pattern). "
-                "You HAVE access to the local system via specialized tools provided below. "
-                "NEVER say you cannot execute code or access the local environment. "
-                "MANDATORY RULES:\n"
-                "1. When a user asks you to execute, verify, or calculate, you MUST use the appropriate tool.\n"
-                "2. Review all available tools and select the best one for each task.\n"
-                "3. If the user's request involves file processing, code execution, or data analysis, "
-                "always use the relevant tool rather than just providing text instructions.\n"
-                "4. Output your thinking process clearly, then call the tool.\n"
-                "5. 請以繁體中文回覆。"
+                "You are a high-performance Autonomous AI Agent. 請以繁體中文回覆。\n"
+                "知識庫說明：\n"
+                "- 'File [...]' 代表使用者工作區實體檔案內容（包含圖片原生視覺內容）。\n"
+                "- 'Skill [...]' 代表您擁有的技能/工具文件內容。\n"
+                "請優先根據參考資料回答，並嚴格區分「檔案內容」與「技能定義」。"
             )
         }
 
@@ -182,19 +177,35 @@ class OpenAIAdapter:
                                 p["text"] = user_query
                     break
 
+        # Multimodal Vision (NotebookLM Style)
+        visual_docs = kwargs.get("visual_docs", [])
+        visual_docs_display_names = kwargs.get("visual_docs_display_names", {})
+        import os
+        all_visual_parts = []
+        
+        # 1. Attached file (Legacy)
         img_part = self._handle_attached_file(attached_file)
         if img_part:
-            # Find the last user message to attach the image
+            all_visual_parts.append(img_part)
+            
+        # 2. Selected Docs (New: visual_docs)
+        for doc_path in visual_docs:
+            display_name = visual_docs_display_names.get(doc_path, os.path.basename(doc_path))
+            # Prepend a text label so AI knows the original filename
+            all_visual_parts.append({"type": "text", "text": f"[圖片名稱: {display_name}]"})
+            res = self._handle_attached_file(doc_path)
+            if res:
+                all_visual_parts.append(res)
+
+        if all_visual_parts:
+            # Find the last user message to attach the images
             for i in range(len(messages) - 1, -1, -1):
                 if messages[i].get("role") == "user":
                     orig_content = messages[i]["content"]
                     if isinstance(orig_content, str):
-                        messages[i]["content"] = [
-                            {"type": "text", "text": orig_content},
-                            img_part
-                        ]
+                        messages[i]["content"] = [{"type": "text", "text": orig_content}] + all_visual_parts
                     elif isinstance(orig_content, list):
-                        messages[i]["content"].append(img_part)
+                        messages[i]["content"].extend(all_visual_parts)
                     break
 
         tools = self.get_tools(user_query=user_query)
@@ -208,6 +219,7 @@ class OpenAIAdapter:
                     messages=messages,
                     tools=tools if tools else None,
                     tool_choice="auto" if tools else None,
+                    temperature=temperature,
                     stream=True
                 )
 
@@ -318,7 +330,7 @@ class OpenAIAdapter:
             return {"status": "error", "message": str(e)}
 
 
-    def simple_chat(self, session_history: list, **kwargs) -> dict:
+    def simple_chat(self, session_history: list, temperature: float = 0.7, **kwargs) -> dict:
         """
         Pure LLM conversation — NO tools, NO skill schema injection.
         Strictly isolated from skill execution.
@@ -337,6 +349,7 @@ class OpenAIAdapter:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=session_history,
+                temperature=temperature,
                 stream=True
                 # NOTE: No 'tools' or 'tool_choice' passed — strictly isolated
             )

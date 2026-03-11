@@ -605,8 +605,13 @@ body {
     background: var(--surface-panel);
     border: 1px solid var(--border);
     border-bottom-left-radius: 4px;
-    box-shadow: var(--shadow-sm);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
     color: var(--text-primary);
+    transition: all 0.3s ease;
+}
+
+.message.assistant:hover {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
 }
 
 .message.assistant h1,
@@ -750,6 +755,80 @@ textarea::placeholder {
     gap: 6px;
     padding: 5px 12px;
     position: relative;
+    transition: opacity 0.3s;
+}
+
+.doc-item.indexing {
+    opacity: 0.7;
+}
+
+.doc-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 2px;
+}
+
+.indexing-label {
+    font-size: 11px;
+    color: var(--cis-orange);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 500;
+}
+
+.indexing-spinner {
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid var(--cis-orange);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Typing / Thinking Indicator */
+.message.assistant.typing-indicator {
+    padding: 12px 20px;
+    color: var(--text-muted);
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.thinking-text::after {
+    content: "...";
+    display: inline-block;
+    width: 24px;
+    text-align: left;
+    animation: dots 1.5s steps(4, end) infinite;
+}
+
+@keyframes dots {
+
+    0%,
+    20% {
+        content: "";
+    }
+
+    40% {
+        content: ".";
+    }
+
+    60% {
+        content: "..";
+    }
+
+    80% {
+        content: "...";
+    }
 }
 
 /* 三點選單觸發按鈕 */
@@ -1439,20 +1518,30 @@ textarea::placeholder {
     animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-    0% {
-        transform: rotate(0deg);
-    }
-
-    100% {
-        transform: rotate(360deg);
-    }
+/* Citation rendering: [FileName#chunk_x] */
+.citation-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: var(--cis-blue-light);
+    color: var(--cis-blue);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+    margin: 0 2px;
 }
 
-.researching-text {
-    font-size: 15px;
-    color: #444;
-    font-weight: 500;
+.citation-file:hover {
+    background: var(--cis-blue);
+    color: white;
+}
+
+.citation-file svg {
+    font-size: 10px;
 }
 
 /* --- Source Selection Modal --- */
@@ -1737,7 +1826,8 @@ textarea::placeholder {
 
 /* ===== SKILL DRAWER ===== */
 .drawer-overlay {
-    display: none; /* 解除遮罩，讓 Drawer 成為非強制阻擋的 side-panel */
+    display: none;
+    /* 解除遮罩，讓 Drawer 成為非強制阻擋的 side-panel */
 }
 
 .drawer-overlay.hidden {
