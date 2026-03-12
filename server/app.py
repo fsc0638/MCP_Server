@@ -5,7 +5,7 @@ During migration, this app delegates most endpoints to the legacy app.
 
 from fastapi import FastAPI
 
-from server.routes import models
+from server.routes import models, documents
 from router import app as legacy_app
 
 app = FastAPI(
@@ -15,5 +15,5 @@ app = FastAPI(
 )
 
 app.include_router(models.router)
+app.include_router(documents.router)
 app.mount("/", legacy_app)
-
