@@ -38,10 +38,10 @@ async def chat(req: ChatRequest):
 
 @router.post("/chat/flush/{session_id}")
 def flush_memory(session_id: str):
-    from router import _make_llm_callable
+    from server.services.runtime import make_llm_callable
 
     session_mgr = get_session_manager()
-    session_mgr.flush_with_llm_summary(session_id, _make_llm_callable())
+    session_mgr.flush_with_llm_summary(session_id, make_llm_callable())
     return {"status": "success", "message": f"Session '{session_id}' flushed to MEMORY.md"}
 
 

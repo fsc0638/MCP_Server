@@ -12,8 +12,8 @@ from main import PROJECT_ROOT
 from main import get_uma
 from core.retriever import retriever
 from core.watcher import DirectoryWatcher
-from router import _delta_index_skills, _make_llm_callable
 from server.dependencies.session import get_session_manager
+from server.services.runtime import delta_index_skills, make_llm_callable
 
 logger = logging.getLogger("MCP_Server.App")
 __watcher = None
@@ -47,7 +47,7 @@ async def startup():
     async def _background_index():
         try:
             uma = get_uma()
-            summary = await asyncio.get_event_loop().run_in_executor(None, _delta_index_skills, uma, retriever)
+            summary = await asyncio.get_event_loop().run_in_executor(None, delta_index_skills, uma, retriever)
             logger.info(
                 f"[Startup] Delta index complete - added:{len(summary['added'])} "
                 f"updated:{len(summary['updated'])} removed:{len(summary['removed'])} "
@@ -83,4 +83,4 @@ async def shutdown():
     if __watcher is not None:
         __watcher.stop()
     session_mgr = get_session_manager()
-    session_mgr.flush_all_sessions(_make_llm_callable())
+    session_mgr.flush_all_sessions(make_llm_callable())

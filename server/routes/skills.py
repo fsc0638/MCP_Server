@@ -293,13 +293,13 @@ async def delete_skill_file(skill_name: str, folder: str, filename: str):
 @router.post("/skills/rescan")
 def rescan_skills():
     from core.retriever import retriever
-    from router import _delta_index_skills  # transition helper
+    from server.services.runtime import delta_index_skills
 
     uma = get_uma()
     uma.registry.skills.clear()
     uma.registry.validation_cache.clear()
     uma.registry.scan_skills()
-    summary = _delta_index_skills(uma, retriever)
+    summary = delta_index_skills(uma, retriever)
     _try_invalidate_prompt_cache()
     return {
         "status": "success",
