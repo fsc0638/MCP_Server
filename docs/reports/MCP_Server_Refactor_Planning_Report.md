@@ -157,7 +157,7 @@ MCP_Server/
 
 ## 7. 執行進度（2026-03-12）
 
-目前完成狀態（約 91%）：
+目前完成狀態（約 96%）：
 
 1. `server/` 新架構骨架已建立，`core/`、`adapters/` 已遷入並保留相容 shim。
 2. `server.app` 已成為啟動入口，Docker 啟動點已切換至 `server.app:app`。
@@ -169,8 +169,8 @@ MCP_Server/
 8. `frontend/` 已建立，`/ui` 已切換到 `frontend`；`src/css`、`src/js` 模組化入口已接入。
 9. `scripts/`、`tests/`、`docs/` 目錄重整已完成。
 
-剩餘工作（約 9%）：
+剩餘工作（約 4%）：
 
-1. 將 `/chat` 主流程從 legacy bridge 完整搬遷到 `server/services/chat_service.py`。
-2. 將 `frontend/src/js/modules/*` 從 scaffold 進一步替換 `frontend/src/js/app.js` 的實際邏輯。
-3. 完成最終清理：移除不再需要的過渡 import/bridge，補齊收尾文件。
+1. 將 `/chat` 主流程從 legacy bridge 完整搬遷到 `server/services/chat_service.py`（目前已服務化入口，但仍動態代理 legacy 實作）。
+2. 將 `frontend/src/js/modules/*` 逐段替換 `frontend/src/js/app.js` 的實際邏輯（目前已完成 bootstrap 與最小可用介面）。
+3. 完成最終清理：移除不再需要的過渡 bridge，補齊收尾驗收文件。
