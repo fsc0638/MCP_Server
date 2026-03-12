@@ -1,2 +1,7 @@
-/* Dark mode overrides scaffold. */
+/* Dark mode layer placeholder. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+  }
+}
 

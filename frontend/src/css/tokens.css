@@ -1,2 +1,3 @@
-/* Design tokens scaffold (to be extracted from frontend/style.css). */
+/* Token layer bridge: currently reuses legacy stylesheet. */
+@import url("./style.css");
 
