@@ -5,14 +5,14 @@ from fastapi import APIRouter, HTTPException
 from main import get_uma
 from server.dependencies.session import get_session_manager
 from server.schemas.chat import ChatRequest, ExecuteRequest
-from router import chat as legacy_chat  # transitional bridge for main /chat endpoint
+from server.services.chat_service import process_chat
 
 router = APIRouter(tags=["Chat"])
 
 
 @router.post("/chat")
 async def chat(req: ChatRequest):
-    return await legacy_chat(req)
+    return await process_chat(req)
 
 
 @router.post("/chat/flush/{session_id}")
