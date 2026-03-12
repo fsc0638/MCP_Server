@@ -1,11 +1,13 @@
 """New application entrypoint."""
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from server.routes import models, documents, chat, skills, workspace, resources
 from server.integrations.line_connector import router as line_router
 from router import index_all_skills as legacy_startup_index_all_skills
 from router import shutdown_system as legacy_shutdown_system
+from main import PROJECT_ROOT
 
 app = FastAPI(
     title="MCP Agent Console API",
@@ -20,6 +22,11 @@ app.include_router(skills.router)
 app.include_router(workspace.router)
 app.include_router(resources.router)
 app.include_router(line_router)
+
+static_dir = PROJECT_ROOT / "static"
+if not static_dir.exists():
+    static_dir.mkdir()
+app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="static")
 
 
 @app.on_event("startup")
