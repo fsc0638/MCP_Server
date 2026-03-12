@@ -14,6 +14,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from main import get_uma
 from server.schemas.skills import SkillUpdateRequest, CreateSkillRequest
+from server.services.prompt_cache import invalidate_prompt_cache
 
 router = APIRouter(tags=["Skill Management"])
 logger = logging.getLogger("MCP_Server.Router.Skills")
@@ -25,15 +26,6 @@ def sanitize_filename(filename: str) -> str:
     filename = "".join("_" if c in illegal_chars else c for c in filename)
     filename = filename.strip(". ").strip()
     return filename or "uploaded_file"
-
-
-def _try_invalidate_prompt_cache():
-    try:
-        from router import invalidate_prompt_cache
-
-        invalidate_prompt_cache()
-    except Exception:
-        pass
 
 
 @router.get("/skills/list")
@@ -111,7 +103,7 @@ def update_skill(skill_name: str, req: SkillUpdateRequest):
             shutil.copy2(skill_md_path, bak_path)
         skill_md_path.write_text(new_content, encoding="utf-8")
         uma.registry._register_skill(skill_path)
-        _try_invalidate_prompt_cache()
+        invalidate_prompt_cache()
         return {
             "status": "success",
             "message": f"Skill '{skill_name}' updated and backup created.",
@@ -154,7 +146,7 @@ def delete_skill(skill_name: str):
 
         shutil.rmtree(skill_path, onerror=remove_readonly)
         uma.registry.skills.pop(skill_name.lower(), None)
-        _try_invalidate_prompt_cache()
+        invalidate_prompt_cache()
         return {"status": "success", "message": f"Skill '{skill_name}' deleted."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -174,7 +166,7 @@ def rollback_skill(skill_name: str):
     try:
         shutil.copy2(bak_path, skill_md_path)
         uma.registry._register_skill(skill_path)
-        _try_invalidate_prompt_cache()
+        invalidate_prompt_cache()
         return {"status": "success", "message": f"Skill '{skill_name}' rolled back"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -202,7 +194,7 @@ def install_skill_deps(skill_name: str):
 
     skill_path = skill["path"]
     uma.registry._register_skill(skill_path)
-    _try_invalidate_prompt_cache()
+    invalidate_prompt_cache()
     return {"status": "done", "results": results}
 
 
@@ -341,7 +333,7 @@ risk_level: "low"
 """
         (skill_path / "SKILL.md").write_text(skill_md, encoding="utf-8")
         uma.registry.scan_skills()
-        _try_invalidate_prompt_cache()
+        invalidate_prompt_cache()
         return {"status": "success", "skill_name": name, "path": str(skill_path)}
     except Exception as e:
         if skill_path.exists():

@@ -11,6 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
 from main import PROJECT_ROOT, get_uma
 from server.adapters.openai_adapter import OpenAIAdapter
+from server.services.prompt_cache import invalidate_prompt_cache
 from server.schemas.documents import (
     RenameRequest,
     UrlSourcingRequest,
@@ -22,16 +23,6 @@ router = APIRouter(tags=["Documents"])
 logger = logging.getLogger("MCP_Server.Router.Documents")
 WORKSPACE_DIR = PROJECT_ROOT / "workspace"
 WORKSPACE_DIR.mkdir(exist_ok=True)
-
-
-def _try_invalidate_prompt_cache():
-    # During transition keep cache behavior aligned with legacy chat prompt cache.
-    try:
-        from router import invalidate_prompt_cache
-
-        invalidate_prompt_cache()
-    except Exception:
-        pass
 
 
 def sanitize_filename(filename: str) -> str:
@@ -99,7 +90,7 @@ async def upload_document(file: UploadFile = File(...), background_tasks: Backgr
             background_tasks.add_task(_upload_retriever.ingest_document, str(final_path))
             logger.info(f"Background FAISS indexing queued for: {hashed_filename}")
 
-        _try_invalidate_prompt_cache()
+        invalidate_prompt_cache()
         return {
             "status": "success",
             "filename": hashed_filename,
@@ -160,7 +151,7 @@ async def add_url_source(req: UrlSourcingRequest):
         except Exception as e:
             logger.warning(f"Failed to update .names.json for URL: {e}")
 
-        _try_invalidate_prompt_cache()
+        invalidate_prompt_cache()
         return {"status": "success", "filename": filename, "title": title, "url": url, "vectorized": "pending"}
     except httpx.HTTPError as e:
         logger.error(f"HTTP Error scraping URL {url}: {e}")
@@ -280,7 +271,7 @@ async def add_text_source(req: TextSourcingRequest):
         except Exception as e:
             logger.warning(f"Failed to update .names.json for pasted text: {e}")
 
-        _try_invalidate_prompt_cache()
+        invalidate_prompt_cache()
         return {"status": "success", "filename": filename, "original_name": name, "size": len(content), "vectorized": "pending"}
     except HTTPException:
         raise
@@ -341,7 +332,7 @@ def delete_document(filename: str):
         except Exception as e:
             logger.warning(f"Failed to cleanup .names.json during deletion: {e}")
 
-    _try_invalidate_prompt_cache()
+    invalidate_prompt_cache()
     return {"status": "success", "message": f"'{filename}' deleted"}
 
 
@@ -373,5 +364,5 @@ def rename_document(filename: str, req: RenameRequest):
     names[filename] = new_name
     names_file.write_text(json.dumps(names, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    _try_invalidate_prompt_cache()
+    invalidate_prompt_cache()
     return {"status": "success", "message": f"'{filename}' renamed to '{new_name}'"}
