@@ -1,1 +1,1 @@
-from . import models, documents
+from . import models, documents, chat
