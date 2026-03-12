@@ -153,3 +153,24 @@ MCP_Server/
 2. 由後端 `router.py` 拆分先行（風險最高、收益最大）。
 3. 前端與 scripts 拆分可在後端拆分穩定後並行進行。
 
+---
+
+## 7. 執行進度（2026-03-12）
+
+目前完成狀態（約 91%）：
+
+1. `server/` 新架構骨架已建立，`core/`、`adapters/` 已遷入並保留相容 shim。
+2. `server.app` 已成為啟動入口，Docker 啟動點已切換至 `server.app:app`。
+3. 路由拆分已完成：`models/documents/chat/skills/workspace/resources`。
+4. 路由去橋接化大多完成：`documents/skills/workspace/resources` 已內聚到 `server/routes/*`。
+5. `chat` 已完成部分去橋接化（session flush/clear/history、execute 內聚；主 `/chat` 仍經服務層過渡代理）。
+6. `server/schemas/*` 已建立並完成主要 request model 抽離。
+7. `server/services/*` 已建立（runtime、prompt_cache、chat_service）。
+8. `frontend/` 已建立，`/ui` 已切換到 `frontend`；`src/css`、`src/js` 模組化入口已接入。
+9. `scripts/`、`tests/`、`docs/` 目錄重整已完成。
+
+剩餘工作（約 9%）：
+
+1. 將 `/chat` 主流程從 legacy bridge 完整搬遷到 `server/services/chat_service.py`。
+2. 將 `frontend/src/js/modules/*` 從 scaffold 進一步替換 `frontend/src/js/app.js` 的實際邏輯。
+3. 完成最終清理：移除不再需要的過渡 import/bridge，補齊收尾文件。
