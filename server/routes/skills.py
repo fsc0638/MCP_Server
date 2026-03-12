@@ -11,25 +11,12 @@ from typing import Any, Dict
 
 import yaml
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
 
 from main import get_uma
+from server.schemas.skills import SkillUpdateRequest, CreateSkillRequest
 
 router = APIRouter(tags=["Skill Management"])
 logger = logging.getLogger("MCP_Server.Router.Skills")
-
-
-class SkillUpdateRequest(BaseModel):
-    yaml_content: str
-
-
-class CreateSkillRequest(BaseModel):
-    name: str
-    display_name: str
-    description: str
-    version: str = "1.0.0"
-    category: str = ""
-    no_script: bool = False
 
 
 def sanitize_filename(filename: str) -> str:

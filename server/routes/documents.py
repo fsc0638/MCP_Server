@@ -8,32 +8,20 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
-from pydantic import BaseModel
 
 from main import PROJECT_ROOT, get_uma
 from server.adapters.openai_adapter import OpenAIAdapter
+from server.schemas.documents import (
+    RenameRequest,
+    UrlSourcingRequest,
+    TextSourcingRequest,
+    ResearchRequest,
+)
 
 router = APIRouter(tags=["Documents"])
 logger = logging.getLogger("MCP_Server.Router.Documents")
 WORKSPACE_DIR = PROJECT_ROOT / "workspace"
 WORKSPACE_DIR.mkdir(exist_ok=True)
-
-
-class RenameRequest(BaseModel):
-    new_name: str
-
-
-class UrlSourcingRequest(BaseModel):
-    url: str
-
-
-class TextSourcingRequest(BaseModel):
-    name: str
-    content: str
-
-
-class ResearchRequest(BaseModel):
-    query: str
 
 
 def _try_invalidate_prompt_cache():

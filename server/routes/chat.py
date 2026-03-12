@@ -1,34 +1,13 @@
 """Chat routes."""
 
-from typing import Any, Dict, Optional
-
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 
 from main import get_uma
 from server.dependencies.session import get_session_manager
+from server.schemas.chat import ChatRequest, ExecuteRequest
 from router import chat as legacy_chat  # transitional bridge for main /chat endpoint
 
 router = APIRouter(tags=["Chat"])
-
-
-class ChatRequest(BaseModel):
-    user_input: str
-    session_id: Optional[str] = "default"
-    model: Optional[str] = "openai"
-    provider: Optional[str] = None
-    api_base: Optional[str] = None
-    api_key: Optional[str] = None
-    injected_skill: Optional[str] = None
-    execute: Optional[bool] = False
-    attached_file: Optional[str] = None
-    selected_docs: Optional[list[str]] = None
-    temperature: Optional[float] = 0.7
-
-
-class ExecuteRequest(BaseModel):
-    skill_name: str
-    arguments: Dict[str, Any] = {}
 
 
 @router.post("/chat")
