@@ -2,14 +2,14 @@
 
 ## Remaining Scope
 
-1. Replace `server/services/chat_service.py` legacy fallback with native implementation in `server/services/chat_core.py` for:
-   - `execute=true`
+1. Optional hardening:
+   - replace legacy fallback paths for non-native providers (Gemini/Claude) if you want full native unification.
 2. Remove `server/services/prompt_cache.py` dependency on `router.invalidate_prompt_cache`.
 3. Remove remaining transitional bridge imports from `router.py`.
 
 ## Acceptance Checks
 
-1. `/chat` default paths work without importing `router.chat` (legacy fallback only for unsupported edge flows).
+1. `/chat` default OpenAI paths work on native pipeline.
 2. Documents/skills updates still invalidate prompt context correctly.
 3. Server boots from `server.app:app` with no functional regression on:
    - `/chat`
