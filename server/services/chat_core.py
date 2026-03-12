@@ -21,10 +21,11 @@ async def process_chat_native(req: ChatRequest):
     Scope:
       - OpenAI provider path
       - Supports selected docs context and injected skill knowledge
-      - execute/attached_file still falls back to legacy
+      - Supports attached_file for non-execute path
+      - execute=true still falls back to legacy
     """
-    if req.execute or req.attached_file:
-        raise NotImplementedError("Native chat currently does not support execute/attached_file.")
+    if req.execute:
+        raise NotImplementedError("Native chat currently does not support execute=true.")
 
     provider = (req.provider or "").strip().lower()
     model = (req.model or "openai").strip().lower()
@@ -71,15 +72,29 @@ async def process_chat_native(req: ChatRequest):
     async def event_generator() -> AsyncGenerator[dict, None]:
         session_mgr.append_message(session_id, "user", req.user_input)
         final_content = ""
-        for chunk in adapter.simple_chat(outbound_history, temperature=req.temperature or 0.7):
+        if req.attached_file:
+            chunk_iter = adapter.chat(
+                messages=outbound_history,
+                user_query=user_content,
+                session_id=session_id,
+                attached_file=req.attached_file,
+                temperature=req.temperature or 0.7,
+            )
+        else:
+            chunk_iter = adapter.simple_chat(outbound_history, temperature=req.temperature or 0.7)
+
+        for chunk in chunk_iter:
             status = chunk.get("status")
             if status == "streaming":
                 text = chunk.get("content", "")
                 final_content += text
                 yield {"data": json.dumps({"status": "streaming", "content": text}, ensure_ascii=False)}
             elif status == "success":
-                session_mgr.append_message(session_id, "assistant", final_content)
-                yield {"data": json.dumps({"status": "success", "content": final_content}, ensure_ascii=False)}
+                final = chunk.get("content", final_content)
+                if not final:
+                    final = final_content
+                session_mgr.append_message(session_id, "assistant", final)
+                yield {"data": json.dumps({"status": "success", "content": final}, ensure_ascii=False)}
                 break
             else:
                 yield {"data": json.dumps(chunk, ensure_ascii=False)}
