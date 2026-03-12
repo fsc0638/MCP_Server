@@ -81,14 +81,23 @@ def get_uma() -> UMA:
         uma_instance = startup()
     return uma_instance
 
-
+# ─── FastAPI Application Factory / Launcher ──────────────────────────────────
+# The FastAPI app is exposed and imported lazily to avoid circular dependencies
 if __name__ == "__main__":
-    logger.info("=" * 60)
-    logger.info("MCP Server — Starting Up")
-    logger.info("=" * 60)
-
+    import uvicorn
+    # Auto-initialize UMA on startup
     uma = get_uma()
-
-    logger.info("")
-    logger.info("Startup complete. Ready for Phase 3 (FastAPI Router).")
-    logger.info("To start the server: uvicorn main:app --reload")
+    
+    logger.info("=" * 60)
+    logger.info("MCP Server & LINE Webhook — Starting Up")
+    logger.info("=" * 60)
+    logger.info("Server is available on http://127.0.0.1:8000")
+    
+    # Run the uvicorn server directly when executing `python main.py`
+    # Note: passing "router:app" as a string forces uvicorn to import it fresh
+    uvicorn.run(
+        "router:app", 
+        host="0.0.0.0", 
+        port=8000, 
+        reload=False  # Disabled to prevent watchfiles loop triggered by app logs & memory
+    )

@@ -79,9 +79,20 @@ class OpenAIAdapter:
         all_tools = self.uma.get_tools_for_model("openai")
 
         if user_query and len(all_tools) > max_tools:
-            return select_relevant_tools(user_query, all_tools, max_tools)
-
-        return all_tools
+            all_tools = select_relevant_tools(user_query, all_tools, max_tools)
+            
+        # P-03: Flatten the tool schema for Responses API compatibility
+        responses_api_tools = []
+        for t in all_tools:
+            if t.get("type") == "function" and "function" in t:
+                fn = t["function"]
+                responses_api_tools.append({
+                    "type": "function",
+                    "name": fn.get("name"),
+                    "description": fn.get("description", ""),
+                    "parameters": fn.get("parameters", {})
+                })
+        return responses_api_tools
 
     def _handle_attached_file(self, attached_file: Optional[str]) -> Optional[Dict[str, Any]]:
         """
@@ -116,27 +127,46 @@ class OpenAIAdapter:
     def chat(self, messages: Any, user_query: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7, **kwargs) -> Dict[str, Any]:
         """
         Send a chat completion request with tool calling support.
-        ARCHITECTURE: System prompt and RAG context are provided by router.py.
-                      This adapter is a pure message sender.
+        P-03 Architecture: Uses the stateful Responses API (`client.responses.create`).
         """
         if not self.is_available:
             return {"status": "error", "message": "OpenAI adapter is not available"}
 
-        # Handle list of messages or single string
+        from router import _session_mgr
+
+        # 1. State Resolution
+        prev_response_id = None
+        if session_id:
+            prev_response_id = _session_mgr.get_latest_response_id(session_id)
+
+        # 2. Input Resolution
+        # If we have state, we only send the *latest user message* as input.
+        # If we don't have state, we send the entire history as input to seed the initial state.
+        input_payload = None
+        
         if isinstance(messages, str):
             user_query = messages
-            messages = [
-                {"role": "system", "content": "You are a helpful AI assistant. 請以繁體中文回覆。"},
-                {"role": "user", "content": messages}
-            ]
-
-        # Ensure user_query is a string for tool selection
-        if not user_query and messages:
-            last_msg = messages[-1]["content"]
-            user_query = self._extract_text(last_msg)
+            input_payload = [{"role": "user", "content": messages}]
         else:
-            user_query = self._extract_text(user_query) if user_query else ""
-
+            # Ensure user_query is a string for tool selection
+            if not user_query and messages:
+                last_msg = messages[-1]["content"]
+                user_query = self._extract_text(last_msg)
+            else:
+                user_query = self._extract_text(user_query) if user_query else ""
+                
+            if prev_response_id and messages:
+                # We have state! Only send the newest user message. System prompts are inherited.
+                # Find the latest user message
+                for msg in reversed(messages):
+                    if msg.get("role") == "user":
+                        input_payload = [msg]
+                        break
+                if not input_payload:
+                    input_payload = messages # fallback
+            else:
+                # First turn: Send everything (System + User)
+                input_payload = messages
 
         # Multimodal Vision (NotebookLM Style)
         visual_docs = kwargs.get("visual_docs", [])
@@ -152,93 +182,99 @@ class OpenAIAdapter:
         # 2. Selected Docs (New: visual_docs)
         for doc_path in visual_docs:
             display_name = visual_docs_display_names.get(doc_path, os.path.basename(doc_path))
-            # Prepend a text label so AI knows the original filename
             all_visual_parts.append({"type": "text", "text": f"[圖片名稱: {display_name}]"})
             res = self._handle_attached_file(doc_path)
             if res:
                 all_visual_parts.append(res)
 
         if all_visual_parts:
-            # Find the last user message to attach the images
-            for i in range(len(messages) - 1, -1, -1):
-                if messages[i].get("role") == "user":
-                    orig_content = messages[i]["content"]
+            # Find the last user message in the input_payload to attach the images
+            for i in range(len(input_payload) - 1, -1, -1):
+                if input_payload[i].get("role") == "user":
+                    orig_content = input_payload[i]["content"]
                     if isinstance(orig_content, str):
-                        messages[i]["content"] = [{"type": "text", "text": orig_content}] + all_visual_parts
+                        input_payload[i]["content"] = [{"type": "text", "text": orig_content}] + all_visual_parts
                     elif isinstance(orig_content, list):
-                        messages[i]["content"].extend(all_visual_parts)
+                        input_payload[i]["content"].extend(all_visual_parts)
                     break
 
         tools = self.get_tools(user_query=user_query)
         tool_calls_made = 0
         MAX_ITERATIONS = 10  # Safety cap
+        
+        # We will track the latest response id generated in this multi-round loop
+        current_response_id = prev_response_id
 
         try:
             for _ in range(MAX_ITERATIONS):
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    tools=tools if tools else None,
-                    tool_choice="auto" if tools else None,
-                    temperature=temperature,
-                    stream=True
-                )
+                kwargs_req = {
+                    "model": self.model,
+                    "input": input_payload,
+                    "stream": True,
+                    "temperature": temperature
+                }
+                
+                if current_response_id:
+                    kwargs_req["previous_response_id"] = current_response_id
+                if tools:
+                    # In Responses API, if tools list is populated, tool_choice defaults to "auto"
+                    kwargs_req["tools"] = tools
+
+                response = self.client.responses.create(**kwargs_req)
 
                 full_content = ""
                 tool_calls_dict = {}
-                finish_reason = None
-
+                
                 for chunk in response:
-                    choice = chunk.choices[0] if chunk.choices else None
-                    if not choice:
-                        continue
-                        
-                    delta = choice.delta
-                    if choice.finish_reason:
-                        finish_reason = choice.finish_reason
-                        
-                    if delta.content is not None:
-                        text = delta.content
+                    # P-03 Parse the Responses API streaming format
+                    ctype = chunk.type
+                    
+                    if ctype == "response.created" or ctype == "response.in_progress":
+                        # Capture the newest ID for the next turn / saving
+                        current_response_id = chunk.response.id
+                    
+                    elif ctype == "response.output_text.delta":
+                        text = chunk.delta
                         full_content += text
                         yield {"status": "streaming", "content": text}
                         
-                    if delta.tool_calls:
-                        for tc in delta.tool_calls:
-                            idx = tc.index
-                            if idx not in tool_calls_dict:
-                                tool_calls_dict[idx] = {
-                                    "id": tc.id,
-                                    "type": "function",
-                                    "function": {"name": tc.function.name or "", "arguments": tc.function.arguments or ""}
-                                }
-                            else:
-                                if tc.function.name:
-                                    tool_calls_dict[idx]["function"]["name"] += tc.function.name
-                                if tc.function.arguments:
-                                    tool_calls_dict[idx]["function"]["arguments"] += tc.function.arguments
+                    elif ctype == "response.function_call_arguments.delta":
+                        # Accumulate tool arguments using item.id
+                        item_id = chunk.item_id
+                        if item_id not in tool_calls_dict:
+                            tool_calls_dict[item_id] = {"arguments": "", "name": "", "call_id": item_id}
+                        tool_calls_dict[item_id]["arguments"] += chunk.delta
+                        
+                    elif ctype == "response.output_item.done":
+                        item = chunk.item
+                        if getattr(item, 'type', None) == 'function_call':
+                            # In Responses API, item.id joins the delta events
+                            item_id = item.id
+                            if item_id not in tool_calls_dict:
+                                tool_calls_dict[item_id] = {"arguments": "", "name": item.name, "call_id": getattr(item, 'call_id', item.id)}
+                            
+                            tool_calls_dict[item_id]["name"] = item.name or tool_calls_dict[item_id]["name"]
+                            tool_calls_dict[item_id]["call_id"] = getattr(item, 'call_id', item.id)
+                            # The 'arguments' might also be fully available in item.arguments
+                            if hasattr(item, 'arguments') and item.arguments:
+                                tool_calls_dict[item_id]["arguments"] = item.arguments
 
-                # Reconstruct tool_calls list for appending to history
-                tool_calls_list = []
-                for idx in sorted(tool_calls_dict.keys()):
-                    from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall
-                    tc_dict = tool_calls_dict[idx]
-                    tool_calls_list.append(tc_dict)
-
-                # If the model wants to call tools
-                if finish_reason == "tool_calls" and tool_calls_list:
+                # Check if the model called tools in the current iteration step
+                if tool_calls_dict:
                     tool_results = []
-                    for tool_call in tool_calls_list:
-                        fn_name = tool_call["function"]["name"]
+                    for item_id, tc_data in tool_calls_dict.items():
+                        fn_name = tc_data.get("name")
+                        fn_args_str = tc_data.get("arguments", "{}")
+                        call_id = tc_data.get("call_id") or item_id
                         
                         import json
                         try:
-                            fn_args_str = tool_call["function"]["arguments"]
                             fn_args = json.loads(fn_args_str) if fn_args_str else {}
                         except json.JSONDecodeError:
-                            logger.error(f"Failed to parse OpenAI tool arguments: {tool_call['function']['arguments']}")
+                            logger.error(f"Failed to parse OpenAI Responses tool args: {fn_args_str}")
                             fn_args = {}
 
-                        logger.info(f"OpenAI tool call: {fn_name}({fn_args})")
+                        logger.info(f"OpenAI Responses tool call: {fn_name}({fn_args})")
                         yield {"status": "streaming", "content": f"\n\n⚙️ 執行技能: `{fn_name}`\n"}
                         result = self.uma.execute_tool_call(fn_name, fn_args)
 
@@ -252,25 +288,24 @@ class OpenAIAdapter:
                             }
                             return
 
+                        # Responses API requires tool outputs to be raw items inside input array
                         tool_results.append({
-                            "tool_call_id": tool_call["id"],
-                            "role": "tool",
-                            "content": json.dumps(result, ensure_ascii=False)
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": json.dumps(result, ensure_ascii=False)
                         })
                         tool_calls_made += 1
 
-                    # Append assistant's tool call message AND tool results, then loop
-                    assistant_msg = {
-                        "role": "assistant",
-                        "content": full_content if full_content else None,
-                        "tool_calls": tool_calls_list
-                    }
-                    messages.append(assistant_msg)
-                    messages.extend(tool_results)
-                    # Continue loop — AI may want to call more tools
+                    # Important: Update input_payload to ONLY contain tool responses for the next loop
+                    input_payload = tool_results
+                    continue # Loop back via next client.responses.create
 
                 else:
-                    # Model finished — return the final text response
+                    # No more tools — we're finished generating content.
+                    # Save the latest response id to the session so subsequent chat rounds resume here
+                    if session_id and current_response_id:
+                        _session_mgr.set_latest_response_id(session_id, current_response_id)
+                        
                     yield {
                         "status": "success",
                         "content": full_content,
@@ -279,6 +314,9 @@ class OpenAIAdapter:
                     return
 
             # Safety: exceeded max iterations
+            if session_id and current_response_id:
+                _session_mgr.set_latest_response_id(session_id, current_response_id)
+                
             yield {
                 "status": "success",
                 "content": full_content + f"\n\n(已達最大工具呼叫次數 {MAX_ITERATIONS} 輪，強制結束)",

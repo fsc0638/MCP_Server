@@ -27,6 +27,9 @@ class SessionManager:
 
         # D-07: Conversation history store (session_id → list of {role, content})
         self._conversations: Dict[str, list] = {}
+        
+        # P-03: Responses API Memory Map (session_id → response.id)
+        self._latest_response_ids: Dict[str, str] = {}
 
         # Ensure directories exist
         self.memory_dir.mkdir(exist_ok=True)
@@ -51,6 +54,21 @@ class SessionManager:
                 history.append({"role": "system", "content": system_prompt})
             self._conversations[session_id] = history
         return self._conversations[session_id]
+
+    def _update_system_prompt(self, session_id: str, new_system_prompt: str):
+        """Update the system prompt for an existing session to keep dynamic info (like date) fresh."""
+        history = self._conversations.get(session_id, [])
+        if not history:
+            return
+            
+        # Find the first system prompt and update it
+        for i, msg in enumerate(history):
+            if msg.get("role") == "system":
+                history[i]["content"] = new_system_prompt
+                return
+                
+        # If no system prompt exists, insert at the beginning
+        history.insert(0, {"role": "system", "content": new_system_prompt})
 
     def append_message(self, session_id: str, role: str, content: str):
         """Append a message to a session's conversation history with auto-compression trigger."""
@@ -217,6 +235,18 @@ class SessionManager:
         """Clear a conversation session (flush first, then remove)."""
         self.flush_conversation_to_memory(session_id)
         self._conversations.pop(session_id, None)
+        self._latest_response_ids.pop(session_id, None)
+
+    # ─── New: Responses API Stateful Tracking (P-03) ──────────────────────────
+
+    def set_latest_response_id(self, session_id: str, response_id: str):
+        """Store the response ID from the latest OpenAI Responses API turn."""
+        if response_id:
+            self._latest_response_ids[session_id] = response_id
+            
+    def get_latest_response_id(self, session_id: str) -> Optional[str]:
+        """Retrieve the response ID from the latest OpenAI Responses API turn."""
+        return self._latest_response_ids.get(session_id)
 
     # ─── CLI Session Lifecycle ────────────────────────────────────────────────
 
