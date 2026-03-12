@@ -1,18 +1,34 @@
-"""Chat routes (migration bridge)."""
+"""Chat routes."""
 
-from fastapi import APIRouter
+from typing import Any, Dict, Optional
 
-from router import (
-    ChatRequest,
-    ExecuteRequest,
-    chat as legacy_chat,
-    flush_memory as legacy_flush_memory,
-    clear_session as legacy_clear_session,
-    get_session_history as legacy_get_session_history,
-    execute_tool as legacy_execute_tool,
-)
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from main import get_uma
+from server.dependencies.session import get_session_manager
+from router import chat as legacy_chat  # transitional bridge for main /chat endpoint
 
 router = APIRouter(tags=["Chat"])
+
+
+class ChatRequest(BaseModel):
+    user_input: str
+    session_id: Optional[str] = "default"
+    model: Optional[str] = "openai"
+    provider: Optional[str] = None
+    api_base: Optional[str] = None
+    api_key: Optional[str] = None
+    injected_skill: Optional[str] = None
+    execute: Optional[bool] = False
+    attached_file: Optional[str] = None
+    selected_docs: Optional[list[str]] = None
+    temperature: Optional[float] = 0.7
+
+
+class ExecuteRequest(BaseModel):
+    skill_name: str
+    arguments: Dict[str, Any] = {}
 
 
 @router.post("/chat")
@@ -22,20 +38,38 @@ async def chat(req: ChatRequest):
 
 @router.post("/chat/flush/{session_id}")
 def flush_memory(session_id: str):
-    return legacy_flush_memory(session_id)
+    from router import _make_llm_callable
+
+    session_mgr = get_session_manager()
+    session_mgr.flush_with_llm_summary(session_id, _make_llm_callable())
+    return {"status": "success", "message": f"Session '{session_id}' flushed to MEMORY.md"}
 
 
 @router.delete("/chat/session/{session_id}")
 def clear_session(session_id: str):
-    return legacy_clear_session(session_id)
+    session_mgr = get_session_manager()
+    session_mgr.clear_conversation(session_id)
+    return {"status": "success", "message": f"Session '{session_id}' cleared"}
 
 
 @router.get("/chat/session/{session_id}")
 def get_session_history(session_id: str):
-    return legacy_get_session_history(session_id)
+    session_mgr = get_session_manager()
+    history = session_mgr.get_or_create_conversation(session_id)
+    chat_history = [m for m in history if m.get("role") != "system"]
+    return {"status": "success", "history": chat_history}
 
 
 @router.post("/execute")
 def execute_tool(request: ExecuteRequest):
-    return legacy_execute_tool(request)
-
+    uma = get_uma()
+    skill = uma.registry.get_skill(request.skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{request.skill_name}' not found")
+    if not skill["metadata"].get("_env_ready", False):
+        return {"status": "error", "message": f"Skill '{request.skill_name}' environment is not ready"}
+    try:
+        result = uma.execute_tool_call(request.skill_name, request.arguments)
+        return {"status": "success", "result": result}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
