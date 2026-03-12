@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChatRequest(BaseModel):
@@ -21,5 +21,4 @@ class ChatRequest(BaseModel):
 
 class ExecuteRequest(BaseModel):
     skill_name: str
-    arguments: Dict[str, Any] = {}
-
+    arguments: Dict[str, Any] = Field(default_factory=dict)
