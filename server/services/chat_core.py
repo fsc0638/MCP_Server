@@ -9,6 +9,7 @@ from typing import AsyncGenerator
 from sse_starlette.sse import EventSourceResponse
 
 from main import get_uma
+from core.retriever import retriever
 from server.adapters.openai_adapter import OpenAIAdapter
 from server.dependencies.session import get_session_manager
 from server.schemas.chat import ChatRequest
@@ -18,11 +19,12 @@ async def process_chat_native(req: ChatRequest):
     """
     Native chat baseline implementation.
     Scope:
-      - pure chat only (no execute/skill/doc/file context)
       - OpenAI provider path
+      - Supports selected docs context and injected skill knowledge
+      - execute/attached_file still falls back to legacy
     """
-    if req.execute or req.injected_skill or req.attached_file or (req.selected_docs is not None):
-        raise NotImplementedError("Native chat currently supports pure chat only.")
+    if req.execute or req.attached_file:
+        raise NotImplementedError("Native chat currently does not support execute/attached_file.")
 
     provider = (req.provider or "").strip().lower()
     model = (req.model or "openai").strip().lower()
@@ -42,7 +44,29 @@ async def process_chat_native(req: ChatRequest):
         session_id,
         "You are MCP Agent Console assistant. Answer clearly and concisely.",
     )
-    outbound_history = history + [{"role": "user", "content": req.user_input}]
+    user_content = req.user_input
+
+    # Optional document context injection
+    if req.selected_docs is not None:
+        if len(req.selected_docs) == 0:
+            doc_context = ""
+        else:
+            doc_context = retriever.search_context(
+                req.user_input,
+                top_k=max(3, len(req.selected_docs) + 2),
+                filter_type="workspace",
+                allowed_filenames=req.selected_docs,
+            )
+        if doc_context:
+            user_content += f"\n\n[Document Context]\n{doc_context}"
+
+    # Optional injected skill knowledge (non-execute reference)
+    if req.injected_skill:
+        skill_knowledge = uma.get_skill_knowledge(req.injected_skill)
+        if skill_knowledge:
+            user_content += f"\n\n[Skill Knowledge: {req.injected_skill}]\n{skill_knowledge}"
+
+    outbound_history = history + [{"role": "user", "content": user_content}]
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         session_mgr.append_message(session_id, "user", req.user_input)
