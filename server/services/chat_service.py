@@ -9,7 +9,7 @@ from server.services.chat_core import process_chat_native
 async def process_chat(req: ChatRequest):
     """Chat entry with switchable native/legacy implementation."""
     force_native = os.getenv("MCP_CHAT_NATIVE", "").strip().lower() in {"1", "true", "yes"}
-    auto_native_candidate = not req.execute and not req.attached_file
+    auto_native_candidate = True
 
     if force_native or auto_native_candidate:
         try:

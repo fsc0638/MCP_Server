@@ -22,10 +22,8 @@ async def process_chat_native(req: ChatRequest):
       - OpenAI provider path
       - Supports selected docs context and injected skill knowledge
       - Supports attached_file for non-execute path
-      - execute=true still falls back to legacy
+      - execute=true supported via OpenAI adapter tool-calling path
     """
-    if req.execute:
-        raise NotImplementedError("Native chat currently does not support execute=true.")
 
     provider = (req.provider or "").strip().lower()
     model = (req.model or "openai").strip().lower()
@@ -72,7 +70,7 @@ async def process_chat_native(req: ChatRequest):
     async def event_generator() -> AsyncGenerator[dict, None]:
         session_mgr.append_message(session_id, "user", req.user_input)
         final_content = ""
-        if req.attached_file:
+        if req.execute or req.attached_file:
             chunk_iter = adapter.chat(
                 messages=outbound_history,
                 user_query=user_content,
