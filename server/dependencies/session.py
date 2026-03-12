@@ -1,11 +1,11 @@
-"""Dependency provider for shared session manager.
+"""Dependency provider for shared session manager."""
 
-Temporary bridge: reuses legacy instance from ``router`` during migration.
-"""
+from functools import lru_cache
 
-from router import _session_mgr
+from main import PROJECT_ROOT
+from server.core.session import SessionManager
 
 
+@lru_cache(maxsize=1)
 def get_session_manager():
-    return _session_mgr
-
+    return SessionManager(str(PROJECT_ROOT))

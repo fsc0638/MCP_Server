@@ -1,13 +1,22 @@
 """New application entrypoint."""
 
+import asyncio
+import logging
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from server.routes import models, documents, chat, skills, workspace, resources
 from server.integrations.line_connector import router as line_router
-from router import index_all_skills as legacy_startup_index_all_skills
-from router import shutdown_system as legacy_shutdown_system
 from main import PROJECT_ROOT
+from main import get_uma
+from core.retriever import retriever
+from core.watcher import DirectoryWatcher
+from router import _delta_index_skills, _make_llm_callable
+from server.dependencies.session import get_session_manager
+
+logger = logging.getLogger("MCP_Server.App")
+__watcher = None
 
 app = FastAPI(
     title="MCP Agent Console API",
@@ -35,9 +44,43 @@ else:
 
 @app.on_event("startup")
 async def startup():
-    await legacy_startup_index_all_skills()
+    async def _background_index():
+        try:
+            uma = get_uma()
+            summary = await asyncio.get_event_loop().run_in_executor(None, _delta_index_skills, uma, retriever)
+            logger.info(
+                f"[Startup] Delta index complete - added:{len(summary['added'])} "
+                f"updated:{len(summary['updated'])} removed:{len(summary['removed'])} "
+                f"unchanged:{len(summary['unchanged'])} errors:{len(summary['errors'])}"
+            )
+        except Exception as e:
+            logger.error(f"[Startup] Background skill indexing failed: {e}")
+
+    async def _sync_workspace_docs():
+        try:
+            ws_summary = await asyncio.get_event_loop().run_in_executor(None, retriever.sync_workspace, str(PROJECT_ROOT / "workspace"))
+            logger.info(
+                f"[Startup] Workspace sync complete - added:{len(ws_summary['added'])} "
+                f"removed:{len(ws_summary['removed'])} already:{len(ws_summary['already'])}"
+            )
+        except Exception as e:
+            logger.error(f"[Startup] Workspace sync failed: {e}")
+
+    try:
+        uma = get_uma()
+        global __watcher
+        __watcher = DirectoryWatcher(str(PROJECT_ROOT / "workspace"), str(uma.registry.skills_home), retriever)
+        __watcher.start()
+        asyncio.create_task(_background_index())
+        asyncio.create_task(_sync_workspace_docs())
+    except Exception as e:
+        logger.error(f"[Startup] Failed to initialize background services: {e}")
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    await legacy_shutdown_system()
+    global __watcher
+    if __watcher is not None:
+        __watcher.stop()
+    session_mgr = get_session_manager()
+    session_mgr.flush_all_sessions(_make_llm_callable())
