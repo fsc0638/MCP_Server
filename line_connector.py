@@ -171,9 +171,15 @@ def _process_line_message(
         if not adapter.is_available:
             final_reply = "⚠️ AI 服務暫時無法使用，請確認 OPENAI_API_KEY 設定。"
         else:
-            # 傳入 history 副本，避免 generator 消費途中 list 被外部修改
+            # 為了避免背景長期對話導致 OpenAI 429 Too Many Requests (Token Limit)
+            # 強制只擷取 System Prompt + 最近 5 輪對話 (10 條訊息)
+            system_msgs = [m for m in history if m.get("role") == "system"]
+            recent_msgs = [m for m in history if m.get("role") != "system"][-10:]
+            truncated_history = system_msgs + recent_msgs
+
+            # 傳入截斷的 history 副本，避免 generator 消費途中 list 被外部修改
             result_gen = adapter.chat(
-                messages=list(history),
+                messages=truncated_history,
                 user_query=actual_input,
                 session_id=session_id,
             )
