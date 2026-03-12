@@ -132,7 +132,8 @@ class OpenAIAdapter:
         if not self.is_available:
             return {"status": "error", "message": "OpenAI adapter is not available"}
 
-        from router import _session_mgr
+        from server.dependencies.session import get_session_manager
+        _session_mgr = get_session_manager()
 
         # 1. State Resolution
         prev_response_id = None
