@@ -23,10 +23,14 @@ app.include_router(workspace.router)
 app.include_router(resources.router)
 app.include_router(line_router)
 
-static_dir = PROJECT_ROOT / "static"
-if not static_dir.exists():
-    static_dir.mkdir()
-app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="static")
+frontend_dir = PROJECT_ROOT / "frontend"
+legacy_static_dir = PROJECT_ROOT / "static"
+if frontend_dir.exists():
+    app.mount("/ui", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+else:
+    if not legacy_static_dir.exists():
+        legacy_static_dir.mkdir()
+    app.mount("/ui", StaticFiles(directory=str(legacy_static_dir), html=True), name="static")
 
 
 @app.on_event("startup")
