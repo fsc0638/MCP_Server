@@ -3,15 +3,11 @@
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
 
 from main import get_uma
+from server.schemas.resources import SearchRequest
 
 router = APIRouter(tags=["Resources"])
-
-
-class SearchRequest(BaseModel):
-    query: str
 
 
 @router.get("/tools")
