@@ -15,8 +15,12 @@ Design Principle:
 """
 import logging
 import os
+import threading
+from contextlib import contextmanager
 
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
+import httpx
+import redis
 
 logger = logging.getLogger("MCP_Server.LINE")
 router = APIRouter()
@@ -54,12 +58,16 @@ def _get_line_components():
 
 
 # ── LINE-specific system prompt ────────────────────────────────────────────────
-_LINE_SYSTEM_PROMPT = (
-    "你是研發組 MCP Agent Console 的 LINE AI 助理。\n"
-    "請以繁體中文、簡潔有力地回覆使用者。\n"
-    "若需要執行技能工具，請直接執行並回報結果。\n"
-    "回覆請控制在 3000 字以內，保持清晰易讀。"
-)
+def _get_dynamic_system_prompt() -> str:
+    from datetime import datetime
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return (
+        f"你是研發組 MCP Agent Console 的 LINE AI 助理。\n"
+        f"現在時間是：{now_str}\n"
+        f"請以繁體中文、簡潔有力地回覆使用者。\n"
+        f"若需要執行技能工具，請直接執行並回報結果。\n"
+        f"回覆請控制在 3000 字以內，保持清晰易讀。"
+    )
 
 # ── LINE 單則訊息字元上限 ───────────────────────────────────────────────────────
 _LINE_MAX_CHARS = 4900
@@ -109,16 +117,20 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
             source = event.source
             if hasattr(source, "group_id") and source.group_id:
                 session_id = f"line_group_{source.group_id}"
+                chat_id = source.group_id
             elif hasattr(source, "room_id") and source.room_id:
                 session_id = f"line_room_{source.room_id}"
+                chat_id = source.room_id
             else:
                 session_id = f"line_{source.user_id}"
+                chat_id = source.user_id
 
             background_tasks.add_task(
                 _process_line_message,
                 line_api=line_api,
                 reply_token=event.reply_token,
                 user_id=source.user_id,
+                chat_id=chat_id,
                 session_id=session_id,
                 user_input=event.message.text,
             )
@@ -131,12 +143,82 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
     return "OK"
 
 
+# ── Session Locking & UX ──────────────────────────────────────────────────────
+
+_local_locks = {}
+_local_lock_mutex = threading.Lock()
+_last_request_time = {}  # 紀錄每個 session 的最後處理時間 (Debounce 用)
+_redis_client = None
+
+try:
+    _redis_client = redis.Redis(host="localhost", port=6379, db=0, socket_connect_timeout=1)
+    _redis_client.ping()
+    logger.info("[LINE] Redis connected for distributed locking.")
+except Exception as e:
+    logger.info(f"[LINE] Redis not available ({e}). Falling back to in-memory locks.")
+    _redis_client = None
+
+@contextmanager
+def _acquire_session_lock(session_id: str):
+    """
+    Acquire a lock for the session_id to prevent concurrent LLM requests.
+    Uses Redis if available, else falls back to in-memory threading.Lock.
+    """
+    lock_key = f"lock:{session_id}"
+    redis_lock = None
+    local_lock = None
+
+    if _redis_client:
+        try:
+            redis_lock = _redis_client.lock(lock_key, timeout=60)
+            acquired = redis_lock.acquire(blocking=False)
+            if not acquired:
+                yield False
+                return
+        except Exception as e:
+            logger.warning(f"[LINE] Redis lock failed, falling back to local: {e}")
+
+    if not redis_lock:
+        with _local_lock_mutex:
+            if lock_key not in _local_locks:
+                _local_locks[lock_key] = threading.Lock()
+            local_lock = _local_locks[lock_key]
+        
+        acquired = local_lock.acquire(blocking=False)
+        if not acquired:
+            yield False
+            return
+
+    try:
+        yield True
+    finally:
+        if redis_lock:
+            try:
+                redis_lock.release()
+            except Exception:
+                pass
+        if local_lock:
+            local_lock.release()
+
+def _send_loading_animation(line_api, chat_id: str):
+    """呼叫 LINE Loading Animation API (使用官方 SDK)"""
+    from linebot.v3.messaging import ShowLoadingAnimationRequest
+
+    try:
+        req = ShowLoadingAnimationRequest(chatId=chat_id, loadingSeconds=20)
+        line_api.show_loading_animation(req)
+        logger.info(f"[LINE] Loading animation started for chat={chat_id}")
+    except Exception as e:
+        logger.warning(f"[LINE] Exception starting loading animation: {e}")
+
+
 # ── Background Processing Function ────────────────────────────────────────────
 
 def _process_line_message(
     line_api,
     reply_token: str,
     user_id: str,
+    chat_id: str,
     session_id: str,
     user_input: str,
 ):
@@ -151,57 +233,79 @@ def _process_line_message(
     from main import get_uma
     from adapters.openai_adapter import OpenAIAdapter
     from router import _session_mgr  # 共用同一 SessionManager 實例
+    import time
 
     logger.info(f"[LINE BG] Start processing: session={session_id}")
 
-    try:
-        # 1. 取得或建立 Session（首次建立時注入 LINE 專屬 system prompt）
-        history = _session_mgr.get_or_create_conversation(session_id, _LINE_SYSTEM_PROMPT)
+    # 0. 防連點機制 (Debounce)：過濾 2 秒內重複觸發的事件
+    current_time = time.time()
+    last_time = _last_request_time.get(session_id, 0)
+    if current_time - last_time < 2.0:
+        logger.warning(f"[LINE BG] Debounced input for session={session_id} (Too fast)")
+        return
+    _last_request_time[session_id] = current_time
 
-        # 2. 追加使用者訊息至 Session
-        _session_mgr.append_message(session_id, "user", user_input)
+    with _acquire_session_lock(session_id) as acquired:
+        if not acquired:
+            logger.warning(f"[LINE BG] Session {session_id} is locked. Ignoring concurrent input.")
+            return
 
-        # 3. 解析可能的指令前綴，動態切換模式
-        actual_input, execute_mode = _parse_command_prefix(user_input)
+        # 0.5 顯示 loading 動畫 (安撫使用者等待焦慮)，必須傳入 chat_id
+        _send_loading_animation(line_api, chat_id)
 
-        # 4. 初始化 Adapter（使用預設 model，可依需求選 Gemini/Claude）
-        uma = get_uma()
-        adapter = OpenAIAdapter(uma=uma)
+        try:
+            # 1. 取得或建立 Session（首次建立時注入 LINE 專屬 system prompt）
+            # 注意：為了解決日期幻覺，每次對話都要保證時間是最新的，但 session 創立後不會重寫 system prompt
+            # 所以我們在每次對話前，強制更新 System Prompt
+            _session_mgr.get_or_create_conversation(session_id, _get_dynamic_system_prompt())
+            _session_mgr._update_system_prompt(session_id, _get_dynamic_system_prompt())
+    
+            # 2. 追加使用者訊息至 Session
+            _session_mgr.append_message(session_id, "user", user_input)
 
-        if not adapter.is_available:
-            final_reply = "⚠️ AI 服務暫時無法使用，請確認 OPENAI_API_KEY 設定。"
-        else:
-            # 為了避免背景長期對話導致 OpenAI 429 Too Many Requests (Token Limit)
-            # 強制只擷取 System Prompt + 最近 5 輪對話 (10 條訊息)
-            system_msgs = [m for m in history if m.get("role") == "system"]
-            recent_msgs = [m for m in history if m.get("role") != "system"][-10:]
-            truncated_history = system_msgs + recent_msgs
+            # 3. 解析可能的指令前綴，動態切換模式
+            actual_input, execute_mode = _parse_command_prefix(user_input)
 
-            # 傳入截斷的 history 副本，避免 generator 消費途中 list 被外部修改
-            result_gen = adapter.chat(
-                messages=truncated_history,
-                user_query=actual_input,
-                session_id=session_id,
+            # 4. 初始化 Adapter（使用預設 model，可依需求選 Gemini/Claude）
+            uma = get_uma()
+            adapter = OpenAIAdapter(uma=uma)
+
+            if not adapter.is_available:
+                final_reply = "⚠️ AI 服務暫時無法使用，請確認 OPENAI_API_KEY 設定。"
+            else:
+                # 為了避免背景長期對話導致 OpenAI 429 Too Many Requests (Token Limit)
+                # 強制只擷取 System Prompt + 最近 5 輪對話 (10 條訊息)
+                # 因為我們有 _update_system_prompt，重新取得最新 history
+                history = _session_mgr.get_or_create_conversation(session_id)
+                system_msgs = [m for m in history if m.get("role") == "system"]
+                recent_msgs = [m for m in history if m.get("role") != "system"][-10:]
+                truncated_history = system_msgs + recent_msgs
+
+                # 傳入截斷的 history 副本，避免 generator 消費途中 list 被外部修改
+                result_gen = adapter.chat(
+                    messages=truncated_history,
+                    user_query=actual_input,
+                    session_id=session_id,
+                )
+
+                # 5. 消費同步 Generator，組裝完整回覆字串
+                final_reply = _collect_generator(result_gen)
+
+            # 6. 截斷至 LINE 字元上限
+            if len(final_reply) > _LINE_MAX_CHARS:
+                final_reply = final_reply[:_LINE_MAX_CHARS] + "\n\n…（回覆過長，已截斷）"
+
+            # 7. 寫入 Session 記憶（觸發 MEMORY.md 持久化）
+            _session_mgr.append_message(session_id, "assistant", final_reply)
+
+            # 8. 回傳 LINE（reply_token 優先，逾時後備 push_message）
+            _send_line_reply(line_api, reply_token, chat_id, final_reply)
+
+        except Exception as e:
+            logger.error(
+                f"[LINE BG] Unhandled error for session={session_id}: {e}", exc_info=True
             )
-
-            # 5. 消費同步 Generator，組裝完整回覆字串
-            final_reply = _collect_generator(result_gen)
-
-        # 6. 截斷至 LINE 字元上限
-        if len(final_reply) > _LINE_MAX_CHARS:
-            final_reply = final_reply[:_LINE_MAX_CHARS] + "\n\n…（回覆過長，已截斷）"
-
-        # 7. 寫入 Session 記憶（觸發 MEMORY.md 持久化）
-        _session_mgr.append_message(session_id, "assistant", final_reply)
-
-        # 8. 回傳 LINE（reply_token 優先，逾時後備 push_message）
-        _send_line_reply(line_api, reply_token, user_id, final_reply)
-
-    except Exception as e:
-        logger.error(
-            f"[LINE BG] Unhandled error for session={session_id}: {e}", exc_info=True
-        )
-        _send_error_push(line_api, user_id)
+            _send_error_push(line_api, chat_id)
 
 
 def _parse_command_prefix(user_input: str) -> tuple[str, bool]:
@@ -251,7 +355,7 @@ def _collect_generator(result_gen) -> str:
     return accumulated if accumulated else "（AI 未產生回覆，請稍後再試）"
 
 
-def _send_line_reply(line_api, reply_token: str, user_id: str, text: str):
+def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
     """
     發送回覆至 LINE。
     優先使用 reply_token（限 30 秒有效），逾時後備為 push_message。
@@ -265,37 +369,37 @@ def _send_line_reply(line_api, reply_token: str, user_id: str, text: str):
                 messages=[TextMessage(text=text)],
             )
         )
-        logger.info(f"[LINE] Reply sent via reply_token → user={user_id}")
+        logger.info(f"[LINE] Reply sent via reply_token → chat={chat_id}")
     except Exception as reply_err:
         # reply_token 已過期或失效，改用 push_message 主動推送
         logger.warning(
             f"[LINE] reply_token expired/failed ({reply_err}), "
-            f"falling back to push_message → user={user_id}"
+            f"falling back to push_message → chat={chat_id}"
         )
         try:
             line_api.push_message(
                 PushMessageRequest(
-                    to=user_id,
+                    to=chat_id,
                     messages=[TextMessage(text=text)],
                 )
             )
-            logger.info(f"[LINE] Reply sent via push_message → user={user_id}")
+            logger.info(f"[LINE] Reply sent via push_message → chat={chat_id}")
         except Exception as push_err:
             logger.error(f"[LINE] push_message also failed: {push_err}")
 
 
-def _send_error_push(line_api, user_id: str):
+def _send_error_push(line_api, chat_id: str):
     """發送通用錯誤通知至 LINE 使用者。"""
     try:
         from linebot.v3.messaging import TextMessage, PushMessageRequest
 
         line_api.push_message(
             PushMessageRequest(
-                to=user_id,
+                to=chat_id,
                 messages=[
                     TextMessage(text="⚠️ 系統發生內部錯誤，請稍後再試或聯絡管理員。")
                 ],
             )
         )
     except Exception as e:
-        logger.error(f"[LINE] Failed to send error notification to {user_id}: {e}")
+        logger.error(f"[LINE] Failed to send error notification to {chat_id}: {e}")
