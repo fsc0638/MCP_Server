@@ -4,7 +4,6 @@
 
 1. Replace `server/services/chat_service.py` legacy fallback with native implementation in `server/services/chat_core.py` for:
    - `execute=true`
-   - `attached_file` flow
 2. Remove `server/services/prompt_cache.py` dependency on `router.invalidate_prompt_cache`.
 3. Remove remaining transitional bridge imports from `router.py`.
 
