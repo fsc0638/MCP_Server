@@ -29,6 +29,7 @@ router = APIRouter()
 # 延遲初始化，確保缺少 key 時伺服器仍可啟動（降級模式）
 _line_handler = None
 _line_api = None
+_line_api_blob = None
 
 
 def _get_line_components():
@@ -36,10 +37,10 @@ def _get_line_components():
     Lazily initialize LINE SDK WebhookHandler and MessagingApi.
     Raises KeyError if LINE_CHANNEL_SECRET or LINE_CHANNEL_ACCESS_TOKEN is missing.
     """
-    global _line_handler, _line_api
+    global _line_handler, _line_api, _line_api_blob
     if _line_handler is None:
         from linebot.v3 import WebhookHandler
-        from linebot.v3.messaging import Configuration, ApiClient, MessagingApi
+        from linebot.v3.messaging import Configuration, ApiClient, MessagingApi, MessagingApiBlob
 
         secret = os.environ.get("LINE_CHANNEL_SECRET", "").strip()
         token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
@@ -50,11 +51,13 @@ def _get_line_components():
             )
 
         cfg = Configuration(access_token=token)
-        _line_api = MessagingApi(ApiClient(cfg))
+        _api_client = ApiClient(cfg)
+        _line_api = MessagingApi(_api_client)
+        _line_api_blob = MessagingApiBlob(_api_client)
         _line_handler = WebhookHandler(secret)
         logger.info("[LINE] SDK initialized successfully.")
 
-    return _line_handler, _line_api
+    return _line_handler, _line_api, _line_api_blob
 
 
 # ── LINE-specific system prompt ────────────────────────────────────────────────
@@ -88,7 +91,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     # A. 取得並驗證 Signature
     try:
-        handler, line_api = _get_line_components()
+        handler, line_api, line_api_blob = _get_line_components()
     except KeyError as e:
         logger.error(f"[LINE] Missing configuration: {e}")
         raise HTTPException(status_code=500, detail=f"LINE configuration error: {e}")
@@ -110,33 +113,64 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"[LINE] Event parse error: {e}")
         raise HTTPException(status_code=400, detail=f"Event parse error: {e}")
 
-    # C. 逐一處理 TextMessage Event
+    # C. 逐一處理 TextMessage / ImageMessage / FileMessage Event
+    from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent
     for event in events:
-        if isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
+        if isinstance(event, MessageEvent):
+            if not isinstance(event.message, (TextMessageContent, ImageMessageContent, FileMessageContent)):
+                continue
             # 解析 session_id：依來源類型決定（user / group / room）
             source = event.source
+            user_input = event.message.text if isinstance(event.message, TextMessageContent) else ""
+            
+            is_group_or_room = False
             if hasattr(source, "group_id") and source.group_id:
                 session_id = f"line_group_{source.group_id}"
                 chat_id = source.group_id
+                is_group_or_room = True
             elif hasattr(source, "room_id") and source.room_id:
                 session_id = f"line_room_{source.room_id}"
                 chat_id = source.room_id
+                is_group_or_room = True
             else:
                 session_id = f"line_{source.user_id}"
                 chat_id = source.user_id
 
+            # Phase 1: Group Mention Filter & Window
+            if is_group_or_room:
+                if isinstance(event.message, TextMessageContent):
+                    # 同時支援 [@AgentK] 或 @AgentK
+                    if "[@AgentK]" in user_input or "@AgentK" in user_input:
+                        # 將標籤替換為空白，保留真實指令傳給 LLM
+                        user_input = user_input.replace("[@AgentK]", "").replace("@AgentK", "").strip()
+                        import time
+                        _last_request_time[f"mention_{chat_id}"] = time.time()
+                    else:
+                        # 不是叫它，直接忽略 (bypass processing)
+                        logger.info(f"[LINE] Skipped group text (no @AgentK mention): chat={chat_id}")
+                        continue
+                else:
+                    # For Image/File in groups, check if bot was mentioned recently (window of 60s)
+                    import time
+                    last_mention = _last_request_time.get(f"mention_{chat_id}", 0)
+                    if time.time() - last_mention > 60:
+                        logger.info(f"[LINE] Skipped group media/file (no recent mention): chat={chat_id}")
+                        continue
+
             background_tasks.add_task(
                 _process_line_message,
                 line_api=line_api,
+                line_api_blob=line_api_blob,
                 reply_token=event.reply_token,
                 user_id=source.user_id,
                 chat_id=chat_id,
                 session_id=session_id,
-                user_input=event.message.text,
+                event_msg=event.message,
+                extracted_text=user_input
             )
             logger.info(
                 f"[LINE] Queued background task: session={session_id}, "
-                f"input='{event.message.text[:40]}...'"
+                f"input='{user_input[:40]}...'"
             )
 
     # D. 立即回覆 200 OK — 不等待 LLM 完成
@@ -214,13 +248,41 @@ def _send_loading_animation(line_api, chat_id: str):
 
 # ── Background Processing Function ────────────────────────────────────────────
 
+def _preprocess_image(file_path: str) -> str:
+    """實作 HEIC/RAW 自動轉 JPG 的預處理機制"""
+    lower_path = file_path.lower()
+    try:
+        if lower_path.endswith(('.heic', '.heif')):
+            import pillow_heif
+            from PIL import Image
+            heif_file = pillow_heif.read_heif(file_path)
+            image = Image.frombytes(heif_file.mode, heif_file.size, heif_file.data)
+            jpg_path = file_path.rsplit('.', 1)[0] + '.jpg'
+            image.save(jpg_path, format="JPEG")
+            return jpg_path
+        elif lower_path.endswith(('.cr2', '.nef', '.arw', '.dng')):
+            import rawpy
+            from PIL import Image
+            with rawpy.imread(file_path) as raw:
+                rgb = raw.postprocess()
+            image = Image.fromarray(rgb)
+            jpg_path = file_path.rsplit('.', 1)[0] + '.jpg'
+            image.save(jpg_path, format="JPEG")
+            return jpg_path
+    except Exception as e:
+        logger.error(f"[LINE BG] Pre-process Failed for {file_path}: {e}")
+    return file_path
+
+
 def _process_line_message(
     line_api,
+    line_api_blob,
     reply_token: str,
     user_id: str,
     chat_id: str,
     session_id: str,
-    user_input: str,
+    event_msg: Any,
+    extracted_text: str = "",
 ):
     """
     背景函數：LLM 生成 → Tool 執行 → 組裝回覆 → 送回 LINE。
@@ -254,6 +316,45 @@ def _process_line_message(
         _send_loading_animation(line_api, chat_id)
 
         try:
+            from linebot.v3.webhooks import TextMessageContent, ImageMessageContent, FileMessageContent
+            import os
+
+            attached_file_path = None
+            if isinstance(event_msg, TextMessageContent):
+                user_input = extracted_text
+            else:
+                # Phase 2: Inbound Multimedia Download and Processing
+                try:
+                    content_blob = line_api_blob.get_message_content(event_msg.id)
+                    uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads")
+                    os.makedirs(uploads_dir, exist_ok=True)
+                    
+                    if isinstance(event_msg, ImageMessageContent):
+                        attached_file_path = os.path.join(uploads_dir, f"{event_msg.id}.jpg")
+                        with open(attached_file_path, "wb") as f:
+                            f.write(content_blob)
+                            
+                        attached_file_path = _preprocess_image(attached_file_path)
+                        user_input = "[系統通知：使用者傳送了一張圖片。請務必直接回答這張圖片裡面有什麼內容與細節，不要拒絕。]"
+                        
+                    elif isinstance(event_msg, FileMessageContent):
+                        filename = getattr(event_msg, "file_name", f"{event_msg.id}.bin")
+                        attached_file_path = os.path.join(uploads_dir, f"{event_msg.id}_{filename}")
+                        with open(attached_file_path, "wb") as f:
+                            f.write(content_blob)
+                            
+                        if attached_file_path.lower().endswith(('.heic', '.heif', '.cr2', '.nef', '.arw')):
+                            attached_file_path = _preprocess_image(attached_file_path)
+                            user_input = f"[系統通知：使用者傳送了一張高畫質圖片 {filename}，已轉為 {os.path.basename(attached_file_path)} 供您檢視]"
+                        else:
+                            abs_path = os.path.abspath(attached_file_path)
+                            # Phase 2: Knowledge Base Document Instruction
+                            user_input = f"[系統通知：使用者上傳了知識庫文件 {filename}，絕對路徑為：{abs_path}。請立刻使用所需的 MCP 工具 (如 mcp-pdf-processor, mcp-docx-processor 等) 讀取絕對路徑的內容後，再進行綜合回答。]"
+                        
+                except Exception as e:
+                    logger.error(f"[LINE BG] Download failed: {e}")
+                    user_input = "[系統通知：使用者傳送了檔案，但伺服器下載失敗]"
+
             # 1. 取得或建立 Session（首次建立時注入 LINE 專屬 system prompt）
             # 注意：為了解決日期幻覺，每次對話都要保證時間是最新的，但 session 創立後不會重寫 system prompt
             # 所以我們在每次對話前，強制更新 System Prompt
@@ -286,6 +387,7 @@ def _process_line_message(
                     messages=truncated_history,
                     user_query=actual_input,
                     session_id=session_id,
+                    attached_file=attached_file_path
                 )
 
                 # 5. 消費同步 Generator，組裝完整回覆字串

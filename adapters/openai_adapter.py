@@ -114,10 +114,8 @@ class OpenAIAdapter:
                 with open(attached_file, "rb") as f:
                     base64_img = base64.b64encode(f.read()).decode('utf-8')
                 return {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{mime_type};base64,{base64_img}"
-                    }
+                    "type": "input_image",
+                    "image_url": f"data:{mime_type};base64,{base64_img}"
                 }
             except Exception as e:
                 logger.error(f"Failed to read and encode image for OpenAI: {e}")
@@ -182,7 +180,7 @@ class OpenAIAdapter:
         # 2. Selected Docs (New: visual_docs)
         for doc_path in visual_docs:
             display_name = visual_docs_display_names.get(doc_path, os.path.basename(doc_path))
-            all_visual_parts.append({"type": "text", "text": f"[圖片名稱: {display_name}]"})
+            all_visual_parts.append({"type": "input_text", "text": f"[圖片名稱: {display_name}]"})
             res = self._handle_attached_file(doc_path)
             if res:
                 all_visual_parts.append(res)
@@ -193,9 +191,15 @@ class OpenAIAdapter:
                 if input_payload[i].get("role") == "user":
                     orig_content = input_payload[i]["content"]
                     if isinstance(orig_content, str):
-                        input_payload[i]["content"] = [{"type": "text", "text": orig_content}] + all_visual_parts
+                        input_payload[i]["content"] = [{"type": "input_text", "text": orig_content}] + all_visual_parts
                     elif isinstance(orig_content, list):
-                        input_payload[i]["content"].extend(all_visual_parts)
+                        new_content = []
+                        for c in orig_content:
+                            if isinstance(c, dict) and c.get("type") == "text":
+                                new_content.append({"type": "input_text", "text": c.get("text")})
+                            else:
+                                new_content.append(c)
+                        input_payload[i]["content"] = new_content + all_visual_parts
                     break
 
         tools = self.get_tools(user_query=user_query)
@@ -220,6 +224,20 @@ class OpenAIAdapter:
                     # In Responses API, if tools list is populated, tool_choice defaults to "auto"
                     kwargs_req["tools"] = tools
 
+                # --- DEBUG LOGGING START ---
+                import copy
+                debug_payload = copy.deepcopy(kwargs_req)
+                try:
+                    for inp in debug_payload.get("input", []):
+                        if isinstance(inp.get("content"), list):
+                            for c in inp["content"]:
+                                if c.get("type") == "input_image" and "image_url" in c:
+                                    c["image_url"] = c["image_url"][:30] + "...[truncated]..."
+                    logger.info(f"[OpenAI Adapter Debug] Payload: {debug_payload}")
+                except Exception as e:
+                    logger.info(f"[OpenAI Adapter Debug] Failed to parse payload for logging: {e}")
+                # --- DEBUG LOGGING END ---
+                
                 response = self.client.responses.create(**kwargs_req)
 
                 full_content = ""
