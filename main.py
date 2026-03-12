@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.uma_core import UMA
+from server.core.uma_core import UMA
 
 # --- Logging Setup ---
 logging.basicConfig(
@@ -94,9 +94,9 @@ if __name__ == "__main__":
     logger.info("Server is available on http://127.0.0.1:8000")
     
     # Run the uvicorn server directly when executing `python main.py`
-    # Note: passing "router:app" as a string forces uvicorn to import it fresh
+    # New entrypoint uses server.app and mounts the legacy router for compatibility.
     uvicorn.run(
-        "router:app", 
+        "server.app:app",
         host="0.0.0.0", 
         port=8000, 
         reload=False  # Disabled to prevent watchfiles loop triggered by app logs & memory
