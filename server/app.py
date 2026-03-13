@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from server.routes import models, documents, chat, skills, workspace, resources
 from server.integrations.line_connector import router as line_router
 from main import PROJECT_ROOT
-from main import get_uma
+from server.dependencies.uma import get_uma_instance as get_uma
 from server.core.retriever import retriever
 from server.core.watcher import DirectoryWatcher
 from server.dependencies.session import get_session_manager

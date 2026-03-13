@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 import hashlib as _hashlib
 
-from main import get_uma
+from server.dependencies.uma import get_uma_instance as get_uma
 from server.adapters.openai_adapter import OpenAIAdapter
 
 logger = logging.getLogger("MCP_Server.Services.Runtime")
