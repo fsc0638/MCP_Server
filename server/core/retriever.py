@@ -1,4 +1,4 @@
-import os
+ï»¿import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import logging
@@ -16,7 +16,8 @@ from server.core.executor import ExecutionEngine
 logger = logging.getLogger("MCP_Server.Retriever")
 
 # Ensure paths
-PROJECT_ROOT = Path(os.path.abspath(__file__)).parent.parent
+# server/core/retriever.py -> project root is three levels up
+PROJECT_ROOT = Path(os.path.abspath(__file__)).parent.parent.parent
 WORKSPACE_DIR = PROJECT_ROOT / "workspace"
 WORKSPACE_DIR.mkdir(exist_ok=True)
 
@@ -50,7 +51,7 @@ class DocumentRetriever:
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
-            separators=["\n\n", "\n", "??, "ï¼?, "ï¼?, " ", ""]
+            separators=["\n\n", "\n", ".", "!", "?", " ", ""]
         )
 
     def ingest_document(self, file_path: str) -> bool:
@@ -471,5 +472,7 @@ class LazyDocumentRetriever:
 
 # Global instance
 retriever = LazyDocumentRetriever()
+
+
 
 

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Claude Adapter (Phase 4)
 Handles communication with Anthropic Claude models using tool use.
 """
@@ -53,7 +53,7 @@ class ClaudeAdapter:
 
     def get_tools(self, user_query: Optional[str] = None, max_tools: int = 10) -> List[Dict[str, Any]]:
         """Get tool definitions in Claude format."""
-        from adapters import select_relevant_tools
+        from server.adapters import select_relevant_tools
         all_tools = self.uma.get_tools_for_model("openai")  # Claude uses similar format
 
         if user_query and len(all_tools) > max_tools:
@@ -106,7 +106,7 @@ class ClaudeAdapter:
         """
         Send a message to Claude with tool use support.
         D-10: Supports multi-turn tool calls (up to MAX_ITERATIONS).
-        D-12: Unified interface — accepts messages list + user_query.
+        D-12: Unified interface ??accepts messages list + user_query.
         """
         if not self.is_available:
             return {"status": "error", "message": "Claude adapter is not available"}
@@ -143,8 +143,8 @@ class ClaudeAdapter:
         # Fallback if not provided
         if not agent_system:
             agent_system = kwargs.get("system_prompt") or (
-                "You are a high-performance Autonomous AI Agent. 請以繁體中文回覆。\n"
-                "請優先根據參考資料回答，並嚴格區分「檔案內容」與「技能定義」。"
+                "You are a high-performance Autonomous AI Agent. 隢誑蝜?銝剜????n"
+                "隢???????蝑?銝血?澆???獢摰嫘????賢?蝢押?
             )
 
         # Multimodal Vision (NotebookLM Style)
@@ -162,7 +162,7 @@ class ClaudeAdapter:
         for doc_path in visual_docs:
             display_name = visual_docs_display_names.get(doc_path, _os.path.basename(doc_path))
             # Prepend text label, then image part
-            all_visual_parts.append({"type": "text", "text": f"[圖片名稱: {display_name}]"})
+            all_visual_parts.append({"type": "text", "text": f"[???迂: {display_name}]"})
             res = self._handle_attached_file(doc_path)
             if res:
                 all_visual_parts.append(res)
@@ -270,7 +270,7 @@ class ClaudeAdapter:
                         })
                         
                         logger.info(f"Claude tool call: {fn_name}({fn_args})")
-                        yield {"status": "streaming", "content": f"\n\n⚙️ 執行技能: `{fn_name}`\n"}
+                        yield {"status": "streaming", "content": f"\n\n?? ?瑁???? `{fn_name}`\n"}
                         result = self.uma.execute_tool_call(fn_name, fn_args)
 
                         if result.get("status") == "requires_approval":
@@ -303,7 +303,7 @@ class ClaudeAdapter:
             # Safety: exceeded max iterations
             yield {
                 "status": "success",
-                "content": full_content + f"\n\n(已達最大工具呼叫次數 {MAX_ITERATIONS} 輪，強制結束)",
+                "content": full_content + f"\n\n(撌脤??憭批極?瑕?急活??{MAX_ITERATIONS} 頛迎?撘瑕蝯?)",
                 "tool_calls_made": tool_calls_made
             }
             return
@@ -314,7 +314,7 @@ class ClaudeAdapter:
 
     def simple_chat(self, session_history: list, **kwargs) -> dict:
         """
-        Pure LLM conversation — NO tools, NO skill schema injection.
+        Pure LLM conversation ??NO tools, NO skill schema injection.
         Strictly isolated from skill execution.
 
         Args:
@@ -341,10 +341,10 @@ class ClaudeAdapter:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=4096,
-                system=system_content or "你是研發組的 AI 助理，請以繁體中文回覆。",
+                system=system_content or "雿?蝯? AI ?拍?嚗?隞亦?擃葉??閬?,
                 messages=messages,
                 stream=True
-                # NOTE: No tools= passed — strictly isolated
+                # NOTE: No tools= passed ??strictly isolated
             )
             full_content = ""
             for event in response:
@@ -356,4 +356,5 @@ class ClaudeAdapter:
         except Exception as e:
             logger.error(f"Claude simple_chat error: {e}")
             yield {"status": "error", "message": str(e)}
+
 

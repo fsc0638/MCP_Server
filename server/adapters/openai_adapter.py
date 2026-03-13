@@ -75,7 +75,7 @@ class OpenAIAdapter:
         Get tool definitions in OpenAI format.
         If user_query is provided, uses dynamic tool injection.
         """
-        from adapters import select_relevant_tools
+        from server.adapters import select_relevant_tools
         all_tools = self.uma.get_tools_for_model("openai")
 
         if user_query and len(all_tools) > max_tools:

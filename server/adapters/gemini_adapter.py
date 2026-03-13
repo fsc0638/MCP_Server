@@ -1,4 +1,4 @@
-"""
+﻿"""
 Gemini Adapter (Phase 4)
 Handles communication with Google Gemini models using function calling.
 """
@@ -136,13 +136,13 @@ class GeminiAdapter:
         # Proactively inject prompt if it's an image
         lower_path = attached_file.lower()
         if lower_path.endswith(('.png', '.jpg', '.jpeg', '.webp')):
-            parts.append("請�?細�?察�?述�??�並詳盡?�述?�容，然後根?��??�內容�??�並?�叫?�適??Skills ?��??��???)
+            parts.append("隢?蝝啗?撖?餈啣??蒂閰喟?膩?批捆嚗敺???摰孵??蒂?澆???Skills ?脰?????)
             
         return parts
 
     def get_tools(self, user_query: Optional[str] = None, max_tools: int = 10) -> List[Dict[str, Any]]:
         """Get tool definitions in Gemini FunctionDeclaration format."""
-        from adapters import select_relevant_tools
+        from server.adapters import select_relevant_tools
         all_tools = self.uma.get_tools_for_model("gemini")
 
         if user_query and len(all_tools) > max_tools:
@@ -188,9 +188,9 @@ class GeminiAdapter:
         system_instruction_text = kwargs.get("system_prompt", None)
         if not system_instruction_text:
             system_instruction_text = (
-                "You are a high-performance AI Assistant. 請以繁�?中�??��??�\n"
-                "?��?要�??�】�?答�??��?題�?，�??�使?�系統�??�中?�「�??��??��??�」。\n"
-                "?��?將�??�說?��?定為?��?庫�?件�??��?將知識庫?�件混入?�?��??��?
+                "You are a high-performance AI Assistant. 隢誑蝜?銝剜????n"
+                "??閬???蝑??賢?憿?嚗??蝙?函頂蝯梁??葉???湔??賣??柴n"
+                "?渡?撠??質牧??摰?亥?摨急?隞塚??渡?撠霅澈?辣瘛瑕??賣??柴?
             )
             if messages:
                 for msg in messages:
@@ -210,7 +210,7 @@ class GeminiAdapter:
         # Process visual_docs (New: NotebookLM Style selected docs)
         for doc_path in visual_docs:
             display_name = visual_docs_display_names.get(doc_path, _os.path.basename(doc_path))
-            visual_parts.append(f"[?��??�稱: {display_name}]")
+            visual_parts.append(f"[???迂: {display_name}]")
             visual_parts.extend(self._handle_attached_file(doc_path, session_id))
 
         # Use user_query as-is since RAG context is already embedded by router.py
@@ -297,7 +297,7 @@ class GeminiAdapter:
                                     pending_calls.append((fn_name, fn_args))
                                     
                                     logger.info(f"Gemini detected tool: {fn_name}")
-                                    yield {"status": "streaming", "content": f"\n\n?��? ?��??�?? `{fn_name}`\n"}
+                                    yield {"status": "streaming", "content": f"\n\n?? ?瑁???? `{fn_name}`\n"}
 
                     # 2. If no function calls, we are done
                     if not has_function_call:
@@ -343,13 +343,13 @@ class GeminiAdapter:
                     import traceback
                     logger.error(f"Gemini stream error: {stream_err}\n{traceback.format_exc()}")
                     if "SAFETY" in str(stream_err):
-                        yield {"status": "error", "message": "?�容觸發 Gemini 安全?�濾機制??}
+                        yield {"status": "error", "message": "?批捆閫貊 Gemini 摰?蕪璈??}
                         return
                     raise stream_err
 
             yield {
                 "status": "success",
-                "content": full_content + f"\n\n(已�??�大工?�呼?�次??{MAX_ITERATIONS} 輪�?強制結�?)",
+                "content": full_content + f"\n\n(撌脤??憭批極?瑕?急活??{MAX_ITERATIONS} 頛迎?撘瑕蝯?)",
                 "tool_calls_made": tool_calls_made
             }
             return
@@ -404,8 +404,8 @@ class GeminiAdapter:
             
             if retrieved_context:
                 augmented_msg = f"""[System Instruction]
-請�?必根?��??��?供�??�考�??��??��??��??�在?��??��??��?引用資�??�斷，�??�格?��?標示?��??��?，�?�?"[?�件?�稱#chunk_0:?�段]"??
-?��??��??�未?�解答�?題�?請老實?��?不知?��?
+隢?敹???寞?靘???????????????交?撘鞈??嚗??湔?萄?璅內?箄??澆?嚗?憒?"[?辣?迂#chunk_0:?挾]"??
+?亙?????質圾蝑?憿?隢祕??銝??
 
 [Reference Documents]
 {retrieved_context}
@@ -432,4 +432,5 @@ class GeminiAdapter:
         except Exception as e:
             logger.error(f"Gemini simple_chat error: {e}")
             yield {"status": "error", "message": str(e)}
+
 

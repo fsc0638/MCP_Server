@@ -175,7 +175,7 @@ class SkillRegistry:
                 metadata["_missing_deps"] = missing_reqs + missing_files
                 
                 # 3. Tag Extraction for dynamic tool selection (multilingual + weighted)
-                from adapters import extract_tags
+                from server.adapters import extract_tags
                 metadata["_tags"] = extract_tags(
                     metadata.get("description", ""),
                     name=metadata.get("name", skill_name)
