@@ -7,7 +7,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 load_dotenv()
 
-from adapters.gemini_adapter import GeminiAdapter
+from server.adapters.gemini_adapter import GeminiAdapter
 
 class MockUMA:
     def get_tools_for_model(self, provider):
@@ -36,3 +36,4 @@ except Exception as e:
     print(f"Caught expected error: {e}")
     import traceback
     traceback.print_exc()
+
