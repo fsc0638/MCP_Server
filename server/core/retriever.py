@@ -10,8 +10,8 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, CSVLoader
 
-from adapters import extract_tags
-from core.executor import ExecutionEngine
+from server.adapters import extract_tags
+from server.core.executor import ExecutionEngine
 
 logger = logging.getLogger("MCP_Server.Retriever")
 
@@ -50,7 +50,7 @@ class DocumentRetriever:
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
-            separators=["\n\n", "\n", "。", "！", "？", " ", ""]
+            separators=["\n\n", "\n", "??, "�?, "�?, " ", ""]
         )
 
     def ingest_document(self, file_path: str) -> bool:
@@ -328,7 +328,7 @@ class DocumentRetriever:
                     keep_metas.append(doc.metadata)
 
             if not keep_texts:
-                # No documents remain — clear the index
+                # No documents remain ??clear the index
                 self.vectorstore = None
                 # Remove FAISS files if they exist
                 for f in FAISS_DB_DIR.glob("*"):
@@ -447,7 +447,7 @@ class DocumentRetriever:
         summary["already"] = sorted(indexed & on_disk)
 
         logger.info(
-            f"[Sync] Workspace sync complete — "
+            f"[Sync] Workspace sync complete ??"
             f"added:{len(summary['added'])} removed:{len(summary['removed'])} "
             f"already:{len(summary['already'])}"
         )
@@ -471,3 +471,5 @@ class LazyDocumentRetriever:
 
 # Global instance
 retriever = LazyDocumentRetriever()
+
+

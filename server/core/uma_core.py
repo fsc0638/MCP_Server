@@ -7,8 +7,8 @@ from typing import Dict, Any, List, Optional
 import sys
 import importlib.util
 
-from core.executor import ExecutionEngine
-from core.converter import SchemaConverter
+from server.core.executor import ExecutionEngine
+from server.core.converter import SchemaConverter
 
 class UMA:
     """
@@ -290,3 +290,5 @@ if __name__ == "__main__":
     for name, data in registry.skills.items():
         ready_status = "READY" if data["metadata"]["_env_ready"] else f"MISSING: {data['metadata']['_missing_deps']}"
         print(f"Skill: {name} | Version: {data['metadata']['version']} | Env: {ready_status}")
+
+

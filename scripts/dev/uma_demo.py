@@ -1,5 +1,5 @@
 import json
-from core.uma_core import UMA
+from server.core.uma_core import UMA
 
 def main():
     print("=== UMA (Unified Model Adapter) Demo ===\n")
@@ -37,3 +37,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

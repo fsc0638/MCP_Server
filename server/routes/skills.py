@@ -115,7 +115,7 @@ def update_skill(skill_name: str, req: SkillUpdateRequest):
 
 @router.delete("/skills/{skill_name}")
 def delete_skill(skill_name: str):
-    from core.retriever import retriever
+    from server.core.retriever import retriever
 
     uma = get_uma()
     skill = uma.registry.get_skill(skill_name)
@@ -271,7 +271,7 @@ async def delete_skill_file(skill_name: str, folder: str, filename: str):
 
 @router.post("/skills/rescan")
 def rescan_skills():
-    from core.retriever import retriever
+    from server.core.retriever import retriever
     from server.services.runtime import delta_index_skills
 
     uma = get_uma()
@@ -339,3 +339,4 @@ risk_level: "low"
         if skill_path.exists():
             shutil.rmtree(skill_path, ignore_errors=True)
         raise HTTPException(status_code=500, detail=str(e))
+

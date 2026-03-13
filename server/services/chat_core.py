@@ -9,7 +9,7 @@ from typing import AsyncGenerator
 from sse_starlette.sse import EventSourceResponse
 
 from main import get_uma
-from core.retriever import retriever
+from server.core.retriever import retriever
 from server.adapters.openai_adapter import OpenAIAdapter
 from server.dependencies.session import get_session_manager
 from server.schemas.chat import ChatRequest
@@ -99,3 +99,4 @@ async def process_chat_native(req: ChatRequest):
                 break
 
     return EventSourceResponse(event_generator())
+

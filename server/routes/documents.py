@@ -85,7 +85,7 @@ async def upload_document(file: UploadFile = File(...), background_tasks: Backgr
         vectorized_status = "unsupported"
         if extension in {".txt", ".md", ".pdf", ".csv", ".docx"}:
             vectorized_status = "indexing"
-            from core.retriever import retriever as _upload_retriever
+            from server.core.retriever import retriever as _upload_retriever
 
             background_tasks.add_task(_upload_retriever.ingest_document, str(final_path))
             logger.info(f"Background FAISS indexing queued for: {hashed_filename}")
@@ -283,7 +283,7 @@ async def add_text_source(req: TextSourcingRequest):
 @router.get("/api/documents/list")
 def list_documents():
     """List workspace files and FAISS index status."""
-    from core.retriever import retriever
+    from server.core.retriever import retriever
 
     indexed = set(retriever.list_indexed_files())
     names_file = WORKSPACE_DIR / ".names.json"
@@ -309,7 +309,7 @@ def list_documents():
 @router.delete("/api/documents/{filename}")
 def delete_document(filename: str):
     """Delete workspace file and index entries."""
-    from core.retriever import retriever
+    from server.core.retriever import retriever
 
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -366,3 +366,5 @@ def rename_document(filename: str, req: RenameRequest):
 
     invalidate_prompt_cache()
     return {"status": "success", "message": f"'{filename}' renamed to '{new_name}'"}
+
+

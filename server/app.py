@@ -10,8 +10,8 @@ from server.routes import models, documents, chat, skills, workspace, resources
 from server.integrations.line_connector import router as line_router
 from main import PROJECT_ROOT
 from main import get_uma
-from core.retriever import retriever
-from core.watcher import DirectoryWatcher
+from server.core.retriever import retriever
+from server.core.watcher import DirectoryWatcher
 from server.dependencies.session import get_session_manager
 from server.services.runtime import delta_index_skills, make_llm_callable
 
@@ -78,3 +78,5 @@ async def shutdown():
         __watcher.stop()
     session_mgr = get_session_manager()
     session_mgr.flush_all_sessions(make_llm_callable())
+
+
