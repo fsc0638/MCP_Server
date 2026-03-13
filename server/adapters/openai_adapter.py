@@ -95,11 +95,8 @@ class OpenAIAdapter:
                 fn = t["function"]
                 fn_name = fn.get("name")
                 
-                # Keep full parameters for core tools, minimize for others
-                if fn_name in core_execution_tools:
-                    params = fn.get("parameters", {})
-                else:
-                    params = {"type": "object", "properties": {}}
+                # Keep parameters if they exist, otherwise use empty object
+                params = fn.get("parameters", {"type": "object", "properties": {}})
                 
                 responses_api_tools.append({
                     "type": "function",
