@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import logging
 import uuid
 
@@ -454,5 +454,20 @@ class DocumentRetriever:
         return summary
 
 
+class LazyDocumentRetriever:
+    """Instantiate the heavy retriever only on first use."""
+
+    def __init__(self):
+        self._instance: Optional[DocumentRetriever] = None
+
+    def _get_instance(self) -> DocumentRetriever:
+        if self._instance is None:
+            self._instance = DocumentRetriever()
+        return self._instance
+
+    def __getattr__(self, name):
+        return getattr(self._get_instance(), name)
+
+
 # Global instance
-retriever = DocumentRetriever()
+retriever = LazyDocumentRetriever()

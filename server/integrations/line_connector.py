@@ -9,9 +9,9 @@ Architecture:
   Outbound ??OpenAIAdapter.chat() ??reply_message / push_message fallback
 
 Design Principle:
-  -ç«‹å³?è? 200 OK (è§?±º LINE Webhook 1~2 ç§?Timeout ?åˆ¶)
-  - BackgroundTasks ?å?æ­¥åŸ·è¡?LLM ?Ÿæ???Tool Calling
-  - å®Œå…¨?ç”¨?¾æ? SessionManager + MEMORY.md ?ä??–æ???
+  -ç«‹å³?? 200 OK (? LINE Webhook 1~2 ?Timeout ?åˆ¶)
+  - BackgroundTasks ??æ­¥åŸ·?LLM ????Tool Calling
+  - å®Œå…¨?ç”¨?? SessionManager + MEMORY.md ??????
 """
 import logging
 import os
@@ -20,13 +20,16 @@ from contextlib import contextmanager
 
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
 import httpx
-import redis
+try:
+    import redis
+except ImportError:  # Optional dependency for distributed locks
+    redis = None
 
 logger = logging.getLogger("MCP_Server.LINE")
 router = APIRouter()
 
-# ?€?€ Lazy-initialized LINE SDK components ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
-# å»¶é²?å??–ï?ç¢ºä?ç¼ºå? key ?‚ä¼º?å™¨ä»å¯?Ÿå?ï¼ˆé?ç´šæ¨¡å¼ï?
+# ?? Lazy-initialized LINE SDK components ??????????????????????????????????????
+# å»¶é²????ç¢º?ç¼º? key ?ä¼º?å™¨ä»å¯??ï¼ˆ?ç´šæ¨¡å¼?
 _line_handler = None
 _line_api = None
 
@@ -57,36 +60,36 @@ def _get_line_components():
     return _line_handler, _line_api
 
 
-# ?€?€ LINE-specific system prompt ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# ?? LINE-specific system prompt ????????????????????????????????????????????????
 def _get_dynamic_system_prompt() -> str:
     from datetime import datetime
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (
-        f"ä½ æ˜¯?”ç™¼çµ?MCP Agent Console ??LINE AI ?©ç??‚\n"
-        f"?¾åœ¨?‚é??¯ï?{now_str}\n"
-        f"è«‹ä»¥ç¹é?ä¸­æ??ç°¡æ½”æ??›åœ°?è?ä½¿ç”¨?…ã€‚\n"
-        f"?¥é?è¦åŸ·è¡Œæ??½å·¥?·ï?è«‹ç›´?¥åŸ·è¡Œä¸¦?å ±çµæ??‚\n"
-        f"?è?è«‹æ§?¶åœ¨ 3000 å­—ä»¥?§ï?ä¿æ?æ¸…æ™°?“è???
+        "You are the LINE AI assistant for MCP Agent Console.\n"
+        f"Current time: {now_str}\n"
+        "Respond in Traditional Chinese with concise, clear answers.\n"
+        "If tools or lookups are needed, execute them directly and report the result.\n"
+        "Keep replies under 3000 characters and focused."
     )
 
-# ?€?€ LINE ?®å?è¨Šæ¯å­—å?ä¸Šé? ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# ?? LINE ??è¨Šæ¯å­—?ä¸Š? ???????????????????????????????????????????????????????
 _LINE_MAX_CHARS = 4900
 
 
-# ?€?€ Webhook Endpoint ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# ?? Webhook Endpoint ??????????????????????????????????????????????????????????
 
 @router.post("/api/line/webhook", tags=["Integration"])
 async def line_webhook(request: Request, background_tasks: BackgroundTasks):
     """
-    LINE Messaging API Webhook ?¥æ”¶ç«¯é???
+    LINE Messaging API Webhook ?æ”¶ç«¯???
 
-    æµç?ï¼?
-    A. é©—è? X-Line-Signatureï¼ˆé˜²?½é€ è?æ±‚ï?
-    B. è§?? LINE Events
-    C. TextMessage ??ä¸Ÿå…¥ BackgroundTasksï¼ˆè§£??LLM å»¶é²ï¼?
-    D. ç«‹å³?è? 200 OKï¼ˆè§£æ±?Timeout ?¶é ¸ï¼?
+    æµ??
+    A. é©—? X-Line-Signatureï¼ˆé˜²?é€ ?æ±‚?
+    B. ?? LINE Events
+    C. TextMessage ??ä¸Ÿå…¥ BackgroundTasksï¼ˆè§£??LLM å»¶é²?
+    D. ç«‹å³?? 200 OKï¼ˆè§£?Timeout ?é ¸?
     """
-    # A. ?–å?ä¸¦é?è­?Signature
+    # A. ??ä¸¦??Signature
     try:
         handler, line_api = _get_line_components()
     except KeyError as e:
@@ -97,7 +100,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
     body_bytes = await request.body()
     body_text = body_bytes.decode("utf-8")
 
-    # B. è§??äº‹ä»¶
+    # B. ??äº‹ä»¶
     from linebot.v3.exceptions import InvalidSignatureError
     from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
@@ -110,10 +113,10 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"[LINE] Event parse error: {e}")
         raise HTTPException(status_code=400, detail=f"Event parse error: {e}")
 
-    # C. ?ä??•ç? TextMessage Event
+    # C. ???? TextMessage Event
     for event in events:
         if isinstance(event, MessageEvent) and isinstance(event.message, TextMessageContent):
-            # è§?? session_idï¼šä?ä¾†æ?é¡å?æ±ºå?ï¼ˆuser / group / roomï¼?
+            # ?? session_idï¼š?ä¾†?é¡?æ±º?ï¼ˆuser / group / room?
             source = event.source
             if hasattr(source, "group_id") and source.group_id:
                 session_id = f"line_group_{source.group_id}"
@@ -139,21 +142,24 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                 f"input='{event.message.text[:40]}...'"
             )
 
-    # D. ç«‹å³?è? 200 OK ??ä¸ç?å¾?LLM å®Œæ?
+    # D. ç«‹å³?? 200 OK ??ä¸??LLM å®Œ?
     return "OK"
 
 
-# ?€?€ Session Locking & UX ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# ?? Session Locking & UX ??????????????????????????????????????????????????????
 
 _local_locks = {}
 _local_lock_mutex = threading.Lock()
-_last_request_time = {}  # ç´€?„æ???session ?„æ?å¾Œè??†æ???(Debounce ??
+_last_request_time = {}  # ç´€????session ??å¾Œ?????(Debounce ??
 _redis_client = None
 
 try:
-    _redis_client = redis.Redis(host="localhost", port=6379, db=0, socket_connect_timeout=1)
-    _redis_client.ping()
-    logger.info("[LINE] Redis connected for distributed locking.")
+    if redis is not None:
+        _redis_client = redis.Redis(host="localhost", port=6379, db=0, socket_connect_timeout=1)
+        _redis_client.ping()
+        logger.info("[LINE] Redis connected for distributed locking.")
+    else:
+        logger.info("[LINE] Redis package not installed. Falling back to in-memory locks.")
 except Exception as e:
     logger.info(f"[LINE] Redis not available ({e}). Falling back to in-memory locks.")
     _redis_client = None
@@ -201,7 +207,7 @@ def _acquire_session_lock(session_id: str):
             local_lock.release()
 
 def _send_loading_animation(line_api, chat_id: str):
-    """?¼å« LINE Loading Animation API (ä½¿ç”¨å®˜æ–¹ SDK)"""
+    """?å« LINE Loading Animation API (ä½¿ç”¨å®˜æ–¹ SDK)"""
     from linebot.v3.messaging import ShowLoadingAnimationRequest
 
     try:
@@ -212,7 +218,7 @@ def _send_loading_animation(line_api, chat_id: str):
         logger.warning(f"[LINE] Exception starting loading animation: {e}")
 
 
-# ?€?€ Background Processing Function ?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€?€
+# ?? Background Processing Function ????????????????????????????????????????????
 
 def _process_line_message(
     line_api,
@@ -223,12 +229,12 @@ def _process_line_message(
     user_input: str,
 ):
     """
-    ?Œæ™¯?½æ•¸ï¼šLLM ?Ÿæ? ??Tool ?·è? ??çµ„è??è? ???å? LINE??
+    ?æ™¯?æ•¸ï¼šLLM ?? ??Tool ?? ??çµ„??? ???? LINE??
 
-    ?ç”¨?¾æ??ƒä»¶ï¼?
+    ?ç”¨???ä»¶?
     - server.dependencies.session.get_session_manager() (SessionManager)
     - OpenAIAdapter.chat() (full Tool Calling + RAG)
-    - MEMORY.md ?ä??–ï?append_message ?ªå?è§¸ç™¼ï¼?
+    - MEMORY.md ????append_message ??è§¸ç™¼?
     """
     from server.dependencies.uma import get_uma_instance
     from server.adapters.openai_adapter import OpenAIAdapter
@@ -238,7 +244,7 @@ def _process_line_message(
 
     logger.info(f"[LINE BG] Start processing: session={session_id}")
 
-    # 0. ?²é€??æ©Ÿåˆ¶ (Debounce)ï¼šé?æ¿?2 ç§’å…§?è?è§¸ç™¼?„ä?ä»?
+    # 0. ???æ©Ÿåˆ¶ (Debounce)ï¼š??2 ç§’å…§??è§¸ç™¼???
     current_time = time.time()
     last_time = _last_request_time.get(session_id, 0)
     if current_time - last_time < 2.0:
@@ -251,55 +257,55 @@ def _process_line_message(
             logger.warning(f"[LINE BG] Session {session_id} is locked. Ignoring concurrent input.")
             return
 
-        # 0.5 é¡¯ç¤º loading ?•ç•« (å®‰æ’«ä½¿ç”¨?…ç?å¾…ç„¦??ï¼Œå??ˆå‚³??chat_id
+        # 0.5 é¡¯ç¤º loading ?ç•« (å®‰æ’«ä½¿ç”¨??å¾…ç„¦??ï¼Œ??å‚³??chat_id
         _send_loading_animation(line_api, chat_id)
 
         try:
-            # 1. ?–å??–å»ºç«?Sessionï¼ˆé?æ¬¡å»ºç«‹æ?æ³¨å…¥ LINE å°ˆå±¬ system promptï¼?
-            # æ³¨æ?ï¼šç‚ºäº†è§£æ±ºæ—¥?Ÿå¹»è¦ºï?æ¯æ¬¡å°è©±?½è?ä¿è??‚é??¯æ??°ç?ï¼Œä? session ?µç?å¾Œä??ƒé?å¯?system prompt
-            # ?€ä»¥æ??‘åœ¨æ¯æ¬¡å°è©±?ï?å¼·åˆ¶?´æ–° System Prompt
+            # 1. ???å»º?Sessionï¼ˆ?æ¬¡å»ºç«‹?æ³¨å…¥ LINE å°ˆå±¬ system prompt?
+            # æ³¨?ï¼šç‚ºäº†è§£æ±ºæ—¥?å¹»è¦º?æ¯æ¬¡å°è©±??ä¿???????ï¼Œ? session ??å¾Œ????system prompt
+            # ?ä»¥??åœ¨æ¯æ¬¡å°è©±??å¼·åˆ¶?æ–° System Prompt
             _session_mgr.get_or_create_conversation(session_id, _get_dynamic_system_prompt())
             _session_mgr._update_system_prompt(session_id, _get_dynamic_system_prompt())
     
-            # 2. è¿½å?ä½¿ç”¨?…è??¯è‡³ Session
+            # 2. è¿½?ä½¿ç”¨???è‡³ Session
             _session_mgr.append_message(session_id, "user", user_input)
 
-            # 3. è§???¯èƒ½?„æ?ä»¤å?ç¶´ï??•æ??‡æ?æ¨¡å?
+            # 3. ???èƒ½??ä»¤?ç¶´?????æ¨¡?
             actual_input, execute_mode = _parse_command_prefix(user_input)
 
-            # 4. ?å???Adapterï¼ˆä½¿?¨é?è¨?modelï¼Œå¯ä¾é?æ±‚é¸ Gemini/Claudeï¼?
+            # 4. ????Adapterï¼ˆä½¿???modelï¼Œå¯ä¾?æ±‚é¸ Gemini/Claude?
             uma = get_uma_instance()
             adapter = OpenAIAdapter(uma=uma)
 
             if not adapter.is_available:
-                final_reply = "? ï? AI ?å??«æ??¡æ?ä½¿ç”¨ï¼Œè?ç¢ºè? OPENAI_API_KEY è¨­å???
+                final_reply = "AI service is not available. Please verify OPENAI_API_KEY is configured."
             else:
-                # ?ºä??¿å??Œæ™¯?·æ?å°è©±å°è‡´ OpenAI 429 Too Many Requests (Token Limit)
-                # å¼·åˆ¶?ªæ“·??System Prompt + ?€è¿?5 è¼ªå?è©?(10 æ¢è???
-                # ? ç‚º?‘å€‘æ? _update_system_promptï¼Œé??°å?å¾—æ???history
+                # ?????æ™¯??å°è©±å°è‡´ OpenAI 429 Too Many Requests (Token Limit)
+                # å¼·åˆ¶?æ“·??System Prompt + ??5 è¼ª??(10 æ¢???
+                # ?ç‚º?å€‘? _update_system_promptï¼Œ???å¾—???history
                 history = _session_mgr.get_or_create_conversation(session_id)
                 system_msgs = [m for m in history if m.get("role") == "system"]
                 recent_msgs = [m for m in history if m.get("role") != "system"][-10:]
                 truncated_history = system_msgs + recent_msgs
 
-                # ?³å…¥?ªæ–·??history ?¯æœ¬ï¼Œé¿??generator æ¶ˆè²»?”ä¸­ list è¢«å??¨ä¿®??
+                # ?å…¥?æ–·??history ?æœ¬ï¼Œé¿??generator æ¶ˆè²»?ä¸­ list è¢«??ä¿®??
                 result_gen = adapter.chat(
                     messages=truncated_history,
                     user_query=actual_input,
                     session_id=session_id,
                 )
 
-                # 5. æ¶ˆè²»?Œæ­¥ Generatorï¼Œç?è£å??´å?è¦†å?ä¸?
+                # 5. æ¶ˆè²»?æ­¥ Generatorï¼Œ?è£???è¦†??
                 final_reply = _collect_generator(result_gen)
 
-            # 6. ?ªæ–·??LINE å­—å?ä¸Šé?
+            # 6. ?æ–·??LINE å­—?ä¸Š?
             if len(final_reply) > _LINE_MAX_CHARS:
-                final_reply = final_reply[:_LINE_MAX_CHARS] + "\n\n?¦ï??è??é•·ï¼Œå·²?ªæ–·ï¼?
+                final_reply = final_reply[:_LINE_MAX_CHARS] + "\n\nReply truncated to fit LINE limits."
 
-            # 7. å¯«å…¥ Session è¨˜æ†¶ï¼ˆè§¸??MEMORY.md ?ä??–ï?
+            # 7. å¯«å…¥ Session è¨˜æ†¶ï¼ˆè§¸??MEMORY.md ????
             _session_mgr.append_message(session_id, "assistant", final_reply)
 
-            # 8. ?å‚³ LINEï¼ˆreply_token ?ªå?ï¼Œé€¾æ?å¾Œå? push_messageï¼?
+            # 8. ?å‚³ LINEï¼ˆreply_token ??ï¼Œé€¾?å¾Œ? push_message?
             _send_line_reply(line_api, reply_token, chat_id, final_reply)
 
         except Exception as e:
@@ -311,24 +317,24 @@ def _process_line_message(
 
 def _parse_command_prefix(user_input: str) -> tuple[str, bool]:
     """
-    è§?? LINE è¨Šæ¯?ç¶´?‡ä»¤ï¼Œå??‹æ±ºå®šåŸ·è¡Œæ¨¡å¼ã€?
+    ?? LINE è¨Šæ¯?ç¶´?ä»¤ï¼Œ??æ±ºå®šåŸ·è¡Œæ¨¡å¼?
 
-    /tool <msg>  ??Agent æ¨¡å?ï¼ˆå¼·??Tool Callingï¼?
-    /chat <msg>  ??ç´”å?è©±æ¨¡å¼?
-    ?¶ä?         ???è¨­ Agent æ¨¡å?
+    /tool <msg>  ??Agent æ¨¡?ï¼ˆå¼·??Tool Calling?
+    /chat <msg>  ??ç´”?è©±æ¨¡?
+    ??         ???è¨­ Agent æ¨¡?
     """
     if user_input.startswith("/tool "):
         return user_input[6:].strip(), True
     elif user_input.startswith("/chat "):
         return user_input[6:].strip(), False
-    return user_input, True  # ?è¨­?Ÿç”¨ Tool Calling
+    return user_input, True  # ?è¨­?ç”¨ Tool Calling
 
 
 def _collect_generator(result_gen) -> str:
     """
-    æ¶ˆè²» adapter.chat() ?„å?æ­?generatorï¼Œç?è£å??´å?è¦†æ?å­—ã€?
+    æ¶ˆè²» adapter.chat() ???generatorï¼Œ?è£???è¦†?å­—?
 
-    Generator ??chunk ?¼å?ï¼?
+    Generator ??chunk ???
     - {"status": "streaming", "content": "<partial text>"}
     - {"status": "success",   "content": "<full text>"}
     - {"status": "error",     "message": "<error msg>"}
@@ -339,27 +345,27 @@ def _collect_generator(result_gen) -> str:
         if status == "streaming":
             accumulated += chunk.get("content", "")
         elif status == "success":
-            # success chunk ?…å«å®Œæ•´?€çµ‚å…§å®?
+            # success chunk ?å«å®Œæ•´?çµ‚å…§?
             final = chunk.get("content", "")
             return final if final else accumulated
         elif status == "error":
-            err_msg = chunk.get("message", "?ªçŸ¥?¯èª¤")
+            err_msg = chunk.get("message", "?çŸ¥?èª¤")
             logger.error(f"[LINE BG] Adapter error: {err_msg}")
-            return f"???¼ç??¯èª¤ï¼š{err_msg}"
+            return f"?????èª¤ï¼š{err_msg}"
         elif status == "requires_approval":
-            tool_name = chunk.get("tool_name", "?ªçŸ¥å·¥å…·")
+            tool_name = chunk.get("tool_name", "?çŸ¥å·¥å…·")
             return (
-                f"? ï? å·¥å…· `{tool_name}` ?€è¦äººå·¥ç¢ºèªå??èƒ½?·è??‚\n"
-                "è«‹è‡³ Web Console ?•ç?æ­¤é?é¢¨éšª?ä???
+                f"?? å·¥å…· `{tool_name}` ?è¦äººå·¥ç¢ºèª??èƒ½???\n"
+                "Please use the web console to review and approve this action."
             )
 
-    return accumulated if accumulated else "ï¼ˆAI ?ªç”¢?Ÿå?è¦†ï?è«‹ç?å¾Œå?è©¦ï?"
+    return accumulated if accumulated else "The AI did not return a reply. Please try again later."
 
 
 def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
     """
-    ?¼é€å?è¦†è‡³ LINE??
-    ?ªå?ä½¿ç”¨ reply_tokenï¼ˆé? 30 ç§’æ??ˆï?ï¼Œé€¾æ?å¾Œå???push_message??
+    ?é€?è¦†è‡³ LINE??
+    ??ä½¿ç”¨ reply_tokenï¼ˆ? 30 ç§’???ï¼Œé€¾?å¾Œ???push_message??
     """
     from linebot.v3.messaging import TextMessage, ReplyMessageRequest, PushMessageRequest
 
@@ -372,7 +378,7 @@ def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
         )
         logger.info(f"[LINE] Reply sent via reply_token ??chat={chat_id}")
     except Exception as reply_err:
-        # reply_token å·²é??Ÿæ?å¤±æ?ï¼Œæ”¹??push_message ä¸»å??¨é€?
+        # reply_token å·²???å¤±?ï¼Œæ”¹??push_message ä¸»???
         logger.warning(
             f"[LINE] reply_token expired/failed ({reply_err}), "
             f"falling back to push_message ??chat={chat_id}"
@@ -390,7 +396,7 @@ def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
 
 
 def _send_error_push(line_api, chat_id: str):
-    """?¼é€é€šç”¨?¯èª¤?šçŸ¥??LINE ä½¿ç”¨?…ã€?""
+    """Send a generic error notification to the LINE user."""
     try:
         from linebot.v3.messaging import TextMessage, PushMessageRequest
 
@@ -398,7 +404,7 @@ def _send_error_push(line_api, chat_id: str):
             PushMessageRequest(
                 to=chat_id,
                 messages=[
-                    TextMessage(text="? ï? ç³»çµ±?¼ç??§éƒ¨?¯èª¤ï¼Œè?ç¨å??è©¦?–è¯çµ¡ç®¡?†å“¡??)
+                    TextMessage(text="System error. Please try again later or contact the administrator.")
                 ],
             )
         )
