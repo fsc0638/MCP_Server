@@ -70,10 +70,15 @@ def _get_dynamic_system_prompt() -> str:
         f"現在時間是：{now_str}\n"
         f"請以繁體中文、簡潔有力地回覆使用者。\n"
         f"若需要執行技能工具，請直接執行並回報結果。\n\n"
-        f"【文件下載功能】\n"
-        f"如果你生成了檔案（如總結報告、Excel、CSV），請將其存放在以下路徑：\n"
-        f"路徑：`{os.path.join(os.getcwd(), 'workspace', 'downloads')}`\n"
-        f"並提供下載網址給使用者：`{base_url}/downloads/檔案名稱`。\n\n"
+        f"【網路搜尋規範】\n"
+        f"- 當你使用 `mcp-web-search` 獲取資訊後，必須在文末附上資料來源，格式範例：\n"
+        f"  [1] 標題 - 網址\n"
+        f"  [2] 標題 - 網址\n"
+        f"- 若使用者貼上網址要求分析，請優先使用 `mcp-web-search` 的 `target_url` 參數進行直讀。\n\n"
+        f"【文件生成規範】\n"
+        f"如果你使用搜尋結果產生報告，請確將搜尋到的「完整細節」寫入檔案中，不要只寫標題。\n"
+        f"檔案存放於：`{os.path.join(os.getcwd(), 'workspace', 'downloads')}`\n"
+        f"並提供下載網址：`{base_url}/downloads/檔案名稱`。\n\n"
         f"回覆請控制在 3000 字以內，保持清晰易讀。"
     )
 
@@ -148,6 +153,9 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                     mentions = ["[@Agent K]", "[@AgentK]", "@Agent K", "@AgentK"]
                     found_mention = False
                     
+                    # 1. 首先進入快取 (不論是否叫它，都進快取供後續引用)
+                    _add_to_cache(chat_id, event.message.id, user_input)
+                    
                     for m in mentions:
                         if m in user_input:
                             user_input = user_input.replace(m, "").strip()
@@ -159,15 +167,53 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         _last_request_time[f"mention_{chat_id}"] = time.time()
                     else:
                         # 不是叫它，直接忽略 (bypass processing)
-                        logger.info(f"[LINE] Skipped group text (no bot mention): chat={chat_id}")
+                        logger.info(f"[LINE] Skipped group text (cached but no mention): chat={chat_id}")
                         continue
                 else:
                     # For Image/File in groups, check if bot was mentioned recently (window of 60s)
                     import time
                     last_mention = _last_request_time.get(f"mention_{chat_id}", 0)
-                    if time.time() - last_mention > 60:
-                        logger.info(f"[LINE] Skipped group media/file (no recent mention): chat={chat_id}")
-                        continue
+                    
+                    # Phase 6: Proactive Cache
+                    just_cache = (time.time() - last_mention > 60)
+                    if just_cache:
+                        logger.info(f"[LINE] Group media/file received without mention. Will only cache: chat={chat_id}")
+                    
+                    background_tasks.add_task(
+                        _process_line_message,
+                        line_api=line_api,
+                        line_api_blob=line_api_blob,
+                        reply_token=event.reply_token,
+                        user_id=source.user_id,
+                        chat_id=chat_id,
+                        session_id=session_id,
+                        event_msg=event.message,
+                        extracted_text="",
+                        quoted_file_path=None,
+                        just_cache=just_cache
+                    )
+                    continue
+
+            # Phase 6: Quote Recognition (引用識別)
+            quoted_text = ""
+            quoted_file = None
+            if isinstance(event.message, TextMessageContent):
+                # 嘗試取得引用訊息 ID
+                quoted_msg_id = getattr(event.message, "quoted_message_id", None)
+                if not quoted_msg_id:
+                    m_dict = event.message.to_dict()
+                    quoted_msg_id = m_dict.get("quotedMessageId")
+                
+                if quoted_msg_id:
+                    q_data = _get_from_cache(chat_id, quoted_msg_id)
+                    quoted_text = q_data.get("text")
+                    quoted_file = q_data.get("file_path")
+                    
+                    if quoted_text:
+                        logger.info(f"[LINE] Quoted text found in cache: {quoted_msg_id}")
+                        user_input = f"[引用內容: \"{quoted_text}\"]\n{user_input}"
+                    if quoted_file:
+                        logger.info(f"[LINE] Quoted file found in cache: {quoted_file}")
 
             background_tasks.add_task(
                 _process_line_message,
@@ -178,7 +224,8 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                 chat_id=chat_id,
                 session_id=session_id,
                 event_msg=event.message,
-                extracted_text=user_input
+                extracted_text=user_input,
+                quoted_file_path=quoted_file
             )
             logger.info(
                 f"[LINE] Queued background task: session={session_id}, "
@@ -194,6 +241,31 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
 _local_locks = {}
 _local_lock_mutex = threading.Lock()
 _last_request_time = {}  # 紀錄每個 session 的最後處理時間 (Debounce 用)
+
+# ── Message Caching (Phase 6: Quote Support) ──────────────────────────────────
+_message_cache = {}  # {chat_id: {msg_id: {"text": str, "file_path": str}}}
+_MESSAGE_CACHE_LIMIT = 500  # 每回話上限 (LRU 簡化版)
+
+def _add_to_cache(chat_id: str, msg_id: str, text: str = None, file_path: str = None):
+    if chat_id not in _message_cache:
+        _message_cache[chat_id] = {}
+    cache = _message_cache[chat_id]
+    
+    # 如果已存在，更新非空欄位
+    if msg_id in cache:
+        if text: cache[msg_id]["text"] = text
+        if file_path: cache[msg_id]["file_path"] = file_path
+    else:
+        cache[msg_id] = {"text": text, "file_path": file_path}
+        
+    if len(cache) > _MESSAGE_CACHE_LIMIT:
+        oldest_key = next(iter(cache))
+        del cache[oldest_key]
+
+def _get_from_cache(chat_id: str, msg_id: str) -> dict:
+    """回傳 {"text": str, "file_path": str}"""
+    return _message_cache.get(chat_id, {}).get(msg_id, {"text": None, "file_path": None})
+
 _redis_client = None
 
 try:
@@ -293,8 +365,10 @@ def _process_line_message(
     user_id: str,
     chat_id: str,
     session_id: str,
-    event_msg: Any,
+    event_msg,
     extracted_text: str = "",
+    quoted_file_path: str = None,
+    just_cache: bool = False
 ):
     """
     背景函數：LLM 生成 → Tool 執行 → 組裝回覆 → 送回 LINE。
@@ -331,9 +405,13 @@ def _process_line_message(
             from linebot.v3.webhooks import TextMessageContent, ImageMessageContent, FileMessageContent
             import os
 
-            attached_file_path = None
+            attached_file_path = quoted_file_path
             if isinstance(event_msg, TextMessageContent):
                 user_input = extracted_text
+                # 如果有引用檔案，注入特別提示
+                if attached_file_path:
+                    fname = os.path.basename(attached_file_path)
+                    user_input = f"[系統通知：使用者引用了先前上傳的檔案 {fname}。檔案絕對路徑：{attached_file_path}]\n" + user_input
             else:
                 # Phase 2: Inbound Multimedia Download and Processing
                 try:
@@ -372,6 +450,14 @@ def _process_line_message(
                 except Exception as e:
                     logger.error(f"[LINE BG] Download failed: {e}")
                     user_input = "[系統通知：使用者傳送了檔案，但伺服器下載失敗]"
+                
+                # 下載成功後補進快取，供後續引用
+                if attached_file_path:
+                    _add_to_cache(chat_id, event_msg.id, file_path=attached_file_path)
+
+                if just_cache:
+                    logger.info(f"[LINE BG] Just cached media: session={session_id}, msg_id={event_msg.id}")
+                    return
 
             # 1. 取得或建立 Session（首次建立時注入 LINE 專屬 system prompt）
             # 注意：為了解決日期幻覺，每次對話都要保證時間是最新的，但 session 創立後不會重寫 system prompt
