@@ -32,5 +32,8 @@ jobs:
             # Remove dangling or stopped containers not cleaned up
             docker container prune -f
             
+            # Remove old dangling docker images to prevent 'No space left on device'
+            docker image prune -f
+            
             # Rebuild and restart docker containers
             docker-compose up -d --build
