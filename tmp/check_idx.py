@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from core.retriever import DocumentRetriever
+from server.core.retriever import DocumentRetriever
 
 retriever = DocumentRetriever()
 if retriever.vectorstore:
@@ -12,3 +12,4 @@ if retriever.vectorstore:
         print(f"  - {f}")
 else:
     print("No vectorstore found.")
+

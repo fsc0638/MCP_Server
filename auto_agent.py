@@ -20,14 +20,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 load_dotenv(PROJECT_ROOT / ".env")
 
-from core.uma_core import UMA
-from core.session import SessionManager
+from server.core.uma_core import UMA
+from server.core.session import SessionManager
 
 
 # --------------- Adapter runners ---------------
 
 def get_openai_adapter(uma):
-    from adapters.openai_adapter import OpenAIAdapter
+    from server.adapters.openai_adapter import OpenAIAdapter
     adapter = OpenAIAdapter(uma)
     if not adapter.is_available:
         print("[SKIP] OpenAI: API key not set or package missing")
@@ -36,7 +36,7 @@ def get_openai_adapter(uma):
 
 
 def get_gemini_adapter(uma):
-    from adapters.gemini_adapter import GeminiAdapter
+    from server.adapters.gemini_adapter import GeminiAdapter
     adapter = GeminiAdapter(uma)
     if not adapter.is_available:
         print("[SKIP] Gemini: API key not set or package missing")
@@ -45,7 +45,7 @@ def get_gemini_adapter(uma):
 
 
 def get_claude_adapter(uma):
-    from adapters.claude_adapter import ClaudeAdapter
+    from server.adapters.claude_adapter import ClaudeAdapter
     adapter = ClaudeAdapter(uma)
     if not adapter.is_available:
         print("[SKIP] Claude: API key not set or package missing")

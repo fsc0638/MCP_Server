@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from core.retriever import DocumentRetriever
+from server.core.retriever import DocumentRetriever
 import logging
 logging.basicConfig(level=logging.INFO)
 
@@ -24,3 +24,4 @@ print(f"  Result: {result_docx}")
 print("\nIndexed files after fix:")
 for f in retriever.list_indexed_files():
     print(f"  - {f}")
+
