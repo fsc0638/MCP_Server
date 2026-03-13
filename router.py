@@ -45,6 +45,25 @@ if not static_dir.exists():
     static_dir.mkdir()
 app.mount("/ui", StaticFiles(directory=str(static_dir), html=True), name="static")
 
+DOWNLOADS_DIR = WORKSPACE_DIR / "downloads"
+DOWNLOADS_DIR.mkdir(exist_ok=True)
+
+@app.get("/downloads/{filename}")
+async def download_file(filename: str):
+    """
+    Serves files from the downloads directory and forces a download prompt.
+    """
+    file_path = DOWNLOADS_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # Force download by setting Content-Disposition header
+    return FileResponse(
+        path=file_path,
+        filename=filename,
+        media_type='application/octet-stream'
+    )
+
 # ─── Skill Hash Registry (Plan A) ───────────────────────────────────────────
 import hashlib as _hashlib
 

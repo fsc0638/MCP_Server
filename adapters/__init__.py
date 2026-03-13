@@ -158,7 +158,7 @@ def extract_tags(description: str, name: str = "") -> List[str]:
 def select_relevant_tools(
     user_query: str,
     all_tools: List[Dict[str, Any]],
-    max_tools: int = 25
+    max_tools: int = 10
 ) -> List[Dict[str, Any]]:
     """
     Two-phase dynamic tool injection with multilingual tokenization:
@@ -166,7 +166,10 @@ def select_relevant_tools(
     Phase 2 — Fallback: score remaining tools by token overlap
 
     Filters stop words and applies synonym normalization on both sides.
+    ALWAYS includes core execution tools (executor, builder).
     """
+    CORE_TOOLS = {"mcp-python-executor", "mcp-builder", "mcp-skill-builder"}
+    
     # Tokenize and normalize user query
     query_tokens = _tokenize(user_query)
     query_words = set(
@@ -188,10 +191,20 @@ def select_relevant_tools(
         tokens = _tokenize(text)
         return set(_normalize_synonym(w) for w in tokens if w.lower() not in _STOP_WORDS)
 
-    # Phase 1: Keyword matching
     matched = []
     unmatched = []
     for tool in all_tools:
+        tool_name = ""
+        if "function" in tool:
+            tool_name = tool["function"].get("name", "")
+        elif "name" in tool:
+            tool_name = tool.get("name", "")
+            
+        # Core tools are always "matched"
+        if tool_name in CORE_TOOLS:
+            matched.append(tool)
+            continue
+            
         tool_tokens = get_tool_tokens(tool)
         if query_words & tool_tokens:  # Any overlap
             matched.append(tool)

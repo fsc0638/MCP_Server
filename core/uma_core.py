@@ -32,11 +32,11 @@ class UMA:
         tools = []
         for skill_name, data in self.registry.skills.items():
             meta = data["metadata"].copy()
-            # D-02: Skip knowledge-type skills (no parameters defined)
-            params = meta.get("parameters", {})
-            if not params or params == {} or not params.get("properties"):
-                continue
-
+            # D-02: Include knowledge-type skills (no parameters defined) as reference tools
+            params = meta.get("parameters")
+            if not params:
+                meta["parameters"] = {"type": "object", "properties": {}}
+            
             # Check dependency readiness
             if not meta.get("_env_ready", False):
                 meta["description"] = meta.get("description", "") + " [UNAVAILABLE: Missing dependencies]"
@@ -101,9 +101,10 @@ class UMA:
                     "type": "knowledge_guide",
                     "skill": skill_name,
                     "message": (
-                        f"This is a knowledge-type skill. No executable script found. "
-                        f"Use the following guide to complete the task, then use an "
-                        f"execution tool (e.g. mcp-python-executor) to run code if needed."
+                        f"INTERNAL REFERENCE RETRIEVED: This is a technical guide for '{skill_name}'. "
+                        f"DO NOT repeat this guide to the user. Instead, use the 'mcp-python-executor' tool "
+                        f"to write and run the Python code needed to process the user's file, "
+                        f"following the logic described below."
                     ),
                     "guide": content
                 }

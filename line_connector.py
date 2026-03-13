@@ -64,11 +64,16 @@ def _get_line_components():
 def _get_dynamic_system_prompt() -> str:
     from datetime import datetime
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    base_url = os.environ.get("BASE_URL", "http://localhost:8000").rstrip("/")
     return (
         f"你是研發組 MCP Agent Console 的 LINE AI 助理。\n"
         f"現在時間是：{now_str}\n"
         f"請以繁體中文、簡潔有力地回覆使用者。\n"
-        f"若需要執行技能工具，請直接執行並回報結果。\n"
+        f"若需要執行技能工具，請直接執行並回報結果。\n\n"
+        f"【文件下載功能】\n"
+        f"如果你生成了檔案（如總結報告、Excel、CSV），請將其存放在以下路徑：\n"
+        f"路徑：`{os.path.join(os.getcwd(), 'workspace', 'downloads')}`\n"
+        f"並提供下載網址給使用者：`{base_url}/downloads/檔案名稱`。\n\n"
         f"回覆請控制在 3000 字以內，保持清晰易讀。"
     )
 
@@ -139,15 +144,22 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
             # Phase 1: Group Mention Filter & Window
             if is_group_or_room:
                 if isinstance(event.message, TextMessageContent):
-                    # 同時支援 [@AgentK] 或 @AgentK
-                    if "[@AgentK]" in user_input or "@AgentK" in user_input:
-                        # 將標籤替換為空白，保留真實指令傳給 LLM
-                        user_input = user_input.replace("[@AgentK]", "").replace("@AgentK", "").strip()
+                    # 支援多種群組喚醒方式：[@Agent K], [@AgentK], @Agent K, @AgentK
+                    mentions = ["[@Agent K]", "[@AgentK]", "@Agent K", "@AgentK"]
+                    found_mention = False
+                    
+                    for m in mentions:
+                        if m in user_input:
+                            user_input = user_input.replace(m, "").strip()
+                            found_mention = True
+                            break
+                    
+                    if found_mention:
                         import time
                         _last_request_time[f"mention_{chat_id}"] = time.time()
                     else:
                         # 不是叫它，直接忽略 (bypass processing)
-                        logger.info(f"[LINE] Skipped group text (no @AgentK mention): chat={chat_id}")
+                        logger.info(f"[LINE] Skipped group text (no bot mention): chat={chat_id}")
                         continue
                 else:
                     # For Image/File in groups, check if bot was mentioned recently (window of 60s)
@@ -349,7 +361,13 @@ def _process_line_message(
                         else:
                             abs_path = os.path.abspath(attached_file_path)
                             # Phase 2: Knowledge Base Document Instruction
-                            user_input = f"[系統通知：使用者上傳了知識庫文件 {filename}，絕對路徑為：{abs_path}。請立刻使用所需的 MCP 工具 (如 mcp-pdf-processor, mcp-docx-processor 等) 讀取絕對路徑的內容後，再進行綜合回答。]"
+                            user_input = (
+                                f"[系統通知：使用者上傳了文件 {filename}。檔案絕對路徑：{abs_path}。\n\n"
+                                f"重大提示：\n"
+                                f"1. 先呼叫對應的指令手冊（manual）『獲取』處理程式碼範例。\n"
+                                f"2. **得到手冊後，下一輪絕對禁止再次呼叫該手冊。** 你必須立即切換並呼叫 `mcp-python-executor` 撰寫並執行分析程式碼。\n"
+                                f"3. 環境已預裝 pypdf, pdfplumber, pandas, python-docx。請直接基於手冊範例進行分析。]"
+                            )
                         
                 except Exception as e:
                     logger.error(f"[LINE BG] Download failed: {e}")

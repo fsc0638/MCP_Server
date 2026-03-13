@@ -70,27 +70,43 @@ class OpenAIAdapter:
             return " ".join(text_parts)
         return str(content)
 
-    def get_tools(self, user_query: Optional[str] = None, max_tools: int = 25) -> List[Dict[str, Any]]:
+    def get_tools(self, user_query: str = "", max_tools: int = 10) -> List[Dict[str, Any]]:
         """
-        Get tool definitions in OpenAI format.
-        If user_query is provided, uses dynamic tool injection.
+        Fetches tools from UMA and formats them for OpenAI.
+        D-06 Filtered/Dynamic injection.
         """
-        from adapters import select_relevant_tools
+        if not self.is_available:
+            return []
+            
         all_tools = self.uma.get_tools_for_model("openai")
+        
+        # P-03 Integration: Filter tools based on relevant keywords
+        from adapters import select_relevant_tools
 
         if user_query and len(all_tools) > max_tools:
             all_tools = select_relevant_tools(user_query, all_tools, max_tools)
             
         # P-03: Flatten the tool schema for Responses API compatibility
+        # D-07: V2 Optimization - Minimize schemas for knowledge-type tools to save tokens
         responses_api_tools = []
+        core_execution_tools = ["mcp-python-executor", "mcp-builder", "mcp-skill-builder"]
+        
         for t in all_tools:
             if t.get("type") == "function" and "function" in t:
                 fn = t["function"]
+                fn_name = fn.get("name")
+                
+                # Keep full parameters for core tools, minimize for others
+                if fn_name in core_execution_tools:
+                    params = fn.get("parameters", {})
+                else:
+                    params = {"type": "object", "properties": {}}
+                
                 responses_api_tools.append({
                     "type": "function",
-                    "name": fn.get("name"),
+                    "name": fn_name,
                     "description": fn.get("description", ""),
-                    "parameters": fn.get("parameters", {})
+                    "parameters": params
                 })
         return responses_api_tools
 
@@ -210,74 +226,77 @@ class OpenAIAdapter:
         current_response_id = prev_response_id
 
         try:
+            import time
             for _ in range(MAX_ITERATIONS):
-                kwargs_req = {
-                    "model": self.model,
-                    "input": input_payload,
-                    "stream": True,
-                    "temperature": temperature
-                }
+                MAX_RETRIES = 2
+                last_error = None
+                response = None
                 
-                if current_response_id:
-                    kwargs_req["previous_response_id"] = current_response_id
-                if tools:
-                    # In Responses API, if tools list is populated, tool_choice defaults to "auto"
-                    kwargs_req["tools"] = tools
+                for attempt in range(MAX_RETRIES + 1):
+                    try:
+                        kwargs_req = {
+                            "model": self.model,
+                            "input": input_payload,
+                            "stream": True,
+                            "temperature": temperature
+                        }
+                        if current_response_id:
+                            kwargs_req["previous_response_id"] = current_response_id
+                        if tools:
+                            kwargs_req["tools"] = tools
 
-                # --- DEBUG LOGGING START ---
-                import copy
-                debug_payload = copy.deepcopy(kwargs_req)
-                try:
-                    for inp in debug_payload.get("input", []):
-                        if isinstance(inp.get("content"), list):
-                            for c in inp["content"]:
-                                if c.get("type") == "input_image" and "image_url" in c:
-                                    c["image_url"] = c["image_url"][:30] + "...[truncated]..."
-                    logger.info(f"[OpenAI Adapter Debug] Payload: {debug_payload}")
-                except Exception as e:
-                    logger.info(f"[OpenAI Adapter Debug] Failed to parse payload for logging: {e}")
-                # --- DEBUG LOGGING END ---
-                
-                response = self.client.responses.create(**kwargs_req)
+                        # --- DEBUG LOGGING ---
+                        import copy
+                        debug_payload = copy.deepcopy(kwargs_req)
+                        try:
+                            for inp in debug_payload.get("input", []):
+                                if isinstance(inp.get("content"), list):
+                                    for c in inp["content"]:
+                                        if c.get("type") == "input_image" and "image_url" in c:
+                                            c["image_url"] = c["image_url"][:30] + "...[truncated]..."
+                            logger.info(f"[OpenAI Adapter] Turn start. Payload: {debug_payload}")
+                        except: pass
+                        
+                        response = self.client.responses.create(**kwargs_req)
+                        break # Success, exit retry loop
+                        
+                    except Exception as e:
+                        last_error = e
+                        if "Rate limit reached" in str(e) or "rate_limit" in str(e).lower():
+                            if attempt < MAX_RETRIES:
+                                logger.warning(f"[OpenAI Adapter] Rate limit hit. Sleep 5s (Attempt {attempt+1}/{MAX_RETRIES})...")
+                                yield {"status": "streaming", "content": "\n(系統繁忙中，稍後將自動重試...)\n"}
+                                time.sleep(5)
+                                continue
+                        raise e # Fatal or retries exhausted
 
                 full_content = ""
                 tool_calls_dict = {}
                 
                 for chunk in response:
-                    # P-03 Parse the Responses API streaming format
                     ctype = chunk.type
-                    
                     if ctype == "response.created" or ctype == "response.in_progress":
-                        # Capture the newest ID for the next turn / saving
                         current_response_id = chunk.response.id
-                    
                     elif ctype == "response.output_text.delta":
                         text = chunk.delta
                         full_content += text
                         yield {"status": "streaming", "content": text}
-                        
                     elif ctype == "response.function_call_arguments.delta":
-                        # Accumulate tool arguments using item.id
                         item_id = chunk.item_id
                         if item_id not in tool_calls_dict:
                             tool_calls_dict[item_id] = {"arguments": "", "name": "", "call_id": item_id}
                         tool_calls_dict[item_id]["arguments"] += chunk.delta
-                        
                     elif ctype == "response.output_item.done":
                         item = chunk.item
                         if getattr(item, 'type', None) == 'function_call':
-                            # In Responses API, item.id joins the delta events
                             item_id = item.id
                             if item_id not in tool_calls_dict:
                                 tool_calls_dict[item_id] = {"arguments": "", "name": item.name, "call_id": getattr(item, 'call_id', item.id)}
-                            
                             tool_calls_dict[item_id]["name"] = item.name or tool_calls_dict[item_id]["name"]
                             tool_calls_dict[item_id]["call_id"] = getattr(item, 'call_id', item.id)
-                            # The 'arguments' might also be fully available in item.arguments
                             if hasattr(item, 'arguments') and item.arguments:
                                 tool_calls_dict[item_id]["arguments"] = item.arguments
 
-                # Check if the model called tools in the current iteration step
                 if tool_calls_dict:
                     tool_results = []
                     for item_id, tc_data in tool_calls_dict.items():
@@ -289,24 +308,22 @@ class OpenAIAdapter:
                         try:
                             fn_args = json.loads(fn_args_str) if fn_args_str else {}
                         except json.JSONDecodeError:
-                            logger.error(f"Failed to parse OpenAI Responses tool args: {fn_args_str}")
+                            logger.error(f"Failed to parse tool args: {fn_args_str}")
                             fn_args = {}
 
-                        logger.info(f"OpenAI Responses tool call: {fn_name}({fn_args})")
+                        logger.info(f"Tool call: {fn_name}({fn_args})")
                         yield {"status": "streaming", "content": f"\n\n⚙️ 執行技能: `{fn_name}`\n"}
                         result = self.uma.execute_tool_call(fn_name, fn_args)
 
-                        # Check for human-in-the-loop
                         if result.get("status") == "requires_approval":
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
-                                "risk_description": result.get("risk_description", "High-risk operation detected"),
+                                "risk_description": result.get("risk_description", "High-risk operation"),
                                 "pending_args": fn_args
                             }
                             return
 
-                        # Responses API requires tool outputs to be raw items inside input array
                         tool_results.append({
                             "type": "function_call_output",
                             "call_id": call_id,
@@ -314,21 +331,13 @@ class OpenAIAdapter:
                         })
                         tool_calls_made += 1
 
-                    # Important: Update input_payload to ONLY contain tool responses for the next loop
                     input_payload = tool_results
-                    continue # Loop back via next client.responses.create
+                    continue 
 
                 else:
-                    # No more tools — we're finished generating content.
-                    # Save the latest response id to the session so subsequent chat rounds resume here
                     if session_id and current_response_id:
                         _session_mgr.set_latest_response_id(session_id, current_response_id)
-                        
-                    yield {
-                        "status": "success",
-                        "content": full_content,
-                        "tool_calls_made": tool_calls_made
-                    }
+                    yield {"status": "success", "content": full_content, "tool_calls_made": tool_calls_made}
                     return
 
             # Safety: exceeded max iterations
