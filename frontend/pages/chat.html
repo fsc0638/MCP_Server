@@ -95,7 +95,7 @@
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
             </svg>
           </button>
-          <button class="page-chat-action-btn" aria-label="清除對話" onclick="clearConversation()">
+          <button class="page-chat-action-btn" aria-label="刪除對話" onclick="confirmDeleteCurrentConversation()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
             </svg>
@@ -273,6 +273,41 @@
   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" id="toastIcon" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
   <span id="toastMsg">操作成功</span>
 </div>
+
+<!-- Confirmation Modal -->
+<div id="deleteModal" class="modal-overlay" style="display:none;">
+  <div class="modal-content">
+    <h3>確認刪除對話？</h3>
+    <p>刪除後將無法復原此對話紀錄。</p>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="closeDeleteModal()">取消</button>
+      <button class="btn-danger" id="confirmDeleteBtn">確認刪除</button>
+    </div>
+  </div>
+</div>
+
+<style>
+.modal-overlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center;
+  z-index: 2000; backdrop-filter: blur(4px);
+}
+.modal-content {
+  background: #fff; padding: 24px; border-radius: 12px; width: 320px;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1), 0 10px 10px -5px rgba(0,0,0,0.04);
+  text-align: center;
+}
+.modal-content h3 { margin-top: 0; color: #1e293b; font-size: 1.1rem; }
+.modal-content p { color: #64748b; font-size: 0.9rem; margin: 12px 0 24px; }
+.modal-actions { display: flex; gap: 12px; justify-content: center; }
+.modal-actions button {
+  padding: 8px 16px; border-radius: 8px; font-size: 0.85rem; font-weight: 600; cursor: pointer; border: none; transition: 0.2s;
+}
+.btn-secondary { background: #f1f5f9; color: #475569; }
+.btn-secondary:hover { background: #e2e8f0; }
+.btn-danger { background: #ef4444; color: #fff; }
+.btn-danger:hover { background: #dc2626; }
+</style>
 
 <script src="../config.js" onerror="console.warn('config.js 未找到，將使用示範模式')"></script>
 <script src="../assets/js/script.js"></script>

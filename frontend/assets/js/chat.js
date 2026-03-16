@@ -122,16 +122,65 @@
     convList.innerHTML = html;
   }
 
-  function updateCurrentSessionPreview(text) {
+  function updateCurrentSessionPreview(text, isFirstMessage = false) {
     const session = state.sessions.find(s => s.id === state.sessionId);
     if (session) {
       session.preview = text.slice(0, 30) + (text.length > 30 ? "..." : "");
       if (session.title === "新對話") {
-        session.title = text.slice(0, 15) + (text.length > 15 ? "..." : "");
+        session.title = text.slice(0, 12) + (text.length > 12 ? "..." : "");
       }
       saveSessions();
       renderConversationList();
     }
+  }
+
+  async function summarizeConversationTitle(userInput, aiResponse) {
+    const session = state.sessions.find(s => s.id === state.sessionId);
+    if (!session) return;
+    
+    // Only summarize if it's still generic "New Conversation" or a raw preview
+    const isGeneric = session.title === "新對話" || session.title.includes("...");
+    if (!isGeneric) return;
+
+    try {
+      const res = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_input: `請根據以下對話摘要一個「不超過10個字」的標題，只需回答標題內容，不要有標點符號：\n問：${userInput}\n答：${aiResponse}`,
+          session_id: "temp-title-" + Date.now(),
+          language: "繁體中文",
+          detail_level: "簡潔"
+        })
+      });
+      if (!res.ok) return;
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let summary = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const lines = decoder.decode(value).split("\r\n\r\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const p = JSON.parse(line.slice(6));
+              if (p.status === "streaming") summary += p.content;
+              else if (p.status === "success") summary = p.content;
+            } catch(e){}
+          }
+        }
+      }
+      
+      const cleanTitle = summary.replace(/[「」『』"'\.\!\?]/g, '').trim().slice(0, 10);
+      if (cleanTitle) {
+        session.title = cleanTitle;
+        saveSessions();
+        renderConversationList();
+        if (chatTitleText) chatTitleText.textContent = cleanTitle;
+      }
+    } catch (err) { /* silent fail */ }
   }
 
   function renderMessage(role, text) {
@@ -419,6 +468,11 @@
       state.msgCount += 1;
       updateStats(Math.ceil(finalText.length / 4));
       state.meetingText += "\n\nUser:\n" + content + "\n\nAssistant:\n" + finalText;
+      
+      // Trigger title summarization on first exchange
+      if (state.msgCount <= 2) {
+        summarizeConversationTitle(content, finalText);
+      }
     } catch (err) {
       removeTyping();
       renderMessage("ai", "系統暫時無法回覆，請稍後再試。\n\n" + (err.message || ""));
@@ -487,6 +541,39 @@
   };
 
   window.clearConversation = window.newConversation;
+
+  window.confirmDeleteCurrentConversation = function() {
+    const modal = document.getElementById("deleteModal");
+    const confirmBtn = document.getElementById("confirmDeleteBtn");
+    if (!modal || !confirmBtn) return;
+    
+    modal.style.display = "flex";
+    confirmBtn.onclick = function() {
+      deleteCurrentConversation();
+      modal.style.display = "none";
+    };
+  };
+
+  window.closeDeleteModal = function() {
+    const modal = document.getElementById("deleteModal");
+    if (modal) modal.style.display = "none";
+  };
+
+  function deleteCurrentConversation() {
+    const idx = state.sessions.findIndex(s => s.id === state.sessionId);
+    if (idx !== -1) {
+      state.sessions.splice(idx, 1);
+      saveSessions();
+      if (state.sessions.length > 0) {
+        const nextSid = state.sessions[state.sessions.length - 1].id;
+        window.loadConversationById(nextSid);
+      } else {
+        window.newConversation();
+      }
+    } else {
+      window.newConversation();
+    }
+  }
 
   window.loadConversationById = async function (sid) {
     if (sid === state.sessionId) return;
