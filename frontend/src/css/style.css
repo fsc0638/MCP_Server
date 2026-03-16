@@ -141,10 +141,6 @@ button, input, select, textarea { font-family: var(--font-sans); }
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   position: relative; overflow: hidden;
 }
-.logo-mark::after {
-  content: ''; position: absolute; bottom: 0; right: 0;
-  width: 9px; height: 9px; background: var(--kway-orange); border-radius: 3px 0 0 0;
-}
 .logo-mark svg { width: 18px; height: 18px; position: relative; z-index: 1; }
 .logo-text { display: flex; flex-direction: column; line-height: 1.1; }
 .logo-text .brand { color: #fff; font-size: 0.95rem; font-weight: 700; letter-spacing: -0.01em; }
@@ -486,10 +482,6 @@ button, input, select, textarea { font-family: var(--font-sans); }
   background: var(--kway-blue); box-shadow: var(--shadow-blue);
   display: flex; align-items: center; justify-content: center;
   margin-bottom: 18px; position: relative; overflow: hidden;
-}
-.page-chat-welcome-logo::after {
-  content: ''; position: absolute; bottom: 0; right: 0;
-  width: 16px; height: 16px; background: var(--kway-orange); border-radius: 4px 0 0 0;
 }
 .page-chat-welcome h2 { font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 8px; color: var(--text-primary); }
 .page-chat-welcome p { font-size: 0.88rem; color: var(--text-secondary); max-width: 380px; line-height: 1.68; margin-bottom: 28px; }

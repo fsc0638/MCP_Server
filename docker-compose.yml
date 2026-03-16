@@ -14,6 +14,8 @@ services:
       - ./Agent_skills:/app/Agent_skills
       # Mount server code for live updates without rebuild
       - ./server:/app/server
+      # Mount frontend for live UI updates without rebuild
+      - ./frontend:/app/frontend
       # Persist uploaded knowledge files across container rebuilds
       - ./workspace:/app/workspace
       # Persist FAISS vector index (inside container it maps to /root/.mcp_faiss)

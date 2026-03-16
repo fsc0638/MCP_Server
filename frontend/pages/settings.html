@@ -1,0 +1,507 @@
+﻿<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>K WAY AgentPortal — 設定</title>
+  <link rel="stylesheet" href="../assets/css/style.css" />
+  <link rel="stylesheet" href="../assets/css/themes.css" />
+  <link rel="stylesheet" href="../assets/css/settings.css" />
+  <!-- Anti-FOUC: apply saved theme before first paint -->
+  <script>(function(){var t=localStorage.getItem('kway_theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+</head>
+<body>
+<div class="page-settings-root">
+
+  <!-- Global header / Topbar -->
+  <header class="page-settings-topbar" role="banner" data-analytics-region="settings-topbar">
+    <div class="page-settings-topbar-left">
+      <a href="index.html" class="logo page-settings-topbar-logo" aria-label="K WAY AgentPortal 首頁">
+        <div class="logo-mark" aria-hidden="true" style="background:none;">
+          <img src="../assets/images/kw_logo.png" width="28" height="28" alt="K WAY Logo" style="object-fit:contain;" />
+        </div>
+        <div class="logo-text">
+          <span class="brand">K WAY AgentPortal</span>
+          <span class="sub">凱衛資訊 AI 智能平台</span>
+        </div>
+      </a>
+      <div class="page-settings-topbar-divider" aria-hidden="true"></div>
+      <span class="page-settings-topbar-label">帳號設定</span>
+    </div>
+    <div class="page-settings-topbar-right">
+      <a
+        href="chat.html"
+        class="btn btn-ghost"
+        style="padding:7px 14px;font-size:0.83rem;background:rgba(255,255,255,0.10);border-color:rgba(255,255,255,0.25);color:rgba(255,255,255,0.85);"
+        aria-label="返回對話頁面"
+        data-analytics-title="返回對話"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        返回對話
+      </a>
+      <div class="page-settings-topbar-avatar" id="topbarAvatar" role="img" aria-label="使用者頭像">林</div>
+    </div>
+  </header>
+
+  <!-- Settings body -->
+  <div class="page-settings-body">
+
+    <!-- Left navigation -->
+    <nav class="page-settings-nav" role="navigation" aria-label="設定分類">
+      <div class="page-settings-nav-group-label">個人</div>
+      <div class="page-settings-nav-item is-active" onclick="showSection('profile',this)" role="button" tabindex="0" aria-label="個人資料">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        個人資料
+      </div>
+      <div class="page-settings-nav-item" onclick="showSection('appearance',this)" role="button" tabindex="0" aria-label="外觀設定">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        外觀設定
+      </div>
+      <div class="page-settings-nav-item" onclick="showSection('notifications',this)" role="button" tabindex="0" aria-label="通知設定">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        通知設定
+      </div>
+      <div class="page-settings-nav-group-label">AI 設定</div>
+      <div class="page-settings-nav-item" onclick="showSection('model',this)" role="button" tabindex="0" aria-label="模型偏好">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+        模型偏好
+      </div>
+      <div class="page-settings-nav-item" onclick="showSection('privacy',this)" role="button" tabindex="0" aria-label="隱私與安全">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        隱私與安全
+      </div>
+      <div class="page-settings-nav-group-label">帳號</div>
+      <div class="page-settings-nav-item" onclick="showSection('billing',this)" role="button" tabindex="0" aria-label="方案與計費">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+        方案與計費
+      </div>
+      <div class="page-settings-nav-item" onclick="showSection('kway',this)" role="button" tabindex="0" aria-label="K WAY 企業服務">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+        K WAY 企業服務
+      </div>
+    </nav>
+
+    <!-- Settings content -->
+    <div class="page-settings-content" id="settingsContent" data-analytics-region="settings-content">
+
+      <!-- Profile section -->
+      <section id="section-profile" aria-labelledby="section-profile-title">
+        <h1 id="section-profile-title" class="page-settings-page-title">個人資料</h1>
+        <p class="page-settings-page-desc">管理您的帳號資訊與個人設定</p>
+
+        <div class="page-settings-profile-hero">
+          <div class="page-settings-profile-avatar-wrap">
+            <div class="page-settings-profile-avatar" id="profileAvatar" aria-label="使用者頭像">林</div>
+          </div>
+          <div class="page-settings-profile-info">
+            <div class="page-settings-profile-name" id="profileName">林 志遠</div>
+            <div class="page-settings-profile-role">
+              <span class="badge badge-orange">Pro 方案</span>
+              <span id="profileEmail">user@kway.com.tw</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="page-settings-section">
+          <div class="page-settings-section-title">基本資訊</div>
+          <div class="page-settings-card">
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">顯示名稱</div><div class="page-settings-row-desc">在對話和報告中顯示的名稱</div></div>
+              <input type="text" class="input-field" value="林 志遠" style="max-width:200px;" aria-label="顯示名稱" />
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">電子郵件</div><div class="page-settings-row-desc">企業帳號郵件</div></div>
+              <input type="email" class="input-field" value="user@kway.com.tw" style="max-width:220px;" aria-label="電子郵件" />
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">部門</div><div class="page-settings-row-desc">所屬部門</div></div>
+              <select class="page-settings-select" aria-label="部門">
+                <option selected>資訊處</option><option>業務部</option><option>財務部</option><option>行政部</option>
+              </select>
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">語言</div><div class="page-settings-row-desc">介面顯示語言</div></div>
+              <select class="page-settings-select" aria-label="語言">
+                <option selected>繁體中文</option><option>English</option><option>日本語</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="page-settings-section">
+          <div class="page-settings-section-title">危險操作</div>
+          <div class="page-settings-danger-card">
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">清除所有對話記錄</div><div class="page-settings-row-desc">此操作不可逆</div></div>
+              <button class="page-settings-btn-danger" onclick="confirmDanger('清除所有對話記錄')" aria-label="清除所有對話記錄">清除資料</button>
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">撤銷帳號存取</div><div class="page-settings-row-desc">聯絡管理員以刪除帳號</div></div>
+              <button class="page-settings-btn-danger" onclick="confirmDanger('撤銷帳號')" aria-label="申請撤銷帳號">申請撤銷</button>
+            </div>
+          </div>
+        </div>
+
+        <button class="page-settings-btn-logout" onclick="logout()" aria-label="登出帳號">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          登出帳號
+        </button>
+      </section>
+
+      <!-- Appearance section -->
+      <section id="section-appearance" style="display:none;" aria-labelledby="section-appearance-title">
+        <h1 id="section-appearance-title" class="page-settings-page-title">外觀設定</h1>
+        <p class="page-settings-page-desc">自訂介面的視覺風格，預設採用凱衛資訊企業形象</p>
+        <div class="page-settings-section">
+          <div class="page-settings-section-title">色彩主題</div>
+          <div class="page-settings-card">
+
+            <!-- Theme palette grid -->
+            <div class="page-settings-row" style="flex-direction:column;align-items:flex-start;gap:16px;">
+              <div class="page-settings-row-info">
+                <div class="page-settings-row-label">介面主題</div>
+                <div class="page-settings-row-desc">由淺到深七種配色，含 K WAY 企業標準主題</div>
+              </div>
+              <div class="theme-palette-grid" id="themePaletteGrid" role="radiogroup" aria-label="色彩主題選擇">
+
+                <!-- 00 K WAY 標準（預設）-->
+                <button class="theme-palette-card" data-theme-id="" role="radio" aria-checked="false" title="K WAY 標準" aria-label="K WAY 標準主題">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#18409b;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#f7f9fd;border-color:rgba(24,64,155,0.12);"></div>
+                      <div class="theme-palette-main" style="background:#f0f4fa;">
+                        <div class="theme-palette-card-mock" style="background:#fff;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#f68300;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">K WAY 標準</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#18409b;" title="凱衛藍"></i>
+                      <i style="background:#f68300;" title="凱衛橘"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 01 Pearl 珍珠晨光 -->
+                <button class="theme-palette-card" data-theme-id="pearl" role="radio" aria-checked="false" title="珍珠晨光" aria-label="珍珠晨光主題">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#E06B52;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#F7F3EF;border-color:rgba(224,107,82,0.12);"></div>
+                      <div class="theme-palette-main" style="background:#FAF8F5;">
+                        <div class="theme-palette-card-mock" style="background:#fff;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#4ECDC4;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">珍珠晨光</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#E06B52;" title="珊瑚橙"></i>
+                      <i style="background:#4ECDC4;" title="薄荷青"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 02 Sand 暖沙午後 -->
+                <button class="theme-palette-card" data-theme-id="sand" role="radio" aria-checked="false" title="暖沙午後" aria-label="暖沙午後主題">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#C97B4B;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#EFE3D2;border-color:rgba(201,123,75,0.12);"></div>
+                      <div class="theme-palette-main" style="background:#F5EDE0;">
+                        <div class="theme-palette-card-mock" style="background:#FEFAF5;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#5BAA9F;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">暖沙午後</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#C97B4B;" title="赤陶橘"></i>
+                      <i style="background:#5BAA9F;" title="鼠尾草綠"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 03 Mint 薄荷清風 -->
+                <button class="theme-palette-card" data-theme-id="mint" role="radio" aria-checked="false" title="薄荷清風" aria-label="薄荷清風主題">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#2A9D8F;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#E2F2EF;border-color:rgba(42,157,143,0.12);"></div>
+                      <div class="theme-palette-main" style="background:#EEF7F6;">
+                        <div class="theme-palette-card-mock" style="background:#fff;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#E76F51;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">薄荷清風</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#2A9D8F;" title="翡翠青"></i>
+                      <i style="background:#E76F51;" title="暖橙紅"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 04 Lavender 薰衣草霧 -->
+                <button class="theme-palette-card" data-theme-id="lavender" role="radio" aria-checked="false" title="薰衣草霧" aria-label="薰衣草霧主題">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#7C5CBF;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#EAE4F5;border-color:rgba(124,92,191,0.12);"></div>
+                      <div class="theme-palette-main" style="background:#F0EDF8;">
+                        <div class="theme-palette-card-mock" style="background:#fff;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#FF7043;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">薰衣草霧</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#7C5CBF;" title="紫羅蘭"></i>
+                      <i style="background:#FF7043;" title="活力橙"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 05 Twilight 暮色靛藍 ★ Dark -->
+                <button class="theme-palette-card" data-theme-id="twilight" role="radio" aria-checked="false" title="暮色靛藍" aria-label="暮色靛藍主題（深色）">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#2D2A58;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#211E44;border-color:rgba(123,110,255,0.20);"></div>
+                      <div class="theme-palette-main" style="background:#1E1B3A;">
+                        <div class="theme-palette-card-mock" style="background:#252245;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#7B6EFF;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">暮色靛藍</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#7B6EFF;" title="電光紫"></i>
+                      <i style="background:#FF7F5C;" title="珊瑚橙"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 06 Midnight 子夜深邃 ★ Dark -->
+                <button class="theme-palette-card" data-theme-id="midnight" role="radio" aria-checked="false" title="子夜深邃" aria-label="子夜深邃主題（深色）">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#14142B;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#111124;border-color:rgba(107,78,255,0.20);"></div>
+                      <div class="theme-palette-main" style="background:#0D0D1A;">
+                        <div class="theme-palette-card-mock" style="background:#161630;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#6B4EFF;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">子夜深邃</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#6B4EFF;" title="深空紫"></i>
+                      <i style="background:#4ECDC4;" title="電光青"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+              </div><!-- /theme-palette-grid -->
+            </div><!-- /row -->
+
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">緊湊模式</div><div class="page-settings-row-desc">減少間距，顯示更多內容</div></div>
+              <label class="page-settings-toggle" aria-label="緊湊模式">
+                <input type="checkbox" />
+                <span class="page-settings-toggle-slider"></span>
+              </label>
+            </div>
+
+          </div><!-- /card -->
+        </div><!-- /section -->
+      </section>
+
+      <!-- Notifications section -->
+      <section id="section-notifications" style="display:none;" aria-labelledby="section-notifications-title">
+        <h1 id="section-notifications-title" class="page-settings-page-title">通知設定</h1>
+        <p class="page-settings-page-desc">管理您希望收到的通知類型</p>
+        <div class="page-settings-section">
+          <div class="page-settings-section-title">通知類型</div>
+          <div class="page-settings-card">
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">AI 任務完成通知</div><div class="page-settings-row-desc">長時間任務完成時通知</div></div>
+              <label class="page-settings-toggle" aria-label="AI 任務完成通知"><input type="checkbox" checked /><span class="page-settings-toggle-slider"></span></label>
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">系統公告</div><div class="page-settings-row-desc">凱衛資訊平台更新通知</div></div>
+              <label class="page-settings-toggle" aria-label="系統公告"><input type="checkbox" checked /><span class="page-settings-toggle-slider"></span></label>
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">用量提醒</div><div class="page-settings-row-desc">Token 用量達 80% 時通知</div></div>
+              <label class="page-settings-toggle" aria-label="用量提醒"><input type="checkbox" /><span class="page-settings-toggle-slider"></span></label>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Model section -->
+      <section id="section-model" style="display:none;" aria-labelledby="section-model-title">
+        <h1 id="section-model-title" class="page-settings-page-title">AI 模型偏好</h1>
+        <p class="page-settings-page-desc">調整 KwayAI 行為與回應風格</p>
+        <div class="page-settings-section">
+          <div class="page-settings-section-title">模型設定</div>
+          <div class="page-settings-card">
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">預設模型</div><div class="page-settings-row-desc">新對話的預設 AI 模型</div></div>
+              <select class="page-settings-select" aria-label="預設模型"><option selected>KwayAI Pro</option><option>KwayAI Mini</option><option>KwayAI Vision</option></select>
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">回應語言</div><div class="page-settings-row-desc">AI 預設回應語言</div></div>
+              <select class="page-settings-select" aria-label="回應語言"><option selected>繁體中文</option><option>English</option><option>自動偵測</option></select>
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">回應詳盡度</div><div class="page-settings-row-desc">控制 AI 回應長度</div></div>
+              <select class="page-settings-select" aria-label="回應詳盡度"><option>簡潔</option><option selected>適中</option><option>詳盡</option></select>
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">金融領域強化</div><div class="page-settings-row-desc">啟用凱衛金融專業知識庫</div></div>
+              <label class="page-settings-toggle" aria-label="金融領域強化"><input type="checkbox" checked /><span class="page-settings-toggle-slider"></span></label>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Privacy section -->
+      <section id="section-privacy" style="display:none;" aria-labelledby="section-privacy-title">
+        <h1 id="section-privacy-title" class="page-settings-page-title">隱私與安全</h1>
+        <p class="page-settings-page-desc">管理資料隱私與帳號安全設定</p>
+        <div class="page-settings-section">
+          <div class="page-settings-section-title">資料隱私</div>
+          <div class="page-settings-card">
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">資料訓練同意</div><div class="page-settings-row-desc">允許對話用於改善 KwayAI</div></div>
+              <label class="page-settings-toggle" aria-label="資料訓練同意"><input type="checkbox" /><span class="page-settings-toggle-slider"></span></label>
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">對話記錄保留</div><div class="page-settings-row-desc">儲存時長設定</div></div>
+              <select class="page-settings-select" aria-label="對話記錄保留時長"><option>30 天</option><option selected>90 天</option><option>1 年</option></select>
+            </div>
+          </div>
+        </div>
+        <div class="page-settings-section">
+          <div class="page-settings-section-title">帳號安全</div>
+          <div class="page-settings-card">
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">兩步驟驗證</div><div class="page-settings-row-desc">提升帳號安全性</div></div>
+              <label class="page-settings-toggle" aria-label="兩步驟驗證"><input type="checkbox" /><span class="page-settings-toggle-slider"></span></label>
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">新裝置登入通知</div><div class="page-settings-row-desc">寄送電子郵件通知</div></div>
+              <label class="page-settings-toggle" aria-label="新裝置登入通知"><input type="checkbox" checked /><span class="page-settings-toggle-slider"></span></label>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Billing section -->
+      <section id="section-billing" style="display:none;" aria-labelledby="section-billing-title">
+        <h1 id="section-billing-title" class="page-settings-page-title">方案與計費</h1>
+        <p class="page-settings-page-desc">管理您的訂閱方案與用量</p>
+        <div class="page-settings-section">
+          <div class="page-settings-section-title">目前方案</div>
+          <div class="page-settings-plan-card">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+              <div>
+                <div class="page-settings-plan-name">Enterprise Pro 方案</div>
+                <div class="page-settings-plan-price">企業年約方案 · 凱衛資訊員工專屬</div>
+              </div>
+              <span class="badge badge-orange" style="padding:6px 12px;font-size:0.78rem;">使用中</span>
+            </div>
+            <div class="page-settings-plan-stats">
+              <div class="page-settings-plan-stat"><div class="page-settings-plan-stat-val">128K</div><div class="page-settings-plan-stat-label">Context</div></div>
+              <div class="page-settings-plan-stat"><div class="page-settings-plan-stat-val">無限</div><div class="page-settings-plan-stat-label">對話次數</div></div>
+              <div class="page-settings-plan-stat"><div class="page-settings-plan-stat-val">優先</div><div class="page-settings-plan-stat-label">客服支援</div></div>
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width:100%;padding:12px;" aria-label="升級至更高方案" data-analytics-title="升級方案">升級至更高方案</button>
+        </div>
+      </section>
+
+      <!-- K WAY Services section -->
+      <section id="section-kway" style="display:none;" aria-labelledby="section-kway-title">
+        <h1 id="section-kway-title" class="page-settings-page-title">K WAY 企業服務</h1>
+        <p class="page-settings-page-desc">凱衛資訊旗下服務與資源連結</p>
+        <div class="page-settings-section">
+          <div class="page-settings-section-title">凱衛服務</div>
+          <div class="page-settings-card">
+            <div class="page-settings-row" style="cursor:pointer;" role="link" tabindex="0" aria-label="FrontierLabs 拓界實驗室">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">🚀 FrontierLabs 拓界實驗室</div><div class="page-settings-row-desc">開拓科技疆界，引領未來創新</div></div>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </div>
+            <div class="page-settings-row" style="cursor:pointer;" role="link" tabindex="0" aria-label="金融交易系統">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">📈 金融交易系統</div><div class="page-settings-row-desc">凱衛 HFT / FPGA 高頻交易解決方案</div></div>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </div>
+            <div class="page-settings-row" style="cursor:pointer;" role="link" tabindex="0" aria-label="AI 教育訓練">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">🎓 AI 教育訓練</div><div class="page-settings-row-desc">凱衛資訊 AI 人才培育計畫</div></div>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            </div>
+          </div>
+        </div>
+        <div class="page-settings-section">
+          <div class="page-settings-section-title">關於</div>
+          <div class="page-settings-card">
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">K WAY AgentPortal</div><div class="page-settings-row-desc">版本 2.0.0</div></div>
+              <span class="badge badge-blue">最新版本</span>
+            </div>
+            <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">凱衛資訊股份有限公司</div><div class="page-settings-row-desc">台股代號 5201 · 成立於 1985 年</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div class="toast" id="toast" role="status" aria-live="polite">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" id="toastIcon" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+  <span id="toastMsg">設定已儲存</span>
+</div>
+
+<script src="../assets/js/theme-switcher.js"></script>
+<script src="../assets/js/script.js"></script>
+<script src="../assets/js/settings.js"></script>
+</body>
+</html>
+
+

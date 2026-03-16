@@ -1,0 +1,316 @@
+﻿<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>K WAY AgentPortal — 對話</title>
+  <link rel="stylesheet" href="../assets/css/style.css" />
+  <link rel="stylesheet" href="../assets/css/themes.css" />
+  <link rel="stylesheet" href="../assets/css/chat.css" />
+  <!-- Anti-FOUC: apply saved theme before first paint -->
+  <script>(function(){var t=localStorage.getItem('kway_theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+</head>
+<body>
+<div class="page-chat-root">
+
+  <!-- Global header / Topbar -->
+  <header class="page-chat-topbar" role="banner" data-analytics-region="chat-topbar">
+    <div class="page-chat-topbar-left">
+      <a href="index.html" class="logo page-chat-topbar-logo" aria-label="K WAY AgentPortal 首頁">
+        <div class="logo-mark" aria-hidden="true" style="background:none;">
+          <img src="../assets/images/kw_logo.png" width="28" height="28" alt="K WAY Logo" style="object-fit:contain;" />
+        </div>
+        <div class="logo-text">
+          <span class="brand">K WAY AgentPortal</span>
+          <span class="sub">凱衛資訊 AI 智能平台</span>
+        </div>
+      </a>
+      <div class="page-chat-topbar-divider" aria-hidden="true"></div>
+      <button class="page-chat-workspace-tag" aria-label="切換工作區">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+          <polyline points="9 22 9 12 15 12 15 22"/>
+        </svg>
+        資訊處工作區
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+    </div>
+
+    <button class="page-chat-search-bar" onclick="document.getElementById('chatInput').focus()" aria-label="搜尋對話或輸入指令">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      搜尋對話或輸入指令…
+      <kbd aria-label="快捷鍵 Command K">⌘K</kbd>
+    </button>
+
+    <div class="page-chat-topbar-right">
+      <button class="page-chat-topbar-icon-btn" aria-label="通知" onclick="showToast('目前無新通知', 'info')">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+      </button>
+      <button class="page-chat-topbar-icon-btn" aria-label="設定" onclick="window.location.href='settings.html'">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+      <div class="page-chat-topbar-avatar" id="topbarAvatar" onclick="window.location.href='settings.html'" role="button" tabindex="0" aria-label="帳號設定">林</div>
+    </div>
+  </header>
+
+  <!-- App body -->
+  <div class="page-chat-body">
+
+    <!-- Left sidebar: conversation list -->
+    <aside class="page-chat-sidebar-left" aria-label="對話記錄">
+      <div class="page-chat-sidebar-header">
+        <span class="page-chat-sidebar-title">對話記錄</span>
+        <button class="btn-icon" style="width:26px;height:26px;border-radius:5px;" onclick="newConversation()" aria-label="新增對話">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+      </div>
+      <button class="page-chat-new-btn" onclick="newConversation()" aria-label="新增對話">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        新增對話
+      </button>
+      <nav class="page-chat-conv-list" id="convList" aria-label="對話列表">
+        <div class="page-chat-section-label">今天</div>
+        <div class="page-chat-conv-item is-active" onclick="loadConversation(0)" role="button" tabindex="0" aria-label="歡迎使用 AgentPortal">
+          <div class="page-chat-conv-icon page-chat-conv-icon--blue" aria-hidden="true">✦</div>
+          <div class="page-chat-conv-info">
+            <div class="page-chat-conv-name">歡迎使用 AgentPortal</div>
+            <div class="page-chat-conv-preview">詢問任何問題...</div>
+          </div>
+          <div class="page-chat-conv-time">剛剛</div>
+        </div>
+        <div class="page-chat-section-label">最近 7 天</div>
+        <div class="page-chat-conv-item" onclick="loadConversation(1)" role="button" tabindex="0" aria-label="Q4 財務分析報告">
+          <div class="page-chat-conv-icon page-chat-conv-icon--orange" aria-hidden="true">📊</div>
+          <div class="page-chat-conv-info">
+            <div class="page-chat-conv-name">Q4 財務分析報告</div>
+            <div class="page-chat-conv-preview">協助分析季度數據...</div>
+          </div>
+          <div class="page-chat-conv-time">昨天</div>
+        </div>
+        <div class="page-chat-conv-item" onclick="loadConversation(2)" role="button" tabindex="0" aria-label="客戶提案簡報">
+          <div class="page-chat-conv-icon page-chat-conv-icon--green" aria-hidden="true">📋</div>
+          <div class="page-chat-conv-info">
+            <div class="page-chat-conv-name">客戶提案簡報</div>
+            <div class="page-chat-conv-preview">為重要客戶準備...</div>
+          </div>
+          <div class="page-chat-conv-time">3 天前</div>
+        </div>
+        <div class="page-chat-conv-item" onclick="loadConversation(3)" role="button" tabindex="0" aria-label="競品市場調查">
+          <div class="page-chat-conv-icon page-chat-conv-icon--teal" aria-hidden="true">🔍</div>
+          <div class="page-chat-conv-info">
+            <div class="page-chat-conv-name">競品市場調查</div>
+            <div class="page-chat-conv-preview">分析主要競爭對手...</div>
+          </div>
+          <div class="page-chat-conv-time">5 天前</div>
+        </div>
+      </nav>
+    </aside>
+
+    <!-- Chat main -->
+    <main class="page-chat-main" aria-label="對話區域" data-analytics-region="chat-main">
+      <div class="page-chat-main-topbar">
+        <div class="page-chat-main-title-wrap">
+          <div class="page-chat-conv-icon page-chat-conv-icon--blue" style="width:26px;height:26px;font-size:0.72rem;" aria-hidden="true">✦</div>
+          <span class="page-chat-main-title" id="chatTitleText">歡迎使用 K WAY AgentPortal</span>
+          <span class="badge badge-blue">進行中</span>
+        </div>
+        <div class="page-chat-main-actions">
+          <button class="page-chat-action-btn" aria-label="下載會議記錄 Markdown" title="下載 AI 生成的會議記錄" onclick="downloadMeetingMd()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </button>
+          <button class="page-chat-action-btn" aria-label="清除對話" onclick="clearConversation()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="page-chat-messages" id="chatMessages" role="log" aria-label="對話訊息" aria-live="polite">
+        <div class="page-chat-welcome" id="chatWelcome">
+          <div class="page-chat-welcome-logo" aria-hidden="true" style="background:none;box-shadow:none;">
+            <img src="../assets/images/kw_logo.png" width="56" height="56" alt="K WAY Logo" style="object-fit:contain;position:relative;z-index:1;" />
+          </div>
+          <h2>歡迎使用 K WAY AgentPortal</h2>
+          <p>凱衛資訊企業級 AI 智能助理，為您的工作提供專業、高效的支援。</p>
+          <div class="page-chat-suggestion-grid" role="list" aria-label="快捷建議">
+            <div class="page-chat-suggestion-card" role="listitem" onclick="sendSuggestion('幫我整理一份週報範本')" tabindex="0" aria-label="撰寫週報範本">
+              <div class="page-chat-suggestion-icon" aria-hidden="true">📋</div>
+              <div class="page-chat-suggestion-title">撰寫週報範本</div>
+              <div class="page-chat-suggestion-desc">快速生成專業的工作週報</div>
+            </div>
+            <div class="page-chat-suggestion-card" role="listitem" onclick="sendSuggestion('分析以下資料並給我洞察')" tabindex="0" aria-label="資料分析洞察">
+              <div class="page-chat-suggestion-icon" aria-hidden="true">📊</div>
+              <div class="page-chat-suggestion-title">資料分析洞察</div>
+              <div class="page-chat-suggestion-desc">從數據中提取有價值的見解</div>
+            </div>
+            <div class="page-chat-suggestion-card" role="listitem" onclick="sendSuggestion('幫我寫一封專業的商務郵件')" tabindex="0" aria-label="商務郵件撰寫">
+              <div class="page-chat-suggestion-icon" aria-hidden="true">✉️</div>
+              <div class="page-chat-suggestion-title">商務郵件撰寫</div>
+              <div class="page-chat-suggestion-desc">生成得體的商務溝通郵件</div>
+            </div>
+            <div class="page-chat-suggestion-card" role="listitem" onclick="sendSuggestion('幫我腦力激盪產品功能構想')" tabindex="0" aria-label="創意腦力激盪">
+              <div class="page-chat-suggestion-icon" aria-hidden="true">💡</div>
+              <div class="page-chat-suggestion-title">創意腦力激盪</div>
+              <div class="page-chat-suggestion-desc">探索新想法和創新方向</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <section class="page-chat-input-area" aria-label="訊息輸入">
+        <div class="page-chat-input-box">
+          <textarea
+            id="chatInput"
+            class="page-chat-textarea"
+            placeholder="輸入訊息…（Enter 送出，Shift+Enter 換行）"
+            rows="1"
+            maxlength="4000"
+            aria-label="訊息輸入框"
+          ></textarea>
+          <div class="page-chat-input-toolbar">
+            <div class="page-chat-input-tools">
+              <button class="page-chat-tool-btn" id="audioUploadBtn" aria-label="上傳音訊檔案進行語音轉文字" title="上傳音訊（MP3、WAV、M4A、WebM，最大 25MB）" onclick="triggerAudioUpload()">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                  <line x1="12" y1="19" x2="12" y2="23"/>
+                  <line x1="8" y1="23" x2="16" y2="23"/>
+                </svg>
+              </button>
+              <input type="file" id="audioFileInput" accept=".mp3,.wav,.m4a,.webm,.ogg,.flac,.mp4" style="display:none;" aria-hidden="true" />
+              <button class="page-chat-tool-btn" aria-label="工具">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+              </button>
+            </div>
+            <div class="page-chat-input-actions">
+              <button class="page-chat-model-select" onclick="cycleModel()" aria-label="切換 AI 模型">
+                <div class="page-chat-model-dot" aria-hidden="true"></div>
+                <span id="modelName">KwayAI Pro</span>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+              </button>
+              <button class="page-chat-send-btn" id="sendBtn" disabled aria-label="送出訊息">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="22" y1="2" x2="11" y2="13"/>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <p class="page-chat-input-footer">KwayAI 可能會有誤差，重要決策請自行驗證 · &copy; 凱衛資訊股份有限公司</p>
+      </section>
+    </main>
+
+    <!-- Right sidebar: info panel -->
+    <aside class="page-chat-sidebar-right" aria-label="工作面板">
+      <div class="page-chat-panel-header">
+        <span class="page-chat-sidebar-title">工作面板</span>
+        <button class="btn-icon" style="width:26px;height:26px;border-radius:5px;" aria-label="關閉面板">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="page-chat-panel-tabs" role="tablist" aria-label="面板分頁">
+        <button class="page-chat-tab-btn is-active" role="tab" aria-selected="true" onclick="switchTab(this,'info')">資訊</button>
+        <button class="page-chat-tab-btn" role="tab" aria-selected="false" onclick="switchTab(this,'tools')">工具</button>
+        <button class="page-chat-tab-btn" role="tab" aria-selected="false" onclick="switchTab(this,'history')">記錄</button>
+      </div>
+      <div class="page-chat-panel-body">
+
+        <div id="tab-info" role="tabpanel" aria-label="資訊">
+          <div class="page-chat-user-card">
+            <div class="avatar" id="sidebarAvatar" style="background:var(--kway-blue);" aria-hidden="true">林</div>
+            <div class="page-chat-user-card-info">
+              <div class="page-chat-user-card-name" id="sidebarName">林 志遠</div>
+              <div class="page-chat-user-card-dept" id="sidebarDept">資訊處 · Pro 方案</div>
+            </div>
+            <span class="badge badge-green">在線</span>
+          </div>
+
+          <section class="page-chat-info-section" aria-label="本次對話統計">
+            <div class="page-chat-info-section-title">本次對話</div>
+            <div class="page-chat-info-card">
+              <div class="page-chat-stat-row"><span class="page-chat-stat-row-label">訊息數</span><span class="page-chat-stat-row-value" id="statMsgCount">0</span></div>
+              <div class="page-chat-stat-row"><span class="page-chat-stat-row-label">使用 Token</span><span class="page-chat-stat-row-value" id="statTokens">0</span></div>
+              <div class="page-chat-stat-row"><span class="page-chat-stat-row-label">對話時長</span><span class="page-chat-stat-row-value" id="statDuration">00:00</span></div>
+            </div>
+          </section>
+
+          <section class="page-chat-info-section" aria-label="每月用量">
+            <div class="page-chat-info-section-title">每月用量</div>
+            <div class="page-chat-info-card">
+              <div class="page-chat-progress-wrap">
+                <div class="page-chat-progress-label"><span>Token</span><span>32%</span></div>
+                <div class="page-chat-progress-bar"><div class="page-chat-progress-fill" style="width:32%"></div></div>
+              </div>
+              <div class="page-chat-progress-wrap" style="margin-top:11px;">
+                <div class="page-chat-progress-label"><span>對話次數</span><span>12/50</span></div>
+                <div class="page-chat-progress-bar"><div class="page-chat-progress-fill page-chat-progress-fill--orange" style="width:24%"></div></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="page-chat-info-section" aria-label="AI 模型資訊">
+            <div class="page-chat-info-section-title">AI 模型</div>
+            <div class="page-chat-info-card">
+              <div class="page-chat-info-card-title">KwayAI Pro</div>
+              <div class="page-chat-info-card-desc">凱衛資訊企業版 AI 模型，支援 128K context，金融專業知識強化。</div>
+            </div>
+          </section>
+
+          <section class="page-chat-info-section" aria-label="K WAY 服務">
+            <div class="page-chat-info-section-title">K WAY 服務</div>
+            <div class="page-chat-info-card" style="cursor:pointer;" onclick="showToast('FrontierLabs 連結功能即將推出', 'info')">
+              <div class="page-chat-info-card-title">🚀 FrontierLabs 拓界實驗室</div>
+              <div class="page-chat-info-card-desc">開拓科技疆界，引領未來創新</div>
+            </div>
+          </section>
+        </div>
+
+        <div id="tab-tools" style="display:none;" role="tabpanel" aria-label="工具">
+          <section class="page-chat-info-section" aria-label="可用工具">
+            <div class="page-chat-info-section-title">可用工具</div>
+            <div class="page-chat-info-card" style="cursor:pointer;"><div class="page-chat-info-card-title">📈 金融數據分析</div><div class="page-chat-info-card-desc">證券期貨資料即時分析</div></div>
+            <div class="page-chat-info-card" style="cursor:pointer;"><div class="page-chat-info-card-title">🔍 網路搜尋</div><div class="page-chat-info-card-desc">即時搜尋最新資訊</div></div>
+            <div class="page-chat-info-card" style="cursor:pointer;"><div class="page-chat-info-card-title">📝 文件處理</div><div class="page-chat-info-card-desc">解析 PDF、Word、Excel</div></div>
+            <div class="page-chat-info-card" style="cursor:pointer;"><div class="page-chat-info-card-title">🤖 工作自動化</div><div class="page-chat-info-card-desc">串接企業內部系統</div></div>
+          </section>
+        </div>
+
+        <div id="tab-history" style="display:none;" role="tabpanel" aria-label="記錄">
+          <section class="page-chat-info-section" aria-label="最近活動">
+            <div class="page-chat-info-section-title">最近活動</div>
+            <div class="page-chat-info-card"><div class="page-chat-info-card-title">Q4 財務分析報告</div><div class="page-chat-info-card-desc">昨天 14:32 · 24 則訊息</div></div>
+            <div class="page-chat-info-card"><div class="page-chat-info-card-title">客戶提案簡報</div><div class="page-chat-info-card-desc">3 天前 · 16 則訊息</div></div>
+            <div class="page-chat-info-card"><div class="page-chat-info-card-title">競品市場調查</div><div class="page-chat-info-card-desc">5 天前 · 8 則訊息</div></div>
+          </section>
+        </div>
+
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div class="toast" id="toast" role="status" aria-live="polite">
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" id="toastIcon" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+  <span id="toastMsg">操作成功</span>
+</div>
+
+<script src="../config.js" onerror="console.warn('config.js 未找到，將使用示範模式')"></script>
+<script src="../assets/js/script.js"></script>
+<script src="../assets/js/chat.js"></script>
+</body>
+</html>
+
+
