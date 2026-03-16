@@ -25,6 +25,10 @@ class SessionManager:
         self.temp_dir = self.project_root / "temp"
         self.active_sessions: Dict[str, Dict[str, Any]] = {}
 
+        # New: storage for session persistence
+        self.sessions_dir = self.project_root / "workspace" / "sessions"
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+
         # D-07: Conversation history store (session_id → list of {role, content})
         self._conversations: Dict[str, list] = {}
         
@@ -47,13 +51,54 @@ class SessionManager:
     # ─── Conversation History (D-07: for Web Console) ─────────────────────────
 
     def get_or_create_conversation(self, session_id: str, system_prompt: str = "") -> list:
-        """Get or create a conversation history list for a session."""
+        """Get or create a conversation history list for a session. Loads from disk if available."""
         if session_id not in self._conversations:
-            history = []
-            if system_prompt:
-                history.append({"role": "system", "content": system_prompt})
+            # 1. Try to load from JSON first
+            history = self._load_conversation_from_disk(session_id)
+            
+            # 2. If not on disk, create new
+            if history is None:
+                history = []
+                if system_prompt:
+                    history.append({"role": "system", "content": system_prompt})
+            
             self._conversations[session_id] = history
+            
         return self._conversations[session_id]
+
+    def _load_conversation_from_disk(self, session_id: str) -> Optional[list]:
+        """Loads conversation history from JSON file."""
+        import json
+        json_path = self.sessions_dir / f"{session_id}.json"
+        if json_path.exists():
+            try:
+                with open(json_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"Failed to load session {session_id} from disk: {e}")
+        return None
+
+    def _save_conversation_to_disk(self, session_id: str):
+        """Saves conversation history to JSON file."""
+        import json
+        history = self._conversations.get(session_id)
+        if history is not None:
+            json_path = self.sessions_dir / f"{session_id}.json"
+            try:
+                # Use a background-safe approach (shadow write if needed, but simple open is fine for low concurrency)
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(history, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error(f"Failed to save session {session_id} to disk: {e}")
+
+    def reset_openai_state(self, session_id: str):
+        """
+        Clears the OpenAI stateful response ID while keeping message history.
+        Ensures a fresh system prompt injection on the next turn.
+        """
+        if session_id in self._latest_response_ids:
+            old_id = self._latest_response_ids.pop(session_id)
+            logger.info(f"Reset OpenAI state for session {session_id} (Internal ID: {old_id})")
 
     def _update_system_prompt(self, session_id: str, new_system_prompt: str):
         """Update the system prompt for an existing session to keep dynamic info (like date) fresh."""
@@ -75,6 +120,9 @@ class SessionManager:
         import re
         history = self._conversations.get(session_id, [])
         history.append({"role": role, "content": content})
+        
+        # Persistent save to disk
+        self._save_conversation_to_disk(session_id)
         
         # Sprint 2: 記憶持久化：攔截引用標籤並同步寫入 MEMORY.md
         # Sprint 2/4: Memory persistence with Chunk Offsets for Vector RAG

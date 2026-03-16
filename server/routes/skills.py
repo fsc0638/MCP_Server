@@ -28,6 +28,37 @@ def sanitize_filename(filename: str) -> str:
     return filename or "uploaded_file"
 
 
+def sync_skills_git(message: str):
+    """
+    Synchronize the Agent_skills local repository with the remote.
+    Performs: git add ., git commit -m message, git push origin main.
+    """
+    uma = get_uma()
+    skills_home = uma.registry.skills_home.resolve()
+    
+    # We only sync if it's a git repo
+    if not (skills_home / ".git").exists():
+        logger.warning(f"Git sync skipped: {skills_home} is not a Git repository.")
+        return {"status": "skipped", "message": "Not a git repository"}
+
+    try:
+        # 1. git add .
+        subprocess.run(["git", "add", "."], cwd=skills_home, check=True, capture_output=True)
+        # 2. git commit (allow failure if no changes)
+        proc = subprocess.run(["git", "commit", "-m", f"[Skill Mgmt] {message}"], cwd=skills_home, capture_output=True, text=True)
+        if proc.returncode != 0 and "nothing to commit" not in proc.stdout.lower():
+             logger.error(f"Git commit failed: {proc.stderr}")
+             return {"status": "error", "error": f"Commit failed: {proc.stderr}"}
+        
+        # 3. git push
+        subprocess.run(["git", "push", "origin", "main"], cwd=skills_home, check=True, capture_output=True)
+        logger.info(f"Git sync successful for Agent_skills: {message}")
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Git sync exception: {e}")
+        return {"status": "error", "error": str(e)}
+
+
 @router.get("/skills/list")
 def list_skills():
     uma = get_uma()
@@ -104,10 +135,12 @@ def update_skill(skill_name: str, req: SkillUpdateRequest):
         skill_md_path.write_text(new_content, encoding="utf-8")
         uma.registry._register_skill(skill_path)
         invalidate_prompt_cache()
+        sync_res = sync_skills_git(f"Updated skill {skill_name}")
         return {
             "status": "success",
             "message": f"Skill '{skill_name}' updated and backup created.",
             "backup_created": str(bak_path),
+            "git_sync": sync_res
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -147,7 +180,8 @@ def delete_skill(skill_name: str):
         shutil.rmtree(skill_path, onerror=remove_readonly)
         uma.registry.skills.pop(skill_name.lower(), None)
         invalidate_prompt_cache()
-        return {"status": "success", "message": f"Skill '{skill_name}' deleted."}
+        sync_res = sync_skills_git(f"Deleted skill {skill_name}")
+        return {"status": "success", "message": f"Skill '{skill_name}' deleted.", "git_sync": sync_res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -167,7 +201,8 @@ def rollback_skill(skill_name: str):
         shutil.copy2(bak_path, skill_md_path)
         uma.registry._register_skill(skill_path)
         invalidate_prompt_cache()
-        return {"status": "success", "message": f"Skill '{skill_name}' rolled back"}
+        sync_res = sync_skills_git(f"Rolled back skill {skill_name}")
+        return {"status": "success", "message": f"Skill '{skill_name}' rolled back", "git_sync": sync_res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -222,7 +257,8 @@ async def upload_skill_file(skill_name: str, file: UploadFile = File(...), file_
     try:
         with open(dest_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        return {"status": "success", "filename": safe_name, "path": str(dest_path.relative_to(skills_home))}
+        sync_res = sync_skills_git(f"Uploaded {file_type} to {skill_name}: {safe_name}")
+        return {"status": "success", "filename": safe_name, "path": str(dest_path.relative_to(skills_home)), "git_sync": sync_res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -264,7 +300,8 @@ async def delete_skill_file(skill_name: str, folder: str, filename: str):
         raise HTTPException(status_code=404, detail=f"File '{safe_name}' not found in '{folder}'")
     try:
         target_file.unlink()
-        return {"status": "success", "message": f"File {safe_name} deleted"}
+        sync_res = sync_skills_git(f"Deleted {folder} file from {skill_name}: {safe_name}")
+        return {"status": "success", "message": f"File {safe_name} deleted", "git_sync": sync_res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -334,7 +371,8 @@ risk_level: "low"
         (skill_path / "SKILL.md").write_text(skill_md, encoding="utf-8")
         uma.registry.scan_skills()
         invalidate_prompt_cache()
-        return {"status": "success", "skill_name": name, "path": str(skill_path)}
+        sync_res = sync_skills_git(f"Created new skill {name}")
+        return {"status": "success", "skill_name": name, "path": str(skill_path), "git_sync": sync_res}
     except Exception as e:
         if skill_path.exists():
             shutil.rmtree(skill_path, ignore_errors=True)
