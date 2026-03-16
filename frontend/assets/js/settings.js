@@ -23,29 +23,54 @@
   if (profileName)   profileName.textContent   = userData.name;
   if (profileEmail)  profileEmail.textContent  = userData.email || 'user@kway.com.tw';
 
-  /* ── Theme management ─────────────────────────────────────── */
-  function _applyTheme(value) {
-    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    var isDark = value === 'dark' || (value === 'system' && prefersDark);
-    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-    localStorage.setItem('kway_theme', value);
+  /* ── Theme Palette Picker ─────────────────────────────────── */
+  var THEME_KEY = 'kway_theme';
+
+  function _applyTheme(themeId) {
+    var root = document.documentElement;
+    if (themeId) {
+      root.setAttribute('data-theme', themeId);
+      localStorage.setItem(THEME_KEY, themeId);
+    } else {
+      root.removeAttribute('data-theme');
+      localStorage.removeItem(THEME_KEY);
+    }
   }
 
-  // Sync select to saved preference
-  var themeSelect = document.getElementById('themeSelect');
-  if (themeSelect) {
-    var savedTheme = localStorage.getItem('kway_theme') || 'light';
-    themeSelect.value = savedTheme;
-    themeSelect.addEventListener('change', function () {
-      _applyTheme(themeSelect.value);
-      showToast('主題已變更', 'success');
+  function _syncPaletteUI(activeId) {
+    document.querySelectorAll('.theme-palette-card').forEach(function (card) {
+      var id = card.getAttribute('data-theme-id');
+      var isActive = (id === (activeId || ''));
+      card.classList.toggle('is-active', isActive);
+      card.setAttribute('aria-checked', isActive ? 'true' : 'false');
     });
   }
 
-  // Watch OS theme changes when "system" is selected
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
-    if (localStorage.getItem('kway_theme') === 'system') _applyTheme('system');
-  });
+  var grid = document.getElementById('themePaletteGrid');
+  if (grid) {
+    // Init: reflect saved theme
+    var savedTheme = localStorage.getItem(THEME_KEY) || '';
+    _syncPaletteUI(savedTheme);
+
+    // Click handler
+    grid.addEventListener('click', function (e) {
+      var card = e.target.closest('.theme-palette-card');
+      if (!card) return;
+      var themeId = card.getAttribute('data-theme-id');
+      _applyTheme(themeId);
+      _syncPaletteUI(themeId);
+      showToast('主題已套用：' + (card.querySelector('.theme-palette-name').textContent || 'K WAY 標準'), 'success');
+    });
+
+    // Keyboard support (Enter / Space)
+    grid.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      var card = e.target.closest('.theme-palette-card');
+      if (!card) return;
+      e.preventDefault();
+      card.click();
+    });
+  }
 
   /* ── Section navigation ───────────────────────────────────── */
   window.showSection = function (name, navItem) {
@@ -95,7 +120,6 @@
 
   /* ── Auto-save on change ──────────────────────────────────── */
   document.querySelectorAll('input, select').forEach((el) => {
-    if (el.id === 'themeSelect') return; // handled separately above
     el.addEventListener('change', () => showToast('設定已儲存', 'success'));
   });
 })();

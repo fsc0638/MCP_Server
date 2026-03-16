@@ -5,9 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>K WAY AgentPortal — 設定</title>
   <link rel="stylesheet" href="../assets/css/style.css" />
+  <link rel="stylesheet" href="../assets/css/themes.css" />
   <link rel="stylesheet" href="../assets/css/settings.css" />
   <!-- Anti-FOUC: apply saved theme before first paint -->
-  <script>(function(){var t=localStorage.getItem('kway_theme')||'light';if(t==='dark')document.documentElement.setAttribute('data-theme','dark');else if(t==='system'&&window.matchMedia('(prefers-color-scheme:dark)').matches)document.documentElement.setAttribute('data-theme','dark');})();</script>
+  <script>(function(){var t=localStorage.getItem('kway_theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
 </head>
 <body>
 <div class="page-settings-root">
@@ -152,24 +153,188 @@
         <h1 id="section-appearance-title" class="page-settings-page-title">外觀設定</h1>
         <p class="page-settings-page-desc">自訂介面的視覺風格，預設採用凱衛資訊企業形象</p>
         <div class="page-settings-section">
-          <div class="page-settings-section-title">主題</div>
+          <div class="page-settings-section-title">色彩主題</div>
           <div class="page-settings-card">
-            <div class="page-settings-row">
-              <div class="page-settings-row-info"><div class="page-settings-row-label">色彩主題</div><div class="page-settings-row-desc">介面深淺主題</div></div>
-              <select class="page-settings-select" id="themeSelect" aria-label="色彩主題">
-                <option value="light">淺色模式（K WAY 標準）</option>
-                <option value="dark">深色模式</option>
-                <option value="system">跟隨系統</option>
-              </select>
-            </div>
-            <div class="page-settings-row">
-              <div class="page-settings-row-info"><div class="page-settings-row-label">品牌主題色</div><div class="page-settings-row-desc">強調色設定</div></div>
-              <div style="display:flex;gap:8px;align-items:center;" role="group" aria-label="主題色選擇">
-                <div style="width:22px;height:22px;border-radius:50%;background:#18409b;border:2px solid white;outline:2px solid #18409b;cursor:pointer;" role="button" tabindex="0" title="凱衛藍" aria-label="凱衛藍"></div>
-                <div style="width:22px;height:22px;border-radius:50%;background:#f68300;cursor:pointer;" role="button" tabindex="0" title="凱衛橘" aria-label="凱衛橘"></div>
-                <div style="width:22px;height:22px;border-radius:50%;background:#0d7a6e;cursor:pointer;" role="button" tabindex="0" title="專業綠" aria-label="專業綠"></div>
+
+            <!-- Theme palette grid -->
+            <div class="page-settings-row" style="flex-direction:column;align-items:flex-start;gap:16px;">
+              <div class="page-settings-row-info">
+                <div class="page-settings-row-label">介面主題</div>
+                <div class="page-settings-row-desc">由淺到深七種配色，含 K WAY 企業標準主題</div>
               </div>
-            </div>
+              <div class="theme-palette-grid" id="themePaletteGrid" role="radiogroup" aria-label="色彩主題選擇">
+
+                <!-- 00 K WAY 標準（預設）-->
+                <button class="theme-palette-card" data-theme-id="" role="radio" aria-checked="false" title="K WAY 標準" aria-label="K WAY 標準主題">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#18409b;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#f7f9fd;border-color:rgba(24,64,155,0.12);"></div>
+                      <div class="theme-palette-main" style="background:#f0f4fa;">
+                        <div class="theme-palette-card-mock" style="background:#fff;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#f68300;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">K WAY 標準</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#18409b;" title="凱衛藍"></i>
+                      <i style="background:#f68300;" title="凱衛橘"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 01 Pearl 珍珠晨光 -->
+                <button class="theme-palette-card" data-theme-id="pearl" role="radio" aria-checked="false" title="珍珠晨光" aria-label="珍珠晨光主題">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#E06B52;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#F7F3EF;border-color:rgba(224,107,82,0.12);"></div>
+                      <div class="theme-palette-main" style="background:#FAF8F5;">
+                        <div class="theme-palette-card-mock" style="background:#fff;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#4ECDC4;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">珍珠晨光</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#E06B52;" title="珊瑚橙"></i>
+                      <i style="background:#4ECDC4;" title="薄荷青"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 02 Sand 暖沙午後 -->
+                <button class="theme-palette-card" data-theme-id="sand" role="radio" aria-checked="false" title="暖沙午後" aria-label="暖沙午後主題">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#C97B4B;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#EFE3D2;border-color:rgba(201,123,75,0.12);"></div>
+                      <div class="theme-palette-main" style="background:#F5EDE0;">
+                        <div class="theme-palette-card-mock" style="background:#FEFAF5;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#5BAA9F;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">暖沙午後</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#C97B4B;" title="赤陶橘"></i>
+                      <i style="background:#5BAA9F;" title="鼠尾草綠"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 03 Mint 薄荷清風 -->
+                <button class="theme-palette-card" data-theme-id="mint" role="radio" aria-checked="false" title="薄荷清風" aria-label="薄荷清風主題">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#2A9D8F;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#E2F2EF;border-color:rgba(42,157,143,0.12);"></div>
+                      <div class="theme-palette-main" style="background:#EEF7F6;">
+                        <div class="theme-palette-card-mock" style="background:#fff;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#E76F51;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">薄荷清風</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#2A9D8F;" title="翡翠青"></i>
+                      <i style="background:#E76F51;" title="暖橙紅"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 04 Lavender 薰衣草霧 -->
+                <button class="theme-palette-card" data-theme-id="lavender" role="radio" aria-checked="false" title="薰衣草霧" aria-label="薰衣草霧主題">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#7C5CBF;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#EAE4F5;border-color:rgba(124,92,191,0.12);"></div>
+                      <div class="theme-palette-main" style="background:#F0EDF8;">
+                        <div class="theme-palette-card-mock" style="background:#fff;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#FF7043;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">薰衣草霧</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#7C5CBF;" title="紫羅蘭"></i>
+                      <i style="background:#FF7043;" title="活力橙"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 05 Twilight 暮色靛藍 ★ Dark -->
+                <button class="theme-palette-card" data-theme-id="twilight" role="radio" aria-checked="false" title="暮色靛藍" aria-label="暮色靛藍主題（深色）">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#2D2A58;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#211E44;border-color:rgba(123,110,255,0.20);"></div>
+                      <div class="theme-palette-main" style="background:#1E1B3A;">
+                        <div class="theme-palette-card-mock" style="background:#252245;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#7B6EFF;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">暮色靛藍</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#7B6EFF;" title="電光紫"></i>
+                      <i style="background:#FF7F5C;" title="珊瑚橙"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+                <!-- 06 Midnight 子夜深邃 ★ Dark -->
+                <button class="theme-palette-card" data-theme-id="midnight" role="radio" aria-checked="false" title="子夜深邃" aria-label="子夜深邃主題（深色）">
+                  <div class="theme-palette-preview">
+                    <div class="theme-palette-topbar" style="background:#14142B;"></div>
+                    <div class="theme-palette-body">
+                      <div class="theme-palette-sidebar" style="background:#111124;border-color:rgba(107,78,255,0.20);"></div>
+                      <div class="theme-palette-main" style="background:#0D0D1A;">
+                        <div class="theme-palette-card-mock" style="background:#161630;"></div>
+                        <div class="theme-palette-accent-bar" style="background:#6B4EFF;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="theme-palette-info">
+                    <span class="theme-palette-name">子夜深邃</span>
+                    <span class="theme-palette-dots">
+                      <i style="background:#6B4EFF;" title="深空紫"></i>
+                      <i style="background:#4ECDC4;" title="電光青"></i>
+                    </span>
+                  </div>
+                  <div class="theme-palette-check" aria-hidden="true">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  </div>
+                </button>
+
+              </div><!-- /theme-palette-grid -->
+            </div><!-- /row -->
+
             <div class="page-settings-row">
               <div class="page-settings-row-info"><div class="page-settings-row-label">緊湊模式</div><div class="page-settings-row-desc">減少間距，顯示更多內容</div></div>
               <label class="page-settings-toggle" aria-label="緊湊模式">
@@ -177,8 +342,9 @@
                 <span class="page-settings-toggle-slider"></span>
               </label>
             </div>
-          </div>
-        </div>
+
+          </div><!-- /card -->
+        </div><!-- /section -->
       </section>
 
       <!-- Notifications section -->
@@ -332,6 +498,7 @@
   <span id="toastMsg">設定已儲存</span>
 </div>
 
+<script src="../assets/js/theme-switcher.js"></script>
 <script src="../assets/js/script.js"></script>
 <script src="../assets/js/settings.js"></script>
 </body>

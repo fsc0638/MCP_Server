@@ -166,6 +166,126 @@ html, body { height: 100%; overflow: hidden; }
 }
 .page-settings-btn-logout:hover { color: #b91c1c; border-color: rgba(217,54,62,0.3); background: rgba(217,54,62,0.04); }
 
+/* ── Theme Palette Picker ────────────────────────────────────── */
+.theme-palette-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(122px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.theme-palette-card {
+  position: relative;
+  background: var(--bg-base);
+  border: 2px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0;
+  cursor: pointer;
+  transition: var(--transition);
+  text-align: left;
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+.theme-palette-card:hover {
+  border-color: var(--kway-blue);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+.theme-palette-card.is-active {
+  border-color: var(--kway-blue);
+  box-shadow: 0 0 0 3px var(--kway-blue-light);
+}
+
+/* Mini preview window */
+.theme-palette-preview {
+  height: 72px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-radius: calc(var(--radius-md) - 2px) calc(var(--radius-md) - 2px) 0 0;
+}
+.theme-palette-topbar {
+  height: 12px;
+  flex-shrink: 0;
+}
+.theme-palette-body {
+  flex: 1;
+  display: flex;
+}
+.theme-palette-sidebar {
+  width: 28px;
+  flex-shrink: 0;
+  border-right: 1px solid;
+}
+.theme-palette-main {
+  flex: 1;
+  padding: 6px 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.theme-palette-card-mock {
+  border-radius: 3px;
+  height: 15px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.10);
+}
+.theme-palette-accent-bar {
+  border-radius: 3px;
+  height: 7px;
+  width: 55%;
+  opacity: 0.90;
+}
+
+/* Info row */
+.theme-palette-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+.theme-palette-name {
+  font-size: 0.73rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.theme-palette-dots {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.theme-palette-dots i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  font-style: normal;
+}
+
+/* Active check badge */
+.theme-palette-check {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--kway-blue);
+  color: #fff;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.20);
+}
+.theme-palette-card.is-active .theme-palette-check {
+  display: flex;
+}
+
 /* ── Dark mode overrides (hardcoded colors that can't use vars) ── */
 [data-theme="dark"] .page-settings-danger-card {
   background: rgba(217, 54, 62, 0.08);
