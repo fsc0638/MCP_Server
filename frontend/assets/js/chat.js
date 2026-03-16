@@ -179,6 +179,21 @@
       // Keep default model if API unavailable.
     }
     if (modelName) modelName.textContent = getCurrentModelLabel();
+
+    // Prioritize model from kway_settings if available
+    const raw = localStorage.getItem("kway_settings");
+    if (raw) {
+      try {
+        const settings = JSON.parse(raw);
+        if (settings.model) {
+          const idx = state.models.findIndex(m => m.model === settings.model);
+          if (idx !== -1) {
+            state.modelIndex = idx;
+            if (modelName) modelName.textContent = getCurrentModelLabel();
+          }
+        }
+      } catch (_err) { /* ignore */ }
+    }
   }
 
   async function loadSideInfo() {
@@ -306,12 +321,26 @@
 
     try {
       const m = getCurrentModel();
+      const rawSettings = localStorage.getItem("kway_settings");
+      let language = "繁體中文";
+      let detail_level = "適中";
+      if (rawSettings) {
+        try {
+          const s = JSON.parse(rawSettings);
+          language = s.language || language;
+          detail_level = s.detail || detail_level;
+        } catch(_e) {}
+      }
+
       const payload = {
         user_input: content,
         session_id: state.sessionId,
         provider: m.provider || "openai",
         model: m.model || "gpt-4o",
+        language: language,
+        detail_level: detail_level
       };
+      console.log("[Chat] Sending payload:", payload);
       const res = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -17,6 +17,8 @@ class ChatRequest(BaseModel):
     attached_file: Optional[str] = None
     selected_docs: Optional[list[str]] = None
     temperature: Optional[float] = 0.7
+    language: Optional[str] = "繁體中文"
+    detail_level: Optional[str] = "適中"
 
 
 class ExecuteRequest(BaseModel):

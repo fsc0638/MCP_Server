@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8" />
@@ -379,19 +379,26 @@
           <div class="page-settings-card">
             <div class="page-settings-row">
               <div class="page-settings-row-info"><div class="page-settings-row-label">預設模型</div><div class="page-settings-row-desc">新對話的預設 AI 模型</div></div>
-              <select class="page-settings-select" aria-label="預設模型"><option selected>KwayAI Pro</option><option>KwayAI Mini</option><option>KwayAI Vision</option></select>
+              <select class="page-settings-select" id="settingModelSelect" aria-label="預設模型"><option selected>KwayAI Pro</option><option>KwayAI Mini</option><option>KwayAI Vision</option></select>
             </div>
             <div class="page-settings-row">
               <div class="page-settings-row-info"><div class="page-settings-row-label">回應語言</div><div class="page-settings-row-desc">AI 預設回應語言</div></div>
-              <select class="page-settings-select" aria-label="回應語言"><option selected>繁體中文</option><option>English</option><option>自動偵測</option></select>
+              <select class="page-settings-select" id="settingLanguageSelect" aria-label="回應語言">
+                <option value="繁體中文" selected>繁體中文</option>
+                <option value="简体中文">简体中文</option>
+                <option value="English">English</option>
+                <option value="日本語">日本語</option>
+                <option value="한국어">한국어</option>
+                <option value="自動偵測">自動偵測</option>
+              </select>
             </div>
             <div class="page-settings-row">
               <div class="page-settings-row-info"><div class="page-settings-row-label">回應詳盡度</div><div class="page-settings-row-desc">控制 AI 回應長度</div></div>
-              <select class="page-settings-select" aria-label="回應詳盡度"><option>簡潔</option><option selected>適中</option><option>詳盡</option></select>
+              <select class="page-settings-select" id="settingDetailSelect" aria-label="回應詳盡度"><option value="簡潔">簡潔</option><option value="適中" selected>適中</option><option value="詳盡">詳盡</option></select>
             </div>
             <div class="page-settings-row">
               <div class="page-settings-row-info"><div class="page-settings-row-label">金融領域強化</div><div class="page-settings-row-desc">啟用凱衛金融專業知識庫</div></div>
-              <label class="page-settings-toggle" aria-label="金融領域強化"><input type="checkbox" checked /><span class="page-settings-toggle-slider"></span></label>
+              <label class="page-settings-toggle" aria-label="金融領域強化"><input type="checkbox" id="settingFinanceToggle" checked /><span class="page-settings-toggle-slider"></span></label>
             </div>
           </div>
         </div>

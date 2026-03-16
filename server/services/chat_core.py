@@ -4,6 +4,7 @@ This module is the target for fully replacing legacy chat flow.
 """
 
 import json
+import logging
 from typing import AsyncGenerator
 
 from sse_starlette.sse import EventSourceResponse
@@ -13,6 +14,8 @@ from server.core.retriever import retriever
 from server.adapters.openai_adapter import OpenAIAdapter
 from server.dependencies.session import get_session_manager
 from server.schemas.chat import ChatRequest
+
+logger = logging.getLogger("MCP_Server.ChatCore")
 
 
 async def process_chat_native(req: ChatRequest):
@@ -43,10 +46,16 @@ async def process_chat_native(req: ChatRequest):
     session_id = req.session_id or "default"
     
     # Use dynamic universal prompt to align with LINE bot behavior (time awareness, etc.)
-    dynamic_prompt = get_universal_system_prompt(platform="web")
+    logger.info(f"Chat Request: [Model: {req.model}] [Lang: {req.language}] [Detail: {req.detail_level}]")
+    dynamic_prompt = get_universal_system_prompt(
+        platform="web", 
+        language=req.language or "繁體中文", 
+        detail_level=req.detail_level or "適中"
+    )
+    logger.info(f"Generated Dynamic Prompt (Sample): {dynamic_prompt[:100]}... [MID] ...{dynamic_prompt[-100:]}")
     history = session_mgr.get_or_create_conversation(session_id, dynamic_prompt)
     
-    # Force update system prompt to ensure latest time is injected
+    # Force update system prompt to ensure latest time, language and style are injected
     session_mgr._update_system_prompt(session_id, dynamic_prompt)
     user_content = req.user_input
 
@@ -64,27 +73,30 @@ async def process_chat_native(req: ChatRequest):
         if doc_context:
             user_content += f"\n\n[Document Context]\n{doc_context}"
 
-    # Optional injected skill knowledge (non-execute reference)
     if req.injected_skill:
         skill_knowledge = uma.get_skill_knowledge(req.injected_skill)
         if skill_knowledge:
             user_content += f"\n\n[Skill Knowledge: {req.injected_skill}]\n{skill_knowledge}"
+
+    # Hidden language hint to force compliance on every turn (especially first turn and cards)
+    if req.language and req.language != "自動偵測":
+        user_content += f"\n\n(System Note: Respond strictly in {req.language}. If input is in another language, translate your answer.)"
 
     outbound_history = history + [{"role": "user", "content": user_content}]
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         session_mgr.append_message(session_id, "user", req.user_input)
         final_content = ""
-        if req.execute or req.attached_file:
-            chunk_iter = adapter.chat(
-                messages=outbound_history,
-                user_query=user_content,
-                session_id=session_id,
-                attached_file=req.attached_file,
-                temperature=req.temperature or 0.7,
-            )
-        else:
-            chunk_iter = adapter.simple_chat(outbound_history, temperature=req.temperature or 0.7)
+        
+        # Unify all chat paths to the robust adapter.chat which handles instructions, tools and vision
+        chunk_iter = adapter.chat(
+            messages=outbound_history,
+            user_query=user_content,
+            session_id=session_id,
+            attached_file=req.attached_file,
+            temperature=req.temperature or 0.7,
+            visual_docs=req.selected_docs or []
+        )
 
         for chunk in chunk_iter:
             status = chunk.get("status")

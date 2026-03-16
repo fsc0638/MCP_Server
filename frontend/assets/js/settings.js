@@ -119,7 +119,67 @@
   };
 
   /* ── Auto-save on change ──────────────────────────────────── */
+  const SETTINGS_KEY = 'kway_settings';
+
+  function saveSettings() {
+    const settings = {
+      model: document.getElementById('settingModelSelect')?.value,
+      language: document.getElementById('settingLanguageSelect')?.value,
+      detail: document.getElementById('settingDetailSelect')?.value,
+      finance: document.getElementById('settingFinanceToggle')?.checked
+    };
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    showToast('設定已儲存', 'success');
+  }
+
+  function loadSettings() {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return;
+    try {
+      const settings = JSON.parse(raw);
+      if (settings.model) {
+        const sel = document.getElementById('settingModelSelect');
+        if (sel) sel.value = settings.model;
+      }
+      if (settings.language) {
+        const sel = document.getElementById('settingLanguageSelect');
+        if (sel) sel.value = settings.language;
+      }
+      if (settings.detail) {
+        const sel = document.getElementById('settingDetailSelect');
+        if (sel) sel.value = settings.detail;
+      }
+      if (settings.finance !== undefined) {
+        const toggle = document.getElementById('settingFinanceToggle');
+        if (toggle) toggle.checked = settings.finance;
+      }
+    } catch (e) { console.error('Failed to load settings', e); }
+  }
+
+  async function syncModelList() {
+    const sel = document.getElementById('settingModelSelect');
+    if (!sel) return;
+    try {
+      const res = await fetch('/api/models');
+      const data = await res.json();
+      if (data.status === 'success' && data.models) {
+        sel.innerHTML = '';
+        data.models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m.model;
+          opt.textContent = m.display_name;
+          sel.appendChild(opt);
+        });
+        loadSettings(); // Restore selected model after list is populated
+      }
+    } catch (e) { console.warn('Failed to fetch models for settings', e); }
+  }
+
   document.querySelectorAll('input, select').forEach((el) => {
-    el.addEventListener('change', () => showToast('設定已儲存', 'success'));
+    el.addEventListener('change', saveSettings);
   });
+
+  // Init
+  syncModelList();
+  loadSettings();
 })();

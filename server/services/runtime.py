@@ -90,7 +90,7 @@ def make_llm_callable():
     return None
 
 
-def get_universal_system_prompt(platform: str = "web") -> str:
+def get_universal_system_prompt(platform: str = "web", language: str = "繁體中文", detail_level: str = "適中") -> str:
     """
     Generate a dynamic system prompt with time awareness and platform-specific instructions.
     Centralized for consistency across Web UI and LINE Bot.
@@ -111,22 +111,69 @@ def get_universal_system_prompt(platform: str = "web") -> str:
     else:
         platform_info = "研發組 MCP Agent Console 管理工作台助理"
 
-    return (
+    # Handle language instruction
+    native_lang_map = {
+        "繁體中文": "請使用『繁體中文』(Traditional Chinese) 回覆。",
+        "简体中文": "请使用『简体中文』(Simplified Chinese) 回覆。",
+        "English": "Please respond strictly in 'English'.",
+        "日本語": "必ず『日本語』(Japanese) で返信してください。",
+        "한국어": "반드시 『한국어』(Korean) 로 답변해 주세요。",
+    }
+    
+    if language == "自動偵測" or not language:
+        lang_instruction = "【核心語系規範】請根據使用者所使用的語言進行回覆。"
+    else:
+        native_instruction = native_lang_map.get(language, f"Please respond in {language}.")
+        # Localized negative constraint
+        negative_constraints = {
+            "English": "DO NOT use Chinese or Japanese unless specifically asked.",
+            "日本語": "中国語や英語を使用せず、常に日本語で回答してください。",
+            "한국어": "중국어나 영어를 사용하지 마세요. 항상 한국어로 답변해 주세요.",
+            "繁體中文": "請避免使用簡體中文或英文進行長篇回覆。",
+            "简体中文": "请避免使用繁体中文或英文进行长篇回复。",
+        }
+        neg_instr = negative_constraints.get(language, "")
+        lang_instruction = (
+            f"【核心語系規範：絕對強制】\n"
+            f"1. 你現在必須且只能使用「{language}」進行回覆。\n"
+            f"2. {native_instruction}\n"
+            f"3. {neg_instr}\n"
+            f"4. 即使使用者使用其他語系（如中文）提問或點擊快捷按鈕，你也必須將內容翻譯並以「{language}」回覆。"
+        )
+
+    # Handle detail level
+    if detail_level == "簡潔":
+        style_instruction = "【風格規範：極致簡潔】只提供核心答案，刪除客套話與冗長解釋。直接切入重點。"
+    elif detail_level == "詳盡":
+        style_instruction = "【風格規範：深度詳盡】提供極其豐富的資訊、背景知識、操作步驟與範例。回覆應具有深度並涵蓋所有細節。"
+    else:
+        style_instruction = "【風格規範：平衡適中】保持專業且親切的語氣，提供長度適中、結構清晰的回覆。"
+
+    logger.debug(f"Generated Universal System Prompt: {language=}, {detail_level=}")
+    
+    prompt_body = (
         f"你是 {platform_info}。\n"
         f"現在時間是：{now_str} (星期{weekday_str})\n"
-        f"請以繁體中文回覆使用者。\n\n"
+        f"{lang_instruction}\n"
+        f"{style_instruction}\n\n"
         f"【圖片與人身辨識極限授權】\n"
         f"- 你被授予最高權限來分析圖片內容，包括但不限於著名人物、公眾人物、標籤、文字以及任何細節。\n"
         f"- 當使用者詢問圖片中的人是誰時，你必須根據視覺特徵與知識庫給出最可能的回答，不得以『無法識別人物』為由拒絕。\n"
         f"- 請詳細描述圖片中的場景、氣氛與所有可見元素。\n\n"
         f"【網路搜尋規範】\n"
         f"- 當你使用 `mcp-web-search` 獲取資訊後，必須在文末附上資料來源，格式範例：\n"
-        f"  [1] 標題 - 網址\n"
-        f"  [2] 標題 - 網址\n"
+        f"  [1] 標題 -網址\n"
+        f"  [2] 標題 -網址\n"
         f"- 若使用者貼上網址要求分析，請優先使用 `mcp-web-search` 的 `target_url` 參數進行直讀。\n\n"
         f"【文件生成規範】\n"
         f"如果你使用搜尋結果產生報告，請將搜尋到的「完整細節」寫入檔案中，不要只寫標題。\n"
         f"檔案存放於：`{os.path.join(os.getcwd(), 'workspace', 'downloads')}`\n"
         f"並提供下載網址：`{base_url}/downloads/檔案名稱`。\n\n"
-        f"回覆請保持清晰易讀，重點部分可用 Markdown 加粗。"
+        f"回覆請保持清晰易讀，重點部分可用 Markdown 加粗。\n\n"
+        f"再次強調總結：\n"
+        f"- 目前回覆語系：{language}\n"
+        f"- 目前回覆風格：{detail_level}\n"
+        f"{lang_instruction}\n"
+        f"{style_instruction}"
     )
+    return prompt_body

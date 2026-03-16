@@ -145,39 +145,16 @@ class OpenAIAdapter:
         from server.dependencies.session import get_session_manager
         _session_mgr = get_session_manager()
 
-        # 1. State Resolution
-        prev_response_id = None
-        if session_id:
-            prev_response_id = _session_mgr.get_latest_response_id(session_id)
-
-        # 2. Input Resolution
-        # If we have state, we only send the *latest user message* as input.
-        # If we don't have state, we send the entire history as input to seed the initial state.
-        input_payload = None
+        # 1. State Resolution (DISABLED for better reliability with dynamic instructions)
+        prev_response_id = None # Force stateless for now to ensure system prompt overrides
         
-        if isinstance(messages, str):
-            user_query = messages
-            input_payload = [{"role": "user", "content": messages}]
-        else:
-            # Ensure user_query is a string for tool selection
-            if not user_query and messages:
-                last_msg = messages[-1]["content"]
-                user_query = self._extract_text(last_msg)
-            else:
-                user_query = self._extract_text(user_query) if user_query else ""
-                
-            if prev_response_id and messages:
-                # We have state! Only send the newest user message. System prompts are inherited.
-                # Find the latest user message
-                for msg in reversed(messages):
-                    if msg.get("role") == "user":
-                        input_payload = [msg]
-                        break
-                if not input_payload:
-                    input_payload = messages # fallback
-            else:
-                # First turn: Send everything (System + User)
-                input_payload = messages
+        # 2. Input Resolution
+        # We always send the full history now because we disabled stateful tracking
+        input_payload = messages
+        
+        # Log roles for debugging
+        roles = [m.get("role") for m in input_payload]
+        logger.info(f"[OpenAI Adapter] Turn start. Message Sequence: {roles}")
 
         # Multimodal Vision (NotebookLM Style)
         visual_docs = kwargs.get("visual_docs", [])
@@ -369,6 +346,11 @@ class OpenAIAdapter:
             return {"status": "error", "message": "OpenAI adapter is not available. Check OPENAI_API_KEY."}
 
         try:
+            # Debug: Log the system prompt being sent
+            system_msg = next((m for m in session_history if m.get("role") == "system"), None)
+            if system_msg:
+                logger.info(f"[OpenAI Adapter] Sending System Prompt (Stateless): {system_msg['content'][:200]}...")
+            
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=session_history,
