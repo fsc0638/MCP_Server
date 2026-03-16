@@ -13,6 +13,8 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Load environment variables early for all modules
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 from server.core.uma_core import UMA
 
 # --- Logging Setup ---
@@ -70,16 +72,7 @@ def startup():
     return uma
 
 
-# Global UMA instance — initialized at import time for FastAPI
-uma_instance: UMA = None
-
-
-def get_uma() -> UMA:
-    """Returns the global UMA instance, initializing if needed."""
-    global uma_instance
-    if uma_instance is None:
-        uma_instance = startup()
-    return uma_instance
+from server.dependencies.uma import get_uma_instance as get_uma
 
 # ─── FastAPI Application Factory / Launcher ──────────────────────────────────
 # The FastAPI app is exposed and imported lazily to avoid circular dependencies
@@ -91,13 +84,13 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("MCP Server & LINE Webhook — Starting Up")
     logger.info("=" * 60)
-    logger.info("Server is available on http://127.0.0.1:8000")
+    logger.info("Server is available on http://127.0.0.1:8500")
     
     # Run the uvicorn server directly when executing `python main.py`
     # New entrypoint uses server.app and mounts the legacy router for compatibility.
     uvicorn.run(
         "server.app:app",
         host="0.0.0.0", 
-        port=8000, 
+        port=8500, 
         reload=False  # Disabled to prevent watchfiles loop triggered by app logs & memory
     )

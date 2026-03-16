@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 
-from main import get_uma
+from server.dependencies.uma import get_uma_instance as get_uma
 from server.dependencies.session import get_session_manager
 from server.schemas.chat import ChatRequest, ExecuteRequest
 from server.services.chat_service import process_chat
