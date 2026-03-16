@@ -11,6 +11,7 @@
     // Always start a fresh web session when chat page loads.
     sessionId: "web-" + Math.random().toString(36).slice(2, 10),
     meetingText: "",
+    sessions: JSON.parse(localStorage.getItem("kway_sessions") || "[]")
   };
   localStorage.setItem("kway_chat_session", state.sessionId);
 
@@ -84,6 +85,53 @@
   function removeChatWelcome() {
     const welcome = document.getElementById("chatWelcome");
     if (welcome) welcome.remove();
+  }
+
+  function saveSessions() {
+    localStorage.setItem("kway_sessions", JSON.stringify(state.sessions));
+  }
+
+  function renderConversationList() {
+    const convList = document.getElementById("convList");
+    if (!convList) return;
+
+    if (state.sessions.length === 0) {
+      // Add current session as first item if list is empty
+      state.sessions.push({
+        id: state.sessionId,
+        title: "新對話",
+        preview: "詢問任何問題...",
+        time: "剛剛"
+      });
+      saveSessions();
+    }
+
+    let html = '<div class="page-chat-section-label">今日對話</div>';
+    state.sessions.slice().reverse().forEach((s) => {
+      const isActive = s.id === state.sessionId ? "is-active" : "";
+      html += `
+        <div class="page-chat-conv-item ${isActive}" onclick="loadConversationById('${s.id}')" role="button" tabindex="0">
+          <div class="page-chat-conv-icon page-chat-conv-icon--blue" aria-hidden="true">✦</div>
+          <div class="page-chat-conv-info">
+            <div class="page-chat-conv-name">${escapeHtml(s.title)}</div>
+            <div class="page-chat-conv-preview">${escapeHtml(s.preview)}</div>
+          </div>
+          <div class="page-chat-conv-time">${escapeHtml(s.time)}</div>
+        </div>`;
+    });
+    convList.innerHTML = html;
+  }
+
+  function updateCurrentSessionPreview(text) {
+    const session = state.sessions.find(s => s.id === state.sessionId);
+    if (session) {
+      session.preview = text.slice(0, 30) + (text.length > 30 ? "..." : "");
+      if (session.title === "新對話") {
+        session.title = text.slice(0, 15) + (text.length > 15 ? "..." : "");
+      }
+      saveSessions();
+      renderConversationList();
+    }
   }
 
   function renderMessage(role, text) {
@@ -164,6 +212,16 @@
     state.tokenCount = 0;
     state.startAt = Date.now();
     state.meetingText = "";
+    
+    // Add to sessions list
+    state.sessions.push({
+      id: state.sessionId,
+      title: "新對話",
+      preview: "詢問任何問題...",
+      time: "剛剛"
+    });
+    saveSessions();
+    renderConversationList();
     updateStats();
   }
 
@@ -243,10 +301,12 @@
   async function loadHistory() {
     try {
       const res = await fetch("/chat/session/" + encodeURIComponent(state.sessionId));
-      if (!res.ok) return;
+      if (!res.ok) return false;
       const data = await res.json();
       const history = data.history || [];
-      if (!Array.isArray(history) || history.length === 0) return;
+      if (!Array.isArray(history) || history.length === 0) {
+        return false;
+      }
       removeChatWelcome();
       for (const msg of history) {
         if (!msg || !msg.role || typeof msg.content !== "string") continue;
@@ -256,8 +316,9 @@
         state.tokenCount += Math.ceil(msg.content.length / 4);
       }
       updateStats();
+      return true;
     } catch (_err) {
-      // Ignore history failures.
+      return false;
     }
   }
 
@@ -318,6 +379,7 @@
     state.msgCount += 1;
     updateStats(Math.ceil(content.length / 4));
     showTyping();
+    updateCurrentSessionPreview(content);
 
     try {
       const m = getCurrentModel();
@@ -414,28 +476,46 @@
     showToast("Markdown exported", "success");
   };
 
-  window.newConversation = async function () {
-    try {
-      await fetch("/chat/session/" + encodeURIComponent(state.sessionId), { method: "DELETE" });
-    } catch (_err) {
-      // Ignore reset error.
-    }
+  window.newConversation = function () {
     resetSession();
     if (chatMessages) {
       chatMessages.innerHTML =
-        '<div class="page-chat-welcome" id="chatWelcome"><h2>MCP Chat Ready</h2><p>Start a new conversation.</p></div>';
+        '<div class="page-chat-welcome" id="chatWelcome"><div class="page-chat-welcome-logo"><img src="../assets/images/kw_logo.png" width="56" alt="Logo"></div><h2>新對話已就緒</h2><p>請輸入您的問題開始對話。</p></div>';
     }
-    showToast("New conversation created", "success");
+    if (chatTitleText) chatTitleText.textContent = "新對話";
+    showToast("已建立新對話", "success");
   };
 
   window.clearConversation = window.newConversation;
 
+  window.loadConversationById = async function (sid) {
+    if (sid === state.sessionId) return;
+    state.sessionId = sid;
+    localStorage.setItem("kway_chat_session", state.sessionId);
+    
+    const session = state.sessions.find(s => s.id === sid);
+    if (chatTitleText) chatTitleText.textContent = session ? session.title : "MCP Assistant";
+    
+    if (chatMessages) chatMessages.innerHTML = "";
+    state.msgCount = 0;
+    state.tokenCount = 0;
+    state.meetingText = "";
+    
+    renderConversationList();
+    const hasHistory = await loadHistory();
+    if (!hasHistory) {
+      if (chatMessages) {
+        chatMessages.innerHTML =
+          '<div class="page-chat-welcome" id="chatWelcome"><div class="page-chat-welcome-logo"><img src="../assets/images/kw_logo.png" width="56" alt="Logo"></div><h2>對話已載入</h2><p>此對話尚無訊息，請輸入問題開始。</p></div>';
+      }
+    }
+    showToast("對話已載入", "success");
+  };
+
   window.loadConversation = function (idx) {
-    document.querySelectorAll(".page-chat-conv-item").forEach(function (el, i) {
-      el.classList.toggle("is-active", i === idx);
-    });
-    const titles = ["MCP Assistant", "Q4 Report", "Integration Plan", "System Review"];
-    if (chatTitleText) chatTitleText.textContent = titles[idx] || "MCP Assistant";
+    // Legacy support or fallback
+    const session = state.sessions[idx];
+    if (session) window.loadConversationById(session.id);
   };
 
   window.triggerAudioUpload = function () {
@@ -472,5 +552,6 @@
   updateStats();
   loadModels();
   loadSideInfo();
+  renderConversationList();
   loadHistory();
 })();
