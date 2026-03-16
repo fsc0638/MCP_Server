@@ -70,6 +70,7 @@
   /* ── Logout ───────────────────────────────────────────────── */
   window.logout = function () {
     sessionStorage.removeItem('kway_user');
+    localStorage.removeItem('kway_chat_session');
     window.location.href = 'index.html';
   };
 

@@ -8,7 +8,8 @@
     waiting: false,
     models: [{ provider: "openai", model: "gpt-4o", display_name: "OpenAI (gpt-4o)" }],
     modelIndex: 0,
-    sessionId: localStorage.getItem("kway_chat_session") || ("web-" + Math.random().toString(36).slice(2, 10)),
+    // Always start a fresh web session when chat page loads.
+    sessionId: "web-" + Math.random().toString(36).slice(2, 10),
     meetingText: "",
   };
   localStorage.setItem("kway_chat_session", state.sessionId);
