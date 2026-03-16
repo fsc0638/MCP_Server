@@ -72,10 +72,6 @@
   display: flex; align-items: center; justify-content: center;
   position: relative; overflow: hidden; margin: 0 auto 16px;
 }
-.page-login-logo-mark::after {
-  content: ''; position: absolute; bottom: 0; right: 0;
-  width: 14px; height: 14px; background: var(--kway-orange); border-radius: 3px 0 0 0;
-}
 .page-login-title { font-size: 1.55rem; font-weight: 700; letter-spacing: -0.022em; margin-bottom: 6px; color: var(--text-primary); }
 .page-login-subtitle { font-size: 0.86rem; color: var(--text-secondary); }
 

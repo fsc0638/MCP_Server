@@ -272,13 +272,6 @@ html, body { height: 100%; overflow: hidden; }
   display: flex; align-items: center; justify-content: center;
   margin-bottom: 20px; position: relative;
 }
-.page-chat-welcome-logo::after {
-  content: ''; position: absolute; bottom: 0; right: 0;
-  width: 20px; height: 20px;
-  background: var(--kway-orange);
-  box-shadow: 0 3px 8px rgba(246,131,0,0.35);
-  border-radius: 6px 0 6px 0;
-}
 .page-chat-welcome h2 {
   font-size: 1.65rem; font-weight: 800;
   letter-spacing: -0.030em; margin-bottom: 8px;

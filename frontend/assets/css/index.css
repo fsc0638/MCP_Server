@@ -52,10 +52,6 @@
   display: flex; align-items: center; justify-content: center;
   position: relative; overflow: hidden;
 }
-.page-welcome-brand-logo-icon::after {
-  content: ''; position: absolute; bottom: 0; right: 0;
-  width: 12px; height: 12px; background: var(--kway-orange); border-radius: 3px 0 0 0;
-}
 .page-welcome-brand-logo-text { color: #fff; }
 .page-welcome-brand-logo-text .page-welcome-brand-name { font-size: 1.05rem; font-weight: 700; display: block; }
 .page-welcome-brand-logo-text .page-welcome-brand-tagline { font-size: 0.68rem; opacity: 0.6; letter-spacing: 0.08em; text-transform: uppercase; }
