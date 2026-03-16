@@ -6,7 +6,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from server.routes import models, documents, chat, skills, workspace, resources
+from server.routes import models, documents, chat, skills, workspace, resources, auth
 from server.integrations.line_connector import router as line_router
 from main import PROJECT_ROOT
 from server.dependencies.uma import get_uma_instance as get_uma
@@ -30,6 +30,7 @@ app.include_router(chat.router)
 app.include_router(skills.router)
 app.include_router(workspace.router)
 app.include_router(resources.router)
+app.include_router(auth.router)
 app.include_router(line_router)
 
 frontend_dir = PROJECT_ROOT / "frontend"

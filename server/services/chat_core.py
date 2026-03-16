@@ -37,12 +37,17 @@ async def process_chat_native(req: ChatRequest):
     if not adapter.is_available:
         return {"status": "error", "message": "OpenAI adapter is not available"}
 
+    from server.services.runtime import get_universal_system_prompt
+    
     session_mgr = get_session_manager()
     session_id = req.session_id or "default"
-    history = session_mgr.get_or_create_conversation(
-        session_id,
-        "You are MCP Agent Console assistant. Answer clearly and concisely.",
-    )
+    
+    # Use dynamic universal prompt to align with LINE bot behavior (time awareness, etc.)
+    dynamic_prompt = get_universal_system_prompt(platform="web")
+    history = session_mgr.get_or_create_conversation(session_id, dynamic_prompt)
+    
+    # Force update system prompt to ensure latest time is injected
+    session_mgr._update_system_prompt(session_id, dynamic_prompt)
     user_content = req.user_input
 
     # Optional document context injection
