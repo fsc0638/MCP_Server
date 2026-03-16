@@ -9,69 +9,8 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap');
 
-/* ── Design Token Overrides (UIUXPRO B2B SaaS Clean) ────────── */
-.page-chat-root {
-  /* Backgrounds — UIUXPRO B2B Service palette */
-  --bg-base:          #F1F4F9;
-  --bg-surface:       #FFFFFF;
-  --bg-card:          #FFFFFF;
-  --bg-sidebar:       #E8ECF3;
-  --bg-hover:         #EDF0F7;
-  --bg-active:        #E0E8FF;
-  --bg-input:         #FFFFFF;
-
-  /* Brand */
-  --kway-blue:        #18409b;
-  --kway-blue-dark:   #0f2d72;
-  --kway-blue-mid:    #2355b8;
-  --kway-blue-light:  #dce8ff;
-  --kway-blue-pale:   #EEF3FC;
-  --kway-orange:      #f68300;
-  --kway-orange-dark: #d97000;
-  --kway-orange-light:#FFF0D6;
-
-  /* Accent palette — clean, saturated, accessible */
-  --accent-teal:      #0EA5A0;
-  --accent-teal-pale: #E6F9F8;
-  --accent-coral:     #F05252;
-  --accent-yellow:    #F59E0B;
-  --accent-violet:    #7C3AED;
-
-  /* Border */
-  --border-subtle:    #E2E8F0;
-  --border-medium:    #CBD5E1;
-  --border-focus:     #18409b;
-
-  /* Text */
-  --text-primary:     #0F172A;
-  --text-secondary:   #475569;
-  --text-muted:       #94A3B8;
-  --text-inverse:     #FFFFFF;
-
-  /* Clay shadows (inner + outer) */
-  --shadow-clay-sm:   0 2px 8px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.80);
-  --shadow-clay-md:   0 6px 20px rgba(0,0,0,0.10), inset 0 1px 0 rgba(255,255,255,0.70);
-  --shadow-clay-lg:   0 12px 32px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.60);
-  --shadow-sm:        0 2px 8px rgba(0,0,0,0.07);
-  --shadow-md:        0 6px 20px rgba(0,0,0,0.09);
-  --shadow-blue:      0 4px 16px rgba(24,64,155,0.25);
-  --shadow-orange:    0 4px 16px rgba(246,131,0,0.28);
-
-  /* Radius (Claymorphism: large, consistent) */
-  --radius-xs:   6px;
-  --radius-sm:   10px;
-  --radius-md:   14px;
-  --radius-lg:   20px;
-  --radius-xl:   26px;
-  --radius-full: 9999px;
-
-  /* Typography */
-  --font-sans:  'Plus Jakarta Sans', 'Noto Sans TC', system-ui, -apple-system, sans-serif;
-  --transition: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
 html, body { height: 100%; overflow: hidden; }
-::selection { background: rgba(75,191,181,0.25); }
+::selection { background: var(--selection-bg, rgba(24,64,155,0.20)); }
 
 /* ── page-chat-root (App shell) ─────────────────────────────── */
 .page-chat-root {
@@ -86,9 +25,9 @@ html, body { height: 100%; overflow: hidden; }
 .page-chat-topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 20px;
-  background: #FFFFFF;
-  border-bottom: 1.5px solid rgba(0,0,0,0.07);
-  box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+  background: var(--kway-blue);
+  border-bottom: 2px solid var(--kway-orange);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.12);
   z-index: 10; flex-shrink: 0;
 }
 .page-chat-topbar-left  { display: flex; align-items: center; gap: 14px; }
@@ -98,72 +37,74 @@ html, body { height: 100%; overflow: hidden; }
 .page-chat-topbar-logo { gap: 10px; text-decoration: none; }
 .page-chat-topbar-logo .logo-mark {
   width: 32px; height: 32px; border-radius: 10px;
-  background: var(--kway-blue-pale);
-  box-shadow: var(--shadow-clay-sm);
-  border: none; overflow: hidden;
+  background: rgba(255,255,255,0.15);
+  box-shadow: none;
+  border: 1px solid rgba(255,255,255,0.20);
+  overflow: hidden;
 }
 .page-chat-topbar-logo .logo-text .brand {
-  color: var(--text-primary); font-size: 0.92rem; font-weight: 800;
+  color: #fff; font-size: 0.92rem; font-weight: 800;
   letter-spacing: -0.02em;
 }
-.page-chat-topbar-logo .logo-text .sub { color: var(--text-muted); font-size: 0.70rem; }
+.page-chat-topbar-logo .logo-text .sub { color: rgba(255,255,255,0.58); font-size: 0.70rem; }
 
-.page-chat-topbar-divider { width: 1.5px; height: 20px; background: rgba(0,0,0,0.08); border-radius: 2px; }
+.page-chat-topbar-divider { width: 1.5px; height: 20px; background: rgba(255,255,255,0.22); border-radius: 2px; }
 
 .page-chat-workspace-tag {
   display: flex; align-items: center; gap: 6px;
   padding: 5px 12px;
-  background: var(--bg-base);
-  border: 1.5px solid rgba(0,0,0,0.08);
+  background: rgba(255,255,255,0.10);
+  border: 1.5px solid rgba(255,255,255,0.22);
   border-radius: var(--radius-full);
-  font-size: 0.77rem; color: var(--text-secondary); font-weight: 600;
+  font-size: 0.77rem; color: rgba(255,255,255,0.82); font-weight: 600;
   cursor: pointer; transition: var(--transition);
-  box-shadow: var(--shadow-clay-sm);
+  box-shadow: none;
 }
 .page-chat-workspace-tag:hover {
-  background: #E8ECF3;
-  border-color: rgba(0,0,0,0.14);
-  color: var(--text-primary);
+  background: rgba(255,255,255,0.20);
+  border-color: rgba(255,255,255,0.34);
+  color: #fff;
   transform: translateY(-1px);
 }
 
 .page-chat-search-bar {
   display: flex; align-items: center; gap: 8px; padding: 7px 14px;
-  background: var(--bg-base);
-  border: 1.5px solid rgba(0,0,0,0.08);
+  background: rgba(255,255,255,0.10);
+  border: 1.5px solid rgba(255,255,255,0.22);
   border-radius: var(--radius-md);
-  color: var(--text-muted); font-size: 0.79rem;
+  color: rgba(255,255,255,0.70); font-size: 0.79rem;
   cursor: pointer; transition: var(--transition); min-width: 180px;
-  box-shadow: var(--shadow-clay-sm);
+  box-shadow: none;
 }
 .page-chat-search-bar:hover {
-  background: #E8ECF3;
-  border-color: rgba(0,0,0,0.14);
-  color: var(--text-secondary);
+  background: rgba(255,255,255,0.20);
+  border-color: rgba(255,255,255,0.34);
+  color: #fff;
 }
 .page-chat-search-bar kbd {
   margin-left: auto; padding: 2px 6px;
-  background: #FFFFFF;
-  border: 1.5px solid rgba(0,0,0,0.10);
+  background: rgba(255,255,255,0.12);
+  border: 1.5px solid rgba(255,255,255,0.26);
   border-radius: 6px; font-size: 0.69rem;
-  font-family: var(--font-sans); color: var(--text-muted);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  font-family: var(--font-sans); color: rgba(255,255,255,0.75);
+  box-shadow: none;
 }
 
 .page-chat-topbar-icon-btn {
   width: 36px; height: 36px; border-radius: var(--radius-sm);
-  background: var(--bg-base);
-  border: 1.5px solid rgba(0,0,0,0.08);
-  color: var(--text-secondary); cursor: pointer;
+  background: rgba(255,255,255,0.10);
+  border: 1.5px solid rgba(255,255,255,0.20);
+  color: rgba(255,255,255,0.76); cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   transition: var(--transition);
-  box-shadow: var(--shadow-clay-sm);
+  box-shadow: none;
 }
 .page-chat-topbar-icon-btn:hover {
-  background: #E8ECF3;
-  color: var(--text-primary);
+  background: rgba(255,255,255,0.20);
+  border-color: rgba(255,255,255,0.30);
+  color: #fff;
   transform: translateY(-1px);
-  box-shadow: var(--shadow-clay-md);
+  box-shadow: none;
 }
 
 .page-chat-topbar-avatar {

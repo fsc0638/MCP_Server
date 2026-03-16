@@ -344,3 +344,18 @@
 [data-theme="midnight"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
 [data-theme="midnight"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
 [data-theme="midnight"] ::selection                       { background: var(--selection-bg); }
+/* Shared theme tokens for all pages.
+   Page-level CSS should consume these vars and avoid redefining color palettes. */
+:root {
+  --accent-teal:      #0EA5A0;
+  --accent-teal-pale: #E6F9F8;
+  --accent-coral:     #F05252;
+  --accent-yellow:    #F59E0B;
+  --accent-violet:    #7C3AED;
+
+  --shadow-clay-sm:   0 2px 8px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.80);
+  --shadow-clay-md:   0 6px 20px rgba(0,0,0,0.10), inset 0 1px 0 rgba(255,255,255,0.70);
+  --shadow-clay-lg:   0 12px 32px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.60);
+
+  --selection-bg:     rgba(24,64,155,0.20);
+}
