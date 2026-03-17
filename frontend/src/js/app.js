@@ -209,7 +209,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         function showTypingIndicator() {
-            // Animation removed by user request
+            removeTypingIndicator();
+            const indicator = document.createElement('div');
+            indicator.id = 'typingIndicator';
+            indicator.className = 'message assistant typing-indicator';
+            indicator.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
+            msgContainer.appendChild(indicator);
+            chatViewport.scrollTop = chatViewport.scrollHeight;
         }
         function removeTypingIndicator() {
             const el = document.getElementById('typingIndicator');
