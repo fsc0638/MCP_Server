@@ -65,6 +65,21 @@
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   }
 
+  function getRelativeTimeString(timestamp) {
+    if (!timestamp) return "剛剛";
+    const now = Date.now();
+    const diff = now - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return "剛剛";
+    if (minutes < 60) return minutes + " 分鐘前";
+    if (hours < 24) return hours + " 小時前";
+    if (days === 1) return "昨天";
+    return days + " 天前";
+  }
+
   function updateStats(extraTokens) {
     if (extraTokens) state.tokenCount += extraTokens;
     const statMsgCount = document.getElementById("statMsgCount");
@@ -101,7 +116,8 @@
         id: state.sessionId,
         title: "新對話",
         preview: "詢問任何問題...",
-        time: "剛剛"
+        time: "剛剛",
+        timestamp: Date.now()
       });
       saveSessions();
     }
@@ -109,6 +125,7 @@
     let html = '<div class="page-chat-section-label">今日對話</div>';
     state.sessions.slice().reverse().forEach((s) => {
       const isActive = s.id === state.sessionId ? "is-active" : "";
+      const displayTime = getRelativeTimeString(s.timestamp);
       html += `
         <div class="page-chat-conv-item ${isActive}" onclick="loadConversationById('${s.id}')" role="button" tabindex="0">
           <div class="page-chat-conv-icon page-chat-conv-icon--blue" aria-hidden="true">✦</div>
@@ -116,7 +133,7 @@
             <div class="page-chat-conv-name">${escapeHtml(s.title)}</div>
             <div class="page-chat-conv-preview">${escapeHtml(s.preview)}</div>
           </div>
-          <div class="page-chat-conv-time">${escapeHtml(s.time)}</div>
+          <div class="page-chat-conv-time">${escapeHtml(displayTime)}</div>
         </div>`;
     });
     convList.innerHTML = html;
@@ -129,6 +146,7 @@
       if (session.title === "新對話") {
         session.title = text.slice(0, 12) + (text.length > 12 ? "..." : "");
       }
+      session.timestamp = Date.now(); // Update timestamp for relative ordering
       saveSessions();
       renderConversationList();
     }
@@ -183,13 +201,19 @@
     } catch (err) { /* silent fail */ }
   }
 
-  function renderMessage(role, text) {
+  function renderMessage(role, text, timestamp) {
     removeChatWelcome();
     if (!chatMessages) return null;
 
     const row = document.createElement("div");
     row.className = "page-chat-msg-row " + (role === "user" ? "page-chat-msg-row--user" : "page-chat-msg-row--ai");
-    const time = new Date().toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" });
+    
+    // Use 24h format for message time. If timestamp provided (e.g. from history), use it.
+    const dateObj = timestamp ? new Date(timestamp) : new Date();
+    const hours = String(dateObj.getHours()).padStart(2, "0");
+    const minutes = String(dateObj.getMinutes()).padStart(2, "0");
+    const timeStr = hours + ":" + minutes;
+
     const initials = role === "user" ? (userData.initials || userData.name.charAt(0) || "U") : "AI";
     const bubbleId = "bubble-" + Date.now();
 
@@ -198,16 +222,15 @@
       (role === "ai" ? "avatar-ai" : "") +
       '">' +
       escapeHtml(initials) +
-      "</div>" +
+      '</div>' +
       '<div class="page-chat-msg-body">' +
       '<div class="page-chat-msg-bubble" id="' +
       bubbleId +
       '">' +
-      formatText(text || "") +
-      "</div>" +
-      '<div class="page-chat-msg-meta">' +
+      formatText(text) +
+      '</div>' +
+      '<div class="page-chat-msg-footer">' +
       (role === "ai" ? escapeHtml(getCurrentModelLabel()) + " · " : "") +
-      escapeHtml(time) +
       '<div class="page-chat-msg-actions">' +
       '<button class="page-chat-msg-action-btn" onclick="copyMsg(this)" title="Copy">' +
       '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
@@ -267,7 +290,8 @@
       id: state.sessionId,
       title: "新對話",
       preview: "詢問任何問題...",
-      time: "剛剛"
+      time: "剛剛",
+      timestamp: Date.now()
     });
     saveSessions();
     renderConversationList();
@@ -360,7 +384,8 @@
       for (const msg of history) {
         if (!msg || !msg.role || typeof msg.content !== "string") continue;
         const role = msg.role === "assistant" ? "ai" : "user";
-        renderMessage(role, msg.content);
+        // History messages should have timestamps from backend if available
+        renderMessage(role, msg.content, msg.created_at ? msg.created_at * 1000 : null);
         state.msgCount += 1;
         state.tokenCount += Math.ceil(msg.content.length / 4);
       }
