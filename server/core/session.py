@@ -4,6 +4,7 @@ Manages session lifecycle, cleanup jobs, and MEMORY.md persistence.
 """
 import os
 import uuid
+import time
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -60,7 +61,7 @@ class SessionManager:
             if history is None:
                 history = []
                 if system_prompt:
-                    history.append({"role": "system", "content": system_prompt})
+                    history.append({"role": "system", "content": system_prompt, "created_at": int(time.time())})
             
             self._conversations[session_id] = history
             
@@ -72,8 +73,25 @@ class SessionManager:
         json_path = self.sessions_dir / f"{session_id}.json"
         if json_path.exists():
             try:
+                # Use file mtime as base for missing timestamps
+                fallback_time = int(json_path.stat().st_mtime)
                 with open(json_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    history = json.load(f)
+                    
+                needs_save = False
+                if isinstance(history, list):
+                    for i, msg in enumerate(history):
+                        if "created_at" not in msg:
+                            # Heuristic: space out messages slightly before the file's last modified time
+                            msg["created_at"] = fallback_time - (len(history) - 1 - i)
+                            needs_save = True
+                
+                if needs_save:
+                    # Save back with timestamps so they are "hard-locked"
+                    self._conversations[session_id] = history
+                    self._save_conversation_to_disk(session_id)
+                
+                return history
             except Exception as e:
                 logger.error(f"Failed to load session {session_id} from disk: {e}")
         return None
@@ -113,13 +131,13 @@ class SessionManager:
                 return
                 
         # If no system prompt exists, insert at the beginning
-        history.insert(0, {"role": "system", "content": new_system_prompt})
+        history.insert(0, {"role": "system", "content": new_system_prompt, "created_at": int(time.time())})
 
     def append_message(self, session_id: str, role: str, content: str):
         """Append a message to a session's conversation history with auto-compression trigger."""
         import re
         history = self._conversations.get(session_id, [])
-        history.append({"role": role, "content": content})
+        history.append({"role": role, "content": content, "created_at": int(time.time())})
         
         # Persistent save to disk
         self._save_conversation_to_disk(session_id)

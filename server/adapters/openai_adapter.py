@@ -149,8 +149,11 @@ class OpenAIAdapter:
         prev_response_id = None # Force stateless for now to ensure system prompt overrides
         
         # 2. Input Resolution
-        # We always send the full history now because we disabled stateful tracking
-        input_payload = messages
+        # Filter out custom metadata that OpenAI doesn't support (like created_at)
+        input_payload = []
+        for msg in messages:
+            clean_msg = {k: v for k, v in msg.items() if k != "created_at"}
+            input_payload.append(clean_msg)
         
         # Log roles for debugging
         roles = [m.get("role") for m in input_payload]
@@ -351,9 +354,15 @@ class OpenAIAdapter:
             if system_msg:
                 logger.info(f"[OpenAI Adapter] Sending System Prompt (Stateless): {system_msg['content'][:200]}...")
             
+            # Filter out custom metadata
+            clean_history = []
+            for msg in session_history:
+                clean_msg = {k: v for k, v in msg.items() if k != "created_at"}
+                clean_history.append(clean_msg)
+
             response = self.client.chat.completions.create(
                 model=self.model,
-                messages=session_history,
+                messages=clean_history,
                 temperature=temperature,
                 stream=True
                 # NOTE: No 'tools' or 'tool_choice' passed — strictly isolated
