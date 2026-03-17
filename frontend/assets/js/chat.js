@@ -116,20 +116,16 @@
         id: state.sessionId,
         title: "新對話",
         preview: "詢問任何問題...",
+        time: "剛剛",
         timestamp: Date.now()
       });
       saveSessions();
     }
 
-    // Sort sessions by timestamp descending (most recent first)
-    state.sessions.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-
     let html = '<div class="page-chat-section-label">今日對話</div>';
-    state.sessions.forEach((s) => {
+    state.sessions.slice().reverse().forEach((s) => {
       const isActive = s.id === state.sessionId ? "is-active" : "";
-      // Use stored timestamp, or fallback only if missing
-      const ts = s.timestamp || Date.now();
-      const displayTime = getRelativeTimeString(ts);
+      const displayTime = getRelativeTimeString(s.timestamp);
       html += `
         <div class="page-chat-conv-item ${isActive}" onclick="loadConversationById('${s.id}')" role="button" tabindex="0">
           <div class="page-chat-conv-icon page-chat-conv-icon--blue" aria-hidden="true">✦</div>
@@ -150,6 +146,7 @@
       if (session.title === "新對話") {
         session.title = text.slice(0, 12) + (text.length > 12 ? "..." : "");
       }
+      session.timestamp = Date.now(); // Update timestamp for relative ordering
       saveSessions();
       renderConversationList();
     }
@@ -178,30 +175,18 @@
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder("utf-8");
-      let buffer = "";
       let summary = "";
-      
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        
-        // Robust SSE line parsing
-        let lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() || "";
-        
+        const lines = decoder.decode(value).split("\r\n\r\n");
         for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data: ")) continue;
-          
-          try {
-            const dataStr = trimmed.slice(6).trim();
-            if (dataStr === "[DONE]") continue;
-            const p = JSON.parse(dataStr);
-            if (p.status === "streaming" && p.content) summary += p.content;
-            else if (p.status === "success" && p.content) summary = p.content;
-          } catch(e) {
-            console.warn("[Summarize] Parse error:", e, line);
+          if (line.startsWith("data: ")) {
+            try {
+              const p = JSON.parse(line.slice(6));
+              if (p.status === "streaming") summary += p.content;
+              else if (p.status === "success") summary = p.content;
+            } catch(e){}
           }
         }
       }
@@ -216,38 +201,36 @@
     } catch (err) { /* silent fail */ }
   }
 
-  let msgCounter = 0;
   function renderMessage(role, text, timestamp) {
     removeChatWelcome();
     if (!chatMessages) return null;
 
-    msgCounter++;
     const row = document.createElement("div");
     row.className = "page-chat-msg-row " + (role === "user" ? "page-chat-msg-row--user" : "page-chat-msg-row--ai");
     
+    // Use 24h format for message time. If timestamp provided (e.g. from history), use it.
     const dateObj = timestamp ? new Date(timestamp) : new Date();
     const hours = String(dateObj.getHours()).padStart(2, "0");
     const minutes = String(dateObj.getMinutes()).padStart(2, "0");
     const timeStr = hours + ":" + minutes;
 
     const initials = role === "user" ? (userData.initials || userData.name.charAt(0) || "U") : "AI";
-    const bubbleId = "bubble-" + Date.now() + "-" + msgCounter;
+    const bubbleId = "bubble-" + Date.now();
 
     row.innerHTML =
       '<div class="avatar avatar-sm ' +
       (role === "ai" ? "avatar-ai" : "") +
       '">' +
       escapeHtml(initials) +
-      "</div>" +
+      '</div>' +
       '<div class="page-chat-msg-body">' +
       '<div class="page-chat-msg-bubble" id="' +
       bubbleId +
       '">' +
-      formatText(text || "") +
-      "</div>" +
-      '<div class="page-chat-msg-meta">' +
+      formatText(text) +
+      '</div>' +
+      '<div class="page-chat-msg-footer">' +
       (role === "ai" ? escapeHtml(getCurrentModelLabel()) + " · " : "") +
-      escapeHtml(timeStr) +
       '<div class="page-chat-msg-actions">' +
       '<button class="page-chat-msg-action-btn" onclick="copyMsg(this)" title="Copy">' +
       '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
@@ -255,9 +238,7 @@
       "</svg></button></div></div></div>";
     chatMessages.appendChild(row);
     chatMessages.scrollTop = chatMessages.scrollHeight;
-    
-    // Direct selection from the row we just appended is safer than getElementById
-    return row.querySelector(".page-chat-msg-bubble");
+    return document.getElementById(bubbleId);
   }
 
   function showTyping() {
@@ -309,7 +290,8 @@
       id: state.sessionId,
       title: "新對話",
       preview: "詢問任何問題...",
-      time: "剛剛"
+      time: "剛剛",
+      timestamp: Date.now()
     });
     saveSessions();
     renderConversationList();
@@ -402,24 +384,11 @@
       for (const msg of history) {
         if (!msg || !msg.role || typeof msg.content !== "string") continue;
         const role = msg.role === "assistant" ? "ai" : "user";
+        // History messages should have timestamps from backend if available
         renderMessage(role, msg.content, msg.created_at ? msg.created_at * 1000 : null);
         state.msgCount += 1;
         state.tokenCount += Math.ceil(msg.content.length / 4);
       }
-
-      // Sync sidebar timestamp with the true last message from backend
-      if (history.length > 0) {
-        const lastMsg = history[history.length - 1];
-        if (lastMsg.created_at) {
-          const session = state.sessions.find(s => s.id === state.sessionId);
-          if (session) {
-            session.timestamp = lastMsg.created_at * 1000;
-            saveSessions();
-            renderConversationList();
-          }
-        }
-      }
-
       updateStats();
       return true;
     } catch (_err) {
@@ -428,42 +397,28 @@
   }
 
   async function streamChatResponse(res, bubbleEl) {
-    if (!bubbleEl) {
-      console.error("[Chat] streamChatResponse failed: bubbleEl is null");
-      return "";
-    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
     let full = "";
-    
     while (true) {
-      try {
-        const { done, value } = await reader.read();
-        if (done) break;
-        
-        buffer += decoder.decode(value, { stream: true });
-        
-        // Robust SSE line parsing: Split by any newline format
-        let lines = buffer.split(/\r?\n/);
-        // The last element might be an incomplete line
-        buffer = lines.pop() || "";
-        
+      const read = await reader.read();
+      if (read.done) break;
+      buffer += decoder.decode(read.value, { stream: true });
+      const events = buffer.split("\r\n\r\n");
+      buffer = events.pop() || "";
+      for (const event of events) {
+        const lines = event.split(/\r?\n/);
         for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data: ")) continue;
-          
-          const payload = trimmed.slice(6).trim();
+          if (!line.startsWith("data: ")) continue;
+          const payload = line.slice(6).trim();
           if (payload === "[DONE]") continue;
-          
           let parsed = null;
           try {
             parsed = JSON.parse(payload);
-          } catch (e) {
-            console.warn("[Chat] SSE JSON parse error:", e, trimmed);
+          } catch (_err) {
             continue;
           }
-          
           if (parsed.status === "streaming") {
             const delta = parsed.content || "";
             full += delta;
@@ -473,20 +428,13 @@
             const finalText = parsed.content || full;
             full = finalText;
             bubbleEl.innerHTML = formatText(finalText);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
           } else if (parsed.status === "error") {
             throw new Error(parsed.message || "Server error");
           }
         }
-      } catch (err) {
-        console.error("[Chat] Stream read error:", err);
-        throw err;
       }
     }
-    
-    // Final safety render
     bubbleEl.innerHTML = formatText(full);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
     return full;
   }
 
@@ -501,20 +449,11 @@
       autoResize(chatInput);
     }
 
-    const nowTs = Date.now();
-    renderMessage("user", content, nowTs);
+    renderMessage("user", content);
     state.msgCount += 1;
     updateStats(Math.ceil(content.length / 4));
     showTyping();
     updateCurrentSessionPreview(content);
-    
-    // Hard-lock the session timestamp to this latest message immediately
-    const session = state.sessions.find(s => s.id === state.sessionId);
-    if (session) {
-      session.timestamp = nowTs;
-      saveSessions();
-      renderConversationList();
-    }
 
     try {
       const m = getCurrentModel();
@@ -549,7 +488,7 @@
         throw new Error("HTTP " + res.status + ": " + errText);
       }
 
-      const bubble = renderMessage("ai", "", nowTs);
+      const bubble = renderMessage("ai", "");
       const finalText = await streamChatResponse(res, bubble);
       state.msgCount += 1;
       updateStats(Math.ceil(finalText.length / 4));
