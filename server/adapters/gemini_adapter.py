@@ -181,22 +181,21 @@ class GeminiAdapter:
         if not user_query:
             return {"status": "error", "message": "No user query provided"}
 
-        # Extract system instruction ??priority:
-        # 1. system_prompt passed by router.py (contains full skill list from build_system_prompt)
-        # 2. system message from history (fallback)
-        # 3. built-in default
-        system_instruction_text = kwargs.get("system_prompt", None)
+        # Extract system instruction — priority:
+        # 1. system message from history (chat_core guarantees messages[0] is system with dynamic prompt)
+        # 2. explicit system_prompt kwarg (for direct callers)
+        # 3. built-in default (last resort)
+        system_instruction_text = ""
+        if messages:
+            for msg in messages:
+                if msg.get("role") == "system":
+                    system_instruction_text = self._extract_text(msg.get("content", ""))
+                    break
         if not system_instruction_text:
-            system_instruction_text = (
-                "You are a high-performance AI Assistant. 隢誑蝜?銝剜????n"
-                "??閬???蝑??賢?憿?嚗??蝙?函頂蝯梁??葉???湔??賣??柴n"
-                "?渡?撠??質牧??摰?亥?摨急?隞塚??渡?撠霅澈?辣瘛瑕??賣??柴?
+            system_instruction_text = kwargs.get("system_prompt") or (
+                "You are a high-performance AI Assistant. "
+                "請使用繁體中文回覆。"
             )
-            if messages:
-                for msg in messages:
-                    if msg.get("role") == "system":
-                        system_instruction_text = msg["content"]
-                        break
 
         visual_parts = []
         visual_docs = kwargs.get("visual_docs", [])
@@ -237,12 +236,11 @@ class GeminiAdapter:
 
             gemini_tools = genai.protos.Tool(function_declarations=function_declarations) if function_declarations else None
 
-            # === DEBUG: Print system_instruction summary ===
-            skill_count_hint = system_instruction_text.count("??) + system_instruction_text.count("??)
-            logger.warning(f"[GEMINI DEBUG] system_instruction length={len(system_instruction_text)}, skill_markers={skill_count_hint}")
-            logger.warning(f"[GEMINI DEBUG] system_instruction preview: {system_instruction_text[:300]}")
-            logger.warning(f"[GEMINI DEBUG] visual_parts count={len(visual_parts)}, user_query[:80]={user_query[:80]}")
-            # === END DEBUG ===
+            # System instruction diagnostics
+            logger.debug(f"[GEMINI] system_instruction length={len(system_instruction_text)}")
+            logger.debug(f"[GEMINI] system_instruction preview: {system_instruction_text[:200]}")
+            logger.debug(f"[GEMINI] visual_parts count={len(visual_parts)}, user_query[:80]={user_query[:80]}")
+
 
             model = genai.GenerativeModel(
                 model_name=self.model_name,
