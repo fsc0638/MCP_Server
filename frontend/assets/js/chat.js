@@ -121,8 +121,11 @@
       saveSessions();
     }
 
+    // Sort sessions by timestamp descending (most recent first)
+    state.sessions.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
     let html = '<div class="page-chat-section-label">今日對話</div>';
-    state.sessions.slice().reverse().forEach((s) => {
+    state.sessions.forEach((s) => {
       const isActive = s.id === state.sessionId ? "is-active" : "";
       // Use stored timestamp, or fallback only if missing
       const ts = s.timestamp || Date.now();
