@@ -29,16 +29,27 @@ async def process_chat_native(req: ChatRequest):
     """
 
     provider = (req.provider or "").strip().lower()
-    model = (req.model or "openai").strip().lower()
-    if provider and provider != "openai":
-        raise NotImplementedError("Native chat currently supports provider=openai only.")
-    if model.startswith("gemini") or model.startswith("claude"):
-        raise NotImplementedError("Native chat currently supports OpenAI-style models only.")
+    
+    # Auto-resolve provider if missing but model is classic
+    if not provider:
+        m = (req.model or "").lower()
+        if m.startswith("gpt-"): provider = "openai"
+        elif m.startswith("gemini-"): provider = "gemini"
+        elif m.startswith("claude-"): provider = "claude"
+        else: provider = "openai" # Default
 
+    from server.adapters.factory import create_adapter
     uma = get_uma()
-    adapter = OpenAIAdapter(uma=uma, model=req.model, api_base=req.api_base, api_key=req.api_key)
+    adapter = create_adapter(
+        provider=provider, 
+        uma=uma, 
+        model=req.model, 
+        api_base=req.api_base, 
+        api_key=req.api_key
+    )
+    
     if not adapter.is_available:
-        return {"status": "error", "message": "OpenAI adapter is not available"}
+        return {"status": "error", "message": f"{provider.capitalize()} adapter is not available"}
 
     from server.services.runtime import get_universal_system_prompt
     
@@ -82,7 +93,13 @@ async def process_chat_native(req: ChatRequest):
     if req.language and req.language != "自動偵測":
         user_content += f"\n\n(System Note: Respond strictly in {req.language}. If input is in another language, translate your answer.)"
 
-    outbound_history = history + [{"role": "user", "content": user_content}]
+    raw_outbound = history + [{"role": "user", "content": user_content}]
+    
+    # Sanitize history for API compatibility
+    outbound_history = []
+    for m in raw_outbound:
+        clean_msg = {k: v for k, v in m.items() if k != "created_at"}
+        outbound_history.append(clean_msg)
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         session_mgr.append_message(session_id, "user", req.user_input)
