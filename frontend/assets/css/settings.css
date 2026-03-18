@@ -24,7 +24,7 @@ html, body { height: 100%; overflow: hidden; }
 .page-settings-topbar-right { display: flex; align-items: center; gap: 8px; }
 
 /* Logo override for dark topbar */
-.page-settings-topbar-logo .logo-mark { width: 30px; height: 30px; border-radius: 6px; background: rgba(255,255,255,0.15); box-shadow: none; border: 1px solid rgba(255,255,255,0.2); }
+.page-settings-topbar-logo .logo-mark { width: 30px; height: 30px; border-radius: 6px; box-shadow: none; }
 .page-settings-topbar-logo .logo-text .brand { color: #fff; font-size: 0.95rem; }
 .page-settings-topbar-logo .logo-text .sub { color: rgba(255,255,255,0.55); }
 .page-settings-topbar-divider { width: 1px; height: 20px; background: rgba(255,255,255,0.18); }

@@ -344,6 +344,114 @@
 [data-theme="midnight"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
 [data-theme="midnight"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
 [data-theme="midnight"] ::selection                       { background: var(--selection-bg); }
+/* ──────────────────────────────────────────────────────────
+   THEME 07 — 晴湖青韻 Ocean Teal（淺）
+   靈感：Agent K設計  bg:#F2F4F7  主:青湖藍  副:琥珀橙
+   ────────────────────────────────────────────────────────── */
+[data-theme="ocean"] {
+  /* ── Brand ── */
+  --kway-blue:        #1a9aaa;
+  --kway-blue-dark:   #12737f;
+  --kway-blue-mid:    #5ec4d0;
+  --kway-blue-light:  #b2e4ea;
+  --kway-blue-pale:   #e6f6f8;
+  --kway-orange:      #f5a623;
+  --kway-orange-dark: #d4891a;
+  --kway-orange-light:#fde8bb;
+
+  /* ── Background ── */
+  --bg-base:          #f2f4f7;
+  --bg-surface:       #ffffff;
+  --bg-card:          #ffffff;
+  --bg-sidebar:       #f8f9fb;
+  --bg-hover:         #e6f6f8;
+  --bg-active:        #b2e4ea;
+  --bg-input:         #ffffff;
+
+  /* ── Border ── */
+  --border-subtle:    rgba(26,154,170,0.10);
+  --border-medium:    rgba(26,154,170,0.18);
+  --border-focus:     rgba(26,154,170,0.55);
+
+  /* ── Text ── */
+  --text-primary:     #0f172a;
+  --text-secondary:   #334155;
+  --text-muted:       #64748b;
+  --text-inverse:     #ffffff;
+
+  /* ── Shadow ── */
+  --shadow-sm:        0 1px 4px  rgba(26,154,170,0.07);
+  --shadow-md:        0 4px 16px rgba(26,154,170,0.09);
+  --shadow-lg:        0 8px 32px rgba(26,154,170,0.12);
+  --shadow-xl:        0 16px 48px rgba(26,154,170,0.15);
+  --shadow-orange:    0 4px 18px rgba(245,166,35,0.30);
+  --shadow-blue:      0 4px 18px rgba(26,154,170,0.30);
+
+  /* ── Scrollbar ── */
+  --scrollbar-thumb:  #b2e4ea;
+  --scrollbar-hover:  #1a9aaa;
+  --selection-bg:     rgba(26,154,170,0.18);
+}
+
+[data-theme="ocean"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
+[data-theme="ocean"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
+[data-theme="ocean"] ::selection                       { background: var(--selection-bg); }
+
+
+/* ──────────────────────────────────────────────────────────
+   THEME 08 — 石板青苔 Slate Sage（淺）
+   靈感：Gig Share設計  bg:#F0F1F3  主:鼠尾草綠  副:靛藍  側欄:深石板
+   ────────────────────────────────────────────────────────── */
+[data-theme="slate"] {
+  /* ── Brand ── */
+  --kway-blue:        #72b2a0;
+  --kway-blue-dark:   #5a9e8c;
+  --kway-blue-mid:    #b8ddd7;
+  --kway-blue-light:  #c5edf1;
+  --kway-blue-pale:   #eaf4f2;
+  --kway-orange:      #5b5db8;
+  --kway-orange-dark: #4849a0;
+  --kway-orange-light:#eeeef9;
+
+  /* ── Background ── */
+  --bg-base:          #f0f1f3;
+  --bg-surface:       #ffffff;
+  --bg-card:          #ffffff;
+  --bg-sidebar:       #3c4a5c;
+  --bg-hover:         #eaf4f2;
+  --bg-active:        #b8ddd7;
+  --bg-input:         #ffffff;
+
+  /* ── Border ── */
+  --border-subtle:    rgba(114,178,160,0.10);
+  --border-medium:    rgba(114,178,160,0.18);
+  --border-focus:     rgba(114,178,160,0.55);
+
+  /* ── Text ── */
+  --text-primary:     #1c2232;
+  --text-secondary:   #374151;
+  --text-muted:       #6b7280;
+  --text-inverse:     #ffffff;
+
+  /* ── Shadow ── */
+  --shadow-sm:        0 1px 4px  rgba(60,74,92,0.06);
+  --shadow-md:        0 4px 16px rgba(60,74,92,0.08);
+  --shadow-lg:        0 8px 32px rgba(60,74,92,0.12);
+  --shadow-xl:        0 16px 48px rgba(60,74,92,0.16);
+  --shadow-orange:    0 4px 18px rgba(91,93,184,0.30);
+  --shadow-blue:      0 4px 18px rgba(114,178,160,0.30);
+
+  /* ── Scrollbar ── */
+  --scrollbar-thumb:  #b8ddd7;
+  --scrollbar-hover:  #72b2a0;
+  --selection-bg:     rgba(114,178,160,0.18);
+}
+
+[data-theme="slate"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
+[data-theme="slate"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
+[data-theme="slate"] ::selection                       { background: var(--selection-bg); }
+
+
 /* Shared theme tokens for all pages.
    Page-level CSS should consume these vars and avoid redefining color palettes. */
 :root {

@@ -18,7 +18,7 @@
     <div class="page-chat-topbar-left">
       <a href="index.html" class="logo page-chat-topbar-logo" aria-label="K WAY AgentPortal 首頁">
         <div class="logo-mark" aria-hidden="true" style="background:none;">
-          <img src="../assets/images/kw_logo.png" width="28" height="28" alt="K WAY Logo" style="object-fit:contain;" />
+          <img src="../assets/images/kw_logo.png" width="28" height="28" alt="" />
         </div>
         <div class="logo-text">
           <span class="brand">K WAY AgentPortal</span>
@@ -104,6 +104,7 @@
       </div>
 
       <div class="page-chat-messages" id="chatMessages" role="log" aria-label="對話訊息" aria-live="polite">
+        <!-- Welcome / home state -->
         <div class="page-chat-welcome" id="chatWelcome">
           <div class="page-chat-welcome-logo" aria-hidden="true" style="background:none;box-shadow:none;">
             <img src="../assets/images/kw_logo.png" width="56" height="56" alt="K WAY Logo" style="object-fit:contain;position:relative;z-index:1;" />
@@ -111,26 +112,26 @@
           <h2>歡迎使用 K WAY AgentPortal</h2>
           <p>凱衛資訊企業級 AI 智能助理，為您的工作提供專業、高效的支援。</p>
           <div class="page-chat-suggestion-grid" role="list" aria-label="快捷建議">
-            <div class="page-chat-suggestion-card" role="listitem" onclick="sendSuggestion('幫我整理一份週報範本')" tabindex="0" aria-label="撰寫週報範本">
+            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('幫我整理一份週報範本')" aria-label="撰寫週報範本">
               <div class="page-chat-suggestion-icon" aria-hidden="true">📋</div>
               <div class="page-chat-suggestion-title">撰寫週報範本</div>
               <div class="page-chat-suggestion-desc">快速生成專業的工作週報</div>
-            </div>
-            <div class="page-chat-suggestion-card" role="listitem" onclick="sendSuggestion('分析以下資料並給我洞察')" tabindex="0" aria-label="資料分析洞察">
+            </button>
+            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('分析以下資料並給我洞察')" aria-label="資料分析洞察">
               <div class="page-chat-suggestion-icon" aria-hidden="true">📊</div>
               <div class="page-chat-suggestion-title">資料分析洞察</div>
               <div class="page-chat-suggestion-desc">從數據中提取有價值的見解</div>
-            </div>
-            <div class="page-chat-suggestion-card" role="listitem" onclick="sendSuggestion('幫我寫一封專業的商務郵件')" tabindex="0" aria-label="商務郵件撰寫">
+            </button>
+            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('幫我寫一封專業的商務郵件')" aria-label="商務郵件撰寫">
               <div class="page-chat-suggestion-icon" aria-hidden="true">✉️</div>
               <div class="page-chat-suggestion-title">商務郵件撰寫</div>
               <div class="page-chat-suggestion-desc">生成得體的商務溝通郵件</div>
-            </div>
-            <div class="page-chat-suggestion-card" role="listitem" onclick="sendSuggestion('幫我腦力激盪產品功能構想')" tabindex="0" aria-label="創意腦力激盪">
+            </button>
+            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('幫我腦力激盪產品功能構想')" aria-label="創意腦力激盪">
               <div class="page-chat-suggestion-icon" aria-hidden="true">💡</div>
               <div class="page-chat-suggestion-title">創意腦力激盪</div>
               <div class="page-chat-suggestion-desc">探索新想法和創新方向</div>
-            </div>
+            </button>
           </div>
         </div>
       </div>
@@ -314,5 +315,3 @@
 <script src="../assets/js/chat.js"></script>
 </body>
 </html>
-
-

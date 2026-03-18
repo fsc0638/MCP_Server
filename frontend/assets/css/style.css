@@ -127,16 +127,15 @@ body {
 .ac-logo-mark {
   width: 36px; height: 36px;
   border-radius: var(--radius-sm);
-  background: var(--kway-blue);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: var(--shadow-blue);
   flex-shrink: 0;
   position: relative;
   overflow: hidden;
 }
 .ac-logo-mark svg { width: 20px; height: 20px; position: relative; z-index: 1; }
+.ac-logo-mark img { width: 100%; height: 100%; object-fit: contain; }
 .ac-logo-text {
   font-size: 1rem;
   font-weight: 700;
@@ -391,8 +390,9 @@ body {
 .kway-accent-bar { height: 3px; width: 28px; background: var(--kway-orange); border-radius: var(--radius-full); margin-bottom: 14px; }
 .glass-card    { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-xl); box-shadow: var(--shadow-xl); }
 .logo          { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; user-select: none; }
-.logo-mark     { width: 36px; height: 36px; border-radius: var(--radius-sm); background: var(--kway-blue); display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-blue); flex-shrink: 0; position: relative; overflow: hidden; }
+.logo-mark     { width: 36px; height: 36px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; flex-shrink: 0; position: relative; overflow: hidden; }
 .logo-mark svg { width: 20px; height: 20px; position: relative; z-index: 1; }
+.logo-mark img { width: 100%; height: 100%; object-fit: contain; }
 .logo-text     { font-size: 1rem; font-weight: 700; color: var(--text-primary); letter-spacing: -0.01em; display: flex; flex-direction: column; line-height: 1.1; }
 .logo-text .brand { color: var(--kway-blue); font-size: 1rem; }
 .logo-text .sub   { color: var(--text-muted); font-size: 0.62rem; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; }
