@@ -13,30 +13,49 @@
 /* ── page-welcome-brand (Left brand panel) ──────────────────── */
 .page-welcome-brand {
   position: relative;
-  background: var(--kway-blue);
+  background: linear-gradient(145deg, #eaf7f9 0%, #eef5f1 45%, #fdf6e7 100%);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   padding: 48px 56px;
+  border-right: 1px solid var(--border-subtle);
+}
+.page-welcome-brand::before {
+  content: '';
+  position: absolute;
+  width: 560px; height: 560px;
+  background: radial-gradient(circle, rgba(24,64,155,.10), transparent 65%);
+  top: -120px; left: -100px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.page-welcome-brand::after {
+  content: '';
+  position: absolute;
+  width: 400px; height: 400px;
+  background: radial-gradient(circle, rgba(246,131,0,.09), transparent 65%);
+  bottom: -80px; right: -80px;
+  border-radius: 50%;
+  pointer-events: none;
 }
 
 .page-welcome-brand-grid {
   position: absolute; inset: 0;
   background-image:
-    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+    linear-gradient(rgba(24,64,155,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(24,64,155,0.04) 1px, transparent 1px);
   background-size: 48px 48px;
 }
 
 .page-welcome-brand-circle {
   position: absolute;
   border-radius: 50%;
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid rgba(24,64,155,0.08);
 }
 .page-welcome-brand-circle--lg { width: 480px; height: 480px; bottom: -160px; right: -120px; }
 .page-welcome-brand-circle--sm { width: 280px; height: 280px; top: -60px; left: -80px; }
-.page-welcome-brand-circle--accent { width: 160px; height: 160px; top: 40%; right: 10%; border-color: rgba(246,131,0,0.22); }
+.page-welcome-brand-circle--accent { width: 160px; height: 160px; top: 40%; right: 10%; border-color: rgba(246,131,0,0.18); }
 
 .page-welcome-brand-bar {
   position: absolute; top: 0; left: 0; width: 4px; height: 100%;
@@ -48,13 +67,13 @@
 .page-welcome-brand-logo { display: flex; align-items: center; gap: 12px; }
 .page-welcome-brand-logo-icon {
   width: 44px; height: 44px; border-radius: 10px;
-  background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2);
   display: flex; align-items: center; justify-content: center;
   position: relative; overflow: hidden;
 }
-.page-welcome-brand-logo-text { color: #fff; }
+.page-welcome-brand-logo-icon img { width: 100%; height: 100%; object-fit: contain; }
+.page-welcome-brand-logo-text { color: var(--text-primary); }
 .page-welcome-brand-logo-text .page-welcome-brand-name { font-size: 1.05rem; font-weight: 700; display: block; }
-.page-welcome-brand-logo-text .page-welcome-brand-tagline { font-size: 0.68rem; opacity: 0.6; letter-spacing: 0.08em; text-transform: uppercase; }
+.page-welcome-brand-logo-text .page-welcome-brand-tagline { font-size: 0.68rem; opacity: 0.5; letter-spacing: 0.08em; text-transform: uppercase; }
 
 /* Center content */
 .page-welcome-brand-body {
@@ -62,12 +81,12 @@
   display: flex; flex-direction: column; justify-content: center;
 }
 .page-welcome-brand-headline {
-  font-size: 2.3rem; font-weight: 800; color: #fff;
+  font-size: 2.3rem; font-weight: 800; color: var(--text-primary);
   line-height: 1.25; letter-spacing: -0.025em; margin-bottom: 18px;
 }
 .page-welcome-brand-headline .page-welcome-brand-highlight { color: var(--kway-orange); }
 .page-welcome-brand-desc {
-  font-size: 0.92rem; color: rgba(255,255,255,0.65);
+  font-size: 0.92rem; color: var(--text-secondary);
   line-height: 1.78; max-width: 360px; margin-bottom: 36px;
 }
 .page-welcome-brand-chips { 
@@ -79,20 +98,20 @@
 }
 .page-welcome-brand-chip {
   display: flex; align-items: center; gap: 7px; padding: 7px 13px;
-  background: rgba(255,255,255,0.09); border: 1px solid rgba(255,255,255,0.14);
-  border-radius: var(--radius-full); font-size: 0.79rem; color: rgba(255,255,255,0.82); font-weight: 500;
+  background: rgba(255,255,255,0.65); border: 1px solid rgba(24,64,155,0.12);
+  border-radius: var(--radius-full); font-size: 0.79rem; color: var(--text-secondary); font-weight: 500;
 }
 .page-welcome-brand-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--kway-orange); flex-shrink: 0; }
 
 /* Stats footer */
 .page-welcome-brand-stats {
   position: relative; z-index: 2; display: flex;
-  border-top: 1px solid rgba(255,255,255,0.12); padding-top: 26px;
+  border-top: 1px solid var(--border-subtle); padding-top: 26px;
 }
-.page-welcome-brand-stat { flex: 1; text-align: center; padding: 0 10px; border-right: 1px solid rgba(255,255,255,0.1); }
+.page-welcome-brand-stat { flex: 1; text-align: center; padding: 0 10px; border-right: 1px solid var(--border-subtle); }
 .page-welcome-brand-stat:last-child { border-right: none; }
-.page-welcome-brand-stat-value { font-size: 1.35rem; font-weight: 800; color: #fff; letter-spacing: -0.03em; }
-.page-welcome-brand-stat-label { font-size: 0.68rem; color: rgba(255,255,255,0.48); margin-top: 3px; }
+.page-welcome-brand-stat-value { font-size: 1.35rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.03em; }
+.page-welcome-brand-stat-label { font-size: 0.68rem; color: var(--text-muted); margin-top: 3px; }
 
 /* ── page-welcome-content (Right content panel) ─────────────── */
 .page-welcome-content {

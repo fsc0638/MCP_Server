@@ -15,7 +15,7 @@ const ThemeSwitcher = (() => {
   const STORAGE_KEY = 'kway_theme';
   const DEFAULT_THEME = null; // null = 使用 :root 預設（K WAY Blue）
 
-  /** 六套主題定義（由淺到深）*/
+  /** 八套主題定義（由淺到深）*/
   const themes = [
     {
       id:    'pearl',
@@ -58,6 +58,20 @@ const ThemeSwitcher = (() => {
       desc:  '純粹黑夜 × 深空紫 × 電光青',
       dark:  true,
       swatch: { bg: '#0D0D1A', primary: '#6B4EFF', secondary: '#4ECDC4' },
+    },
+    {
+      id:    'ocean',
+      label: '晴湖青韻',
+      desc:  '淺灰藍底 × 青湖藍 × 琥珀橙',
+      dark:  false,
+      swatch: { bg: '#F2F4F7', primary: '#1a9aaa', secondary: '#f5a623' },
+    },
+    {
+      id:    'slate',
+      label: '石板青苔',
+      desc:  '霧灰白底 × 鼠尾草綠 × 靛藍 × 深石板側欄',
+      dark:  false,
+      swatch: { bg: '#F0F1F3', primary: '#72b2a0', secondary: '#5b5db8' },
     },
   ];
 
