@@ -66,18 +66,43 @@
   }
 
   function getRelativeTimeString(timestamp) {
-    if (!timestamp) return "剛剛";
-    const now = Date.now();
-    const diff = now - timestamp;
+    if (!timestamp) return "";
+    const now = new Date();
+    const target = new Date(timestamp);
+    const diff = now - target;
     const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
 
-    if (minutes < 1) return "剛剛";
-    if (minutes < 60) return minutes + " 分鐘前";
-    if (hours < 24) return hours + " 小時前";
-    if (days === 1) return "昨天";
-    return days + " 天前";
+    // Use calendar-day difference (midnight-based) for accurate day labels
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const targetStart = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+    const calendarDays = Math.round((todayStart - targetStart) / 86400000);
+
+    if (calendarDays === 0) {
+      // Today: show relative time
+      if (minutes < 1) return "剛剛";
+      if (minutes < 60) return minutes + " 分鐘前";
+      return Math.floor(diff / 3600000) + " 小時前";
+    }
+    if (calendarDays === 1) return "昨天";
+    if (calendarDays <= 7) return calendarDays + " 天前";
+    // Older than a week: show date
+    return (target.getMonth() + 1) + "/" + target.getDate();
+  }
+
+  // Determine which date-group label a timestamp belongs to
+  function getDateGroupLabel(timestamp) {
+    if (!timestamp) return "更早";
+    const now = new Date();
+    const target = new Date(timestamp);
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const targetStart = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+    const calendarDays = Math.round((todayStart - targetStart) / 86400000);
+
+    if (calendarDays === 0) return "今日對話";
+    if (calendarDays === 1) return "昨天";
+    if (calendarDays <= 7) return "前 7 天";
+    if (calendarDays <= 30) return "前 30 天";
+    return target.getFullYear() + "/" + (target.getMonth() + 1);
   }
 
   function updateStats(extraTokens) {
@@ -106,24 +131,37 @@
     localStorage.setItem("kway_sessions", JSON.stringify(state.sessions));
   }
 
-  function renderConversationList() {
-    const convList = document.getElementById("convList");
-    if (!convList) return;
-
-    // Ensure current session always exists in the sessions list
+  /**
+   * Ensure current session exists in sessions list.
+   * Called lazily — only when user actually sends a message.
+   */
+  function ensureSessionExists() {
     if (!state.sessions.find(s => s.id === state.sessionId)) {
       state.sessions.push({
         id: state.sessionId,
         title: "新對話",
         preview: "詢問任何問題...",
-        time: "剛剛",
         timestamp: Date.now()
       });
       saveSessions();
     }
+  }
 
-    let html = '<div class="page-chat-section-label">今日對話</div>';
-    state.sessions.slice().reverse().forEach((s) => {
+  function renderConversationList() {
+    const convList = document.getElementById("convList");
+    if (!convList) return;
+
+    // Sort sessions by timestamp descending (most recent first)
+    const sorted = state.sessions.slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+    let html = "";
+    let currentGroup = "";
+    sorted.forEach((s) => {
+      const group = getDateGroupLabel(s.timestamp);
+      if (group !== currentGroup) {
+        currentGroup = group;
+        html += '<div class="page-chat-section-label">' + escapeHtml(group) + '</div>';
+      }
       const isActive = s.id === state.sessionId ? "is-active" : "";
       const displayTime = getRelativeTimeString(s.timestamp);
       html += `
@@ -229,8 +267,9 @@
       '">' +
       formatText(text) +
       '</div>' +
-      '<div class="page-chat-msg-footer">' +
+      '<div class="page-chat-msg-meta">' +
       (role === "ai" ? escapeHtml(getCurrentModelLabel()) + " · " : "") +
+      escapeHtml(timeStr) +
       '<div class="page-chat-msg-actions">' +
       '<button class="page-chat-msg-action-btn" onclick="copyMsg(this)" title="Copy">' +
       '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
@@ -284,15 +323,8 @@
     state.tokenCount = 0;
     state.startAt = Date.now();
     state.meetingText = "";
-    
-    // Add to sessions list
-    state.sessions.push({
-      id: state.sessionId,
-      title: "新對話",
-      preview: "詢問任何問題...",
-      timestamp: Date.now()
-    });
-    saveSessions();
+    // Session will be added to sidebar lazily via ensureSessionExists()
+    // when user sends their first message — not on creation.
     renderConversationList();
     updateStats();
   }
@@ -422,11 +454,12 @@
             continue;
           }
 
-          // On first real content, remove typing indicator and reveal bubble
+          // On first real content, remove typing indicator and reveal message row
           if (!firstChunkReceived && (parsed.status === "streaming" || parsed.status === "success")) {
             firstChunkReceived = true;
             removeTyping();
-            bubbleEl.style.display = "";
+            const row = bubbleEl.closest(".page-chat-msg-row");
+            if (row) row.style.display = "";
           }
 
           if (parsed.status === "streaming") {
@@ -448,7 +481,8 @@
     // Safety: ensure typing indicator is removed even if no content chunks arrived
     if (!firstChunkReceived) {
       removeTyping();
-      bubbleEl.style.display = "";
+      const row = bubbleEl.closest(".page-chat-msg-row");
+      if (row) row.style.display = "";
     }
     bubbleEl.innerHTML = formatText(full);
     return full;
@@ -464,6 +498,9 @@
       chatInput.value = "";
       autoResize(chatInput);
     }
+
+    // Lazy session creation: only add to sidebar when user actually sends a message
+    ensureSessionExists();
 
     renderMessage("user", content);
     state.msgCount += 1;
@@ -506,7 +543,8 @@
 
       // Keep typing indicator visible until first streaming chunk arrives
       const bubble = renderMessage("ai", "");
-      bubble.style.display = "none";
+      const aiRow = bubble.closest(".page-chat-msg-row");
+      if (aiRow) aiRow.style.display = "none";
       const finalText = await streamChatResponse(res, bubble);
       state.msgCount += 1;
       updateStats(Math.ceil(finalText.length / 4));
