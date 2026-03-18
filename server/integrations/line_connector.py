@@ -373,21 +373,32 @@ def _acquire_session_lock(session_id: str):
         if local_lock:
             local_lock.release()
 
-def _send_loading_animation(line_api, chat_id: str):
-    """呼叫 LINE Loading Animation API (使用官方 SDK)"""
+def _send_loading_animation(line_api, chat_id: str, seconds: int = 20):
+    """呼叫 LINE Loading Animation API (使用官方 SDK)。可多次呼叫以延長動畫。"""
     from linebot.v3.messaging import ShowLoadingAnimationRequest
 
     try:
         # Note: LINE ShowLoadingAnimation only supports userId (Individual Chat).
         # It returns 400 Bad Request for groupId or roomId.
         if chat_id.startswith("U"):
-            req = ShowLoadingAnimationRequest(chatId=chat_id, loadingSeconds=20)
+            req = ShowLoadingAnimationRequest(chatId=chat_id, loadingSeconds=min(seconds, 60))
             line_api.show_loading_animation(req)
-            logger.info(f"[LINE] Loading animation started for chat={chat_id}")
+            logger.info(f"[LINE] Loading animation started for chat={chat_id} ({seconds}s)")
         else:
             logger.info(f"[LINE] Skipping loading animation for non-user chat={chat_id}")
     except Exception as e:
         logger.warning(f"[LINE] Exception starting loading animation: {e}")
+
+
+def _send_status_push(line_api, chat_id: str, text: str):
+    """推送中間狀態訊息給使用者（不佔用 reply_token）。"""
+    try:
+        from linebot.v3.messaging import TextMessage, PushMessageRequest
+        line_api.push_message(
+            PushMessageRequest(to=chat_id, messages=[TextMessage(text=text)])
+        )
+    except Exception as e:
+        logger.warning(f"[LINE] Status push failed: {e}")
 
 
 # ── Background Processing Function ────────────────────────────────────────────
@@ -460,7 +471,8 @@ def _process_line_message(
             return
 
         # 0.5 顯示 loading 動畫 (安撫使用者等待焦慮)，必須傳入 chat_id
-        _send_loading_animation(line_api, chat_id)
+        #     使用 60 秒以涵蓋檔案下載 + Tool Calling 耗時
+        _send_loading_animation(line_api, chat_id, 60)
 
         try:
             from linebot.v3.webhooks import TextMessageContent, ImageMessageContent, FileMessageContent
@@ -476,24 +488,32 @@ def _process_line_message(
             else:
                 # Phase 2: Inbound Multimedia Download and Processing
                 try:
-                    content_blob = line_api_blob.get_message_content(event_msg.id)
+                    import concurrent.futures
+                    # Timeout protection: file download must complete within 30 seconds
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        future = pool.submit(line_api_blob.get_message_content, event_msg.id)
+                        try:
+                            content_blob = future.result(timeout=30)
+                        except concurrent.futures.TimeoutError:
+                            raise TimeoutError(f"File download timed out after 30s (msg_id={event_msg.id})")
+
                     uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads")
                     os.makedirs(uploads_dir, exist_ok=True)
-                    
+
                     if isinstance(event_msg, ImageMessageContent):
                         attached_file_path = os.path.join(uploads_dir, f"{event_msg.id}.jpg")
                         with open(attached_file_path, "wb") as f:
                             f.write(content_blob)
-                            
+
                         attached_file_path = _preprocess_image(attached_file_path)
                         user_input = "[系統通知：使用者傳送了一張圖片。請務必直接回答這張圖片裡面有什麼內容與細節，不要拒絕。]"
-                        
+
                     elif isinstance(event_msg, FileMessageContent):
                         filename = getattr(event_msg, "file_name", f"{event_msg.id}.bin")
                         attached_file_path = os.path.join(uploads_dir, f"{event_msg.id}_{filename}")
                         with open(attached_file_path, "wb") as f:
                             f.write(content_blob)
-                            
+
                         if attached_file_path.lower().endswith(('.heic', '.heif', '.cr2', '.nef', '.arw')):
                             attached_file_path = _preprocess_image(attached_file_path)
                             user_input = f"[系統通知：使用者傳送了一張高畫質圖片 {filename}，已轉為 {os.path.basename(attached_file_path)} 供您檢視]"
@@ -507,10 +527,14 @@ def _process_line_message(
                                 f"2. **得到手冊後，下一輪絕對禁止再次呼叫該手冊。** 你必須立即切換並呼叫 `mcp-python-executor` 撰寫並執行分析程式碼。\n"
                                 f"3. 環境已預裝 pypdf, pdfplumber, pandas, python-docx。請直接基於手冊範例進行分析。]"
                             )
-                        
+
+                    # Re-trigger loading animation after download (timer may have expired)
+                    _send_loading_animation(line_api, chat_id, 60)
+
                 except Exception as e:
                     logger.error(f"[LINE BG] Download failed: {e}")
-                    user_input = "[系統通知：使用者傳送了檔案，但伺服器下載失敗]"
+                    _send_status_push(line_api, chat_id, f"⚠️ 檔案下載失敗，請重新傳送。\n({e})")
+                    return
                 
                 # 下載成功後補進快取，供後續引用
                 if attached_file_path:
@@ -564,7 +588,8 @@ def _process_line_message(
                 )
 
                 # 5. 消費同步 Generator，組裝完整回覆字串
-                final_reply = _collect_generator(result_gen)
+                #    傳入 line_api/chat_id 以便在 Tool Call 時刷新 loading 動畫
+                final_reply = _collect_generator(result_gen, line_api=line_api, chat_id=chat_id)
 
             # 6. 截斷至 LINE 字元上限
             if len(final_reply) > _LINE_MAX_CHARS:
@@ -598,9 +623,12 @@ def _parse_command_prefix(user_input: str) -> tuple[str, bool]:
     return user_input, True  # 預設啟用 Tool Calling
 
 
-def _collect_generator(result_gen) -> str:
+def _collect_generator(result_gen, line_api=None, chat_id: str = None) -> str:
     """
     消費 adapter.chat() 的同步 generator，組裝完整回覆文字。
+
+    當偵測到 Tool Call 中間狀態時，自動刷新 LINE loading 動畫，
+    確保使用者在多輪 Tool Calling 期間持續看到 "..." 動畫。
 
     Generator 的 chunk 格式：
     - {"status": "streaming", "content": "<partial text>"}
@@ -611,7 +639,12 @@ def _collect_generator(result_gen) -> str:
     for chunk in result_gen:
         status = chunk.get("status")
         if status == "streaming":
-            accumulated += chunk.get("content", "")
+            content = chunk.get("content", "")
+            accumulated += content
+            # Detect tool call marker from OpenAI adapter: "⚙️ 執行技能: ..."
+            # Re-trigger loading animation so user keeps seeing "..." during long tool calls
+            if line_api and chat_id and "⚙️" in content:
+                _send_loading_animation(line_api, chat_id, 60)
         elif status == "success":
             # success chunk 包含完整最終內容
             final = chunk.get("content", "")
