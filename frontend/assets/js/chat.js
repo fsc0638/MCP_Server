@@ -423,11 +423,12 @@
             continue;
           }
 
-          // On first real content, remove typing indicator and reveal bubble
+          // On first real content, remove typing indicator and reveal message row
           if (!firstChunkReceived && (parsed.status === "streaming" || parsed.status === "success")) {
             firstChunkReceived = true;
             removeTyping();
-            bubbleEl.style.display = "";
+            const row = bubbleEl.closest(".page-chat-msg-row");
+            if (row) row.style.display = "";
           }
 
           if (parsed.status === "streaming") {
@@ -449,7 +450,8 @@
     // Safety: ensure typing indicator is removed even if no content chunks arrived
     if (!firstChunkReceived) {
       removeTyping();
-      bubbleEl.style.display = "";
+      const row = bubbleEl.closest(".page-chat-msg-row");
+      if (row) row.style.display = "";
     }
     bubbleEl.innerHTML = formatText(full);
     return full;
@@ -507,7 +509,8 @@
 
       // Keep typing indicator visible until first streaming chunk arrives
       const bubble = renderMessage("ai", "");
-      bubble.style.display = "none";
+      const aiRow = bubble.closest(".page-chat-msg-row");
+      if (aiRow) aiRow.style.display = "none";
       const finalText = await streamChatResponse(res, bubble);
       state.msgCount += 1;
       updateStats(Math.ceil(finalText.length / 4));
