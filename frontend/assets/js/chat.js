@@ -101,7 +101,8 @@
     if (calendarDays === 0) return "今日對話";
     if (calendarDays === 1) return "昨天";
     if (calendarDays <= 7) return "前 7 天";
-    return "更早";
+    if (calendarDays <= 30) return "前 30 天";
+    return target.getFullYear() + "/" + (target.getMonth() + 1);
   }
 
   function updateStats(extraTokens) {
