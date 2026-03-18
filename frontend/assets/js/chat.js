@@ -110,8 +110,8 @@
     const convList = document.getElementById("convList");
     if (!convList) return;
 
-    if (state.sessions.length === 0) {
-      // Add current session as first item if list is empty
+    // Ensure current session always exists in the sessions list
+    if (!state.sessions.find(s => s.id === state.sessionId)) {
       state.sessions.push({
         id: state.sessionId,
         title: "新對話",
@@ -290,7 +290,6 @@
       id: state.sessionId,
       title: "新對話",
       preview: "詢問任何問題...",
-      time: "剛剛",
       timestamp: Date.now()
     });
     saveSessions();
@@ -401,6 +400,8 @@
     const decoder = new TextDecoder("utf-8");
     let buffer = "";
     let full = "";
+    let firstChunkReceived = false;
+
     while (true) {
       const read = await reader.read();
       if (read.done) break;
@@ -413,12 +414,21 @@
           if (!line.startsWith("data: ")) continue;
           const payload = line.slice(6).trim();
           if (payload === "[DONE]") continue;
+
           let parsed = null;
           try {
             parsed = JSON.parse(payload);
           } catch (_err) {
             continue;
           }
+
+          // On first real content, remove typing indicator and reveal bubble
+          if (!firstChunkReceived && (parsed.status === "streaming" || parsed.status === "success")) {
+            firstChunkReceived = true;
+            removeTyping();
+            bubbleEl.style.display = "";
+          }
+
           if (parsed.status === "streaming") {
             const delta = parsed.content || "";
             full += delta;
@@ -433,6 +443,12 @@
           }
         }
       }
+    }
+
+    // Safety: ensure typing indicator is removed even if no content chunks arrived
+    if (!firstChunkReceived) {
+      removeTyping();
+      bubbleEl.style.display = "";
     }
     bubbleEl.innerHTML = formatText(full);
     return full;
@@ -482,13 +498,15 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      removeTyping();
       if (!res.ok) {
+        removeTyping();
         const errText = await res.text();
         throw new Error("HTTP " + res.status + ": " + errText);
       }
 
+      // Keep typing indicator visible until first streaming chunk arrives
       const bubble = renderMessage("ai", "");
+      bubble.style.display = "none";
       const finalText = await streamChatResponse(res, bubble);
       state.msgCount += 1;
       updateStats(Math.ceil(finalText.length / 4));
