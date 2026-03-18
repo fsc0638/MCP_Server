@@ -330,7 +330,7 @@ class OpenAIAdapter:
 
         except Exception as e:
             logger.error(f"OpenAI chat error: {e}")
-            return {"status": "error", "message": str(e)}
+            yield {"status": "error", "message": str(e)}
 
 
     def simple_chat(self, session_history: list, temperature: float = 0.7, **kwargs) -> dict:

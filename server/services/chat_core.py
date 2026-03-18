@@ -104,33 +104,37 @@ async def process_chat_native(req: ChatRequest):
     async def event_generator() -> AsyncGenerator[dict, None]:
         session_mgr.append_message(session_id, "user", req.user_input)
         final_content = ""
-        
-        # Unify all chat paths to the robust adapter.chat which handles instructions, tools and vision
-        chunk_iter = adapter.chat(
-            messages=outbound_history,
-            user_query=user_content,
-            session_id=session_id,
-            attached_file=req.attached_file,
-            temperature=req.temperature or 0.7,
-            visual_docs=req.selected_docs or []
-        )
 
-        for chunk in chunk_iter:
-            status = chunk.get("status")
-            if status == "streaming":
-                text = chunk.get("content", "")
-                final_content += text
-                yield {"data": json.dumps({"status": "streaming", "content": text}, ensure_ascii=False)}
-            elif status == "success":
-                final = chunk.get("content", final_content)
-                if not final:
-                    final = final_content
-                session_mgr.append_message(session_id, "assistant", final)
-                yield {"data": json.dumps({"status": "success", "content": final}, ensure_ascii=False)}
-                break
-            else:
-                yield {"data": json.dumps(chunk, ensure_ascii=False)}
-                break
+        try:
+            # Unify all chat paths to the robust adapter.chat which handles instructions, tools and vision
+            chunk_iter = adapter.chat(
+                messages=outbound_history,
+                user_query=user_content,
+                session_id=session_id,
+                attached_file=req.attached_file,
+                temperature=req.temperature or 0.7,
+                visual_docs=req.selected_docs or []
+            )
+
+            for chunk in chunk_iter:
+                status = chunk.get("status")
+                if status == "streaming":
+                    text = chunk.get("content", "")
+                    final_content += text
+                    yield {"data": json.dumps({"status": "streaming", "content": text}, ensure_ascii=False)}
+                elif status == "success":
+                    final = chunk.get("content", final_content)
+                    if not final:
+                        final = final_content
+                    session_mgr.append_message(session_id, "assistant", final)
+                    yield {"data": json.dumps({"status": "success", "content": final}, ensure_ascii=False)}
+                    break
+                else:
+                    yield {"data": json.dumps(chunk, ensure_ascii=False)}
+                    break
+        except Exception as e:
+            logger.error(f"Chat stream error ({provider}): {e}")
+            yield {"data": json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)}
 
     return EventSourceResponse(event_generator())
 

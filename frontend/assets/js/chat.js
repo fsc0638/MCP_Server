@@ -229,8 +229,9 @@
       '">' +
       formatText(text) +
       '</div>' +
-      '<div class="page-chat-msg-footer">' +
+      '<div class="page-chat-msg-meta">' +
       (role === "ai" ? escapeHtml(getCurrentModelLabel()) + " · " : "") +
+      escapeHtml(timeStr) +
       '<div class="page-chat-msg-actions">' +
       '<button class="page-chat-msg-action-btn" onclick="copyMsg(this)" title="Copy">' +
       '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
