@@ -12,11 +12,18 @@
  */
 
 const ThemeSwitcher = (() => {
-  const STORAGE_KEY = 'kway_theme';
-  const DEFAULT_THEME = null; // null = 使用 :root 預設（K WAY Blue）
+  const STORAGE_KEY   = 'kway_theme';
+  const DEFAULT_THEME = 'ocean'; // 首次進入的預設主題
 
   /** 八套主題定義（由淺到深）*/
   const themes = [
+    {
+      id:    'ocean',
+      label: '晴湖青韻',
+      desc:  '淺灰藍底 × 青湖藍 × 琥珀橙',
+      dark:  false,
+      swatch: { bg: '#F2F4F7', primary: '#1a9aaa', secondary: '#f5a623' },
+    },
     {
       id:    'pearl',
       label: '珍珠晨光',
@@ -60,13 +67,6 @@ const ThemeSwitcher = (() => {
       swatch: { bg: '#0D0D1A', primary: '#6B4EFF', secondary: '#4ECDC4' },
     },
     {
-      id:    'ocean',
-      label: '晴湖青韻',
-      desc:  '淺灰藍底 × 青湖藍 × 琥珀橙',
-      dark:  false,
-      swatch: { bg: '#F2F4F7', primary: '#1a9aaa', secondary: '#f5a623' },
-    },
-    {
       id:    'slate',
       label: '石板青苔',
       desc:  '霧灰白底 × 鼠尾草綠 × 靛藍 × 深石板側欄',
@@ -75,29 +75,22 @@ const ThemeSwitcher = (() => {
     },
   ];
 
-  /** 套用主題到 <html> */
+  /** 套用主題到 <html>，所有主題一視同仁 */
   function set(themeId) {
-    const root = document.documentElement;
-    if (themeId) {
-      root.setAttribute('data-theme', themeId);
-      localStorage.setItem(STORAGE_KEY, themeId);
-    } else {
-      root.removeAttribute('data-theme');
-      localStorage.removeItem(STORAGE_KEY);
-    }
-    // 發出自訂事件，讓其他模組響應
+    document.documentElement.setAttribute('data-theme', themeId);
+    localStorage.setItem(STORAGE_KEY, themeId);
     window.dispatchEvent(new CustomEvent('kway:theme-change', { detail: { theme: themeId } }));
   }
 
-  /** 取得目前主題 id（null = 預設） */
+  /** 取得目前主題 id */
   function get() {
-    return document.documentElement.getAttribute('data-theme') || null;
+    return document.documentElement.getAttribute('data-theme');
   }
 
-  /** 初始化：從 localStorage 讀取並套用 */
+  /** 初始化：讀取 localStorage，首次進入套用預設主題 */
   function init() {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) set(saved);
+    set(saved ?? DEFAULT_THEME);
   }
 
   // 自動初始化

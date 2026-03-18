@@ -24,23 +24,9 @@
   if (profileEmail)  profileEmail.textContent  = userData.email || 'user@kway.com.tw';
 
   /* ── Theme Palette Picker ─────────────────────────────────── */
-  var THEME_KEY = 'kway_theme';
-
-  function _applyTheme(themeId) {
-    var root = document.documentElement;
-    if (themeId) {
-      root.setAttribute('data-theme', themeId);
-      localStorage.setItem(THEME_KEY, themeId);
-    } else {
-      root.removeAttribute('data-theme');
-      localStorage.removeItem(THEME_KEY);
-    }
-  }
-
   function _syncPaletteUI(activeId) {
     document.querySelectorAll('.theme-palette-card').forEach(function (card) {
-      var id = card.getAttribute('data-theme-id');
-      var isActive = (id === (activeId || ''));
+      var isActive = card.getAttribute('data-theme-id') === activeId;
       card.classList.toggle('is-active', isActive);
       card.setAttribute('aria-checked', isActive ? 'true' : 'false');
     });
@@ -48,18 +34,17 @@
 
   var grid = document.getElementById('themePaletteGrid');
   if (grid) {
-    // Init: reflect saved theme
-    var savedTheme = localStorage.getItem(THEME_KEY) || '';
-    _syncPaletteUI(savedTheme);
+    // Init: ThemeSwitcher.init() 已在此之前執行，直接讀取目前主題
+    _syncPaletteUI(ThemeSwitcher.get());
 
     // Click handler
     grid.addEventListener('click', function (e) {
       var card = e.target.closest('.theme-palette-card');
       if (!card) return;
       var themeId = card.getAttribute('data-theme-id');
-      _applyTheme(themeId);
+      ThemeSwitcher.set(themeId);
       _syncPaletteUI(themeId);
-      showToast('主題已套用：' + (card.querySelector('.theme-palette-name').textContent || 'K WAY 標準'), 'success');
+      showToast('主題已套用：' + card.querySelector('.theme-palette-name').textContent, 'success');
     });
 
     // Keyboard support (Enter / Space)

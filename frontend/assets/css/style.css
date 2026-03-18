@@ -10,43 +10,43 @@
 
 /* ── Design Tokens ──────────────────────────────────────────── */
 :root {
-  /* Brand Palette */
-  --kway-blue:        #18409b;
-  --kway-blue-dark:   #0f2d72;
-  --kway-blue-mid:    #2355b8;
-  --kway-blue-light:  #dce8ff;
-  --kway-blue-pale:   #eef3fc;
-  --kway-orange:      #f68300;
-  --kway-orange-dark: #d97000;
-  --kway-orange-light:#fff0d6;
+  /* Brand Palette — ocean（晴湖青韻）作為 :root 基底，對應 DEFAULT_THEME */
+  --kway-blue:        #1a9aaa;
+  --kway-blue-dark:   #12737f;
+  --kway-blue-mid:    #5ec4d0;
+  --kway-blue-light:  #b2e4ea;
+  --kway-blue-pale:   #e6f6f8;
+  --kway-orange:      #f5a623;
+  --kway-orange-dark: #d4891a;
+  --kway-orange-light:#fde8bb;
 
   /* Background */
-  --bg-base:          #f0f4fa;
+  --bg-base:          #f2f4f7;
   --bg-surface:       #ffffff;
   --bg-card:          #ffffff;
-  --bg-sidebar:       #f7f9fd;
-  --bg-hover:         #eef3fc;
-  --bg-active:        #dce8ff;
+  --bg-sidebar:       #f8f9fb;
+  --bg-hover:         #e6f6f8;
+  --bg-active:        #b2e4ea;
   --bg-input:         #ffffff;
 
   /* Border */
-  --border-subtle:    rgba(24, 64, 155, 0.10);
-  --border-medium:    rgba(24, 64, 155, 0.18);
-  --border-focus:     rgba(24, 64, 155, 0.55);
+  --border-subtle:    rgba(26,154,170,0.10);
+  --border-medium:    rgba(26,154,170,0.18);
+  --border-focus:     rgba(26,154,170,0.55);
 
   /* Text */
-  --text-primary:     #1a2346;
-  --text-secondary:   #4a5a8a;
-  --text-muted:       #8a9bc0;
+  --text-primary:     #0f172a;
+  --text-secondary:   #334155;
+  --text-muted:       #64748b;
   --text-inverse:     #ffffff;
 
   /* Shadow */
-  --shadow-sm:        0 1px 4px rgba(24,64,155,0.08);
-  --shadow-md:        0 4px 16px rgba(24,64,155,0.10);
-  --shadow-lg:        0 8px 32px rgba(24,64,155,0.13);
-  --shadow-xl:        0 16px 48px rgba(24,64,155,0.16);
-  --shadow-orange:    0 4px 18px rgba(246,131,0,0.30);
-  --shadow-blue:      0 4px 18px rgba(24,64,155,0.30);
+  --shadow-sm:        0 1px 4px  rgba(26,154,170,0.07);
+  --shadow-md:        0 4px 16px rgba(26,154,170,0.09);
+  --shadow-lg:        0 8px 32px rgba(26,154,170,0.12);
+  --shadow-xl:        0 16px 48px rgba(26,154,170,0.15);
+  --shadow-orange:    0 4px 18px rgba(245,166,35,0.30);
+  --shadow-blue:      0 4px 18px rgba(26,154,170,0.30);
 
   /* Radius */
   --radius-xs:   4px;
@@ -76,7 +76,7 @@ body {
 }
 
 /* Text selection */
-::selection { background: rgba(24, 64, 155, 0.2); }
+::selection { background: rgba(26,154,170,0.18); }
 
 /* ── Scrollbar ──────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
