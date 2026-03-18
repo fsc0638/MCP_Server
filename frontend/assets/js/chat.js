@@ -66,18 +66,42 @@
   }
 
   function getRelativeTimeString(timestamp) {
-    if (!timestamp) return "剛剛";
-    const now = Date.now();
-    const diff = now - timestamp;
+    if (!timestamp) return "";
+    const now = new Date();
+    const target = new Date(timestamp);
+    const diff = now - target;
     const minutes = Math.floor(diff / 60000);
-    const hours = Math.floor(diff / 3600000);
-    const days = Math.floor(diff / 86400000);
 
-    if (minutes < 1) return "剛剛";
-    if (minutes < 60) return minutes + " 分鐘前";
-    if (hours < 24) return hours + " 小時前";
-    if (days === 1) return "昨天";
-    return days + " 天前";
+    // Use calendar-day difference (midnight-based) for accurate day labels
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const targetStart = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+    const calendarDays = Math.round((todayStart - targetStart) / 86400000);
+
+    if (calendarDays === 0) {
+      // Today: show relative time
+      if (minutes < 1) return "剛剛";
+      if (minutes < 60) return minutes + " 分鐘前";
+      return Math.floor(diff / 3600000) + " 小時前";
+    }
+    if (calendarDays === 1) return "昨天";
+    if (calendarDays <= 7) return calendarDays + " 天前";
+    // Older than a week: show date
+    return (target.getMonth() + 1) + "/" + target.getDate();
+  }
+
+  // Determine which date-group label a timestamp belongs to
+  function getDateGroupLabel(timestamp) {
+    if (!timestamp) return "更早";
+    const now = new Date();
+    const target = new Date(timestamp);
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const targetStart = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+    const calendarDays = Math.round((todayStart - targetStart) / 86400000);
+
+    if (calendarDays === 0) return "今日對話";
+    if (calendarDays === 1) return "昨天";
+    if (calendarDays <= 7) return "前 7 天";
+    return "更早";
   }
 
   function updateStats(extraTokens) {
@@ -122,8 +146,17 @@
       saveSessions();
     }
 
-    let html = '<div class="page-chat-section-label">今日對話</div>';
-    state.sessions.slice().reverse().forEach((s) => {
+    // Sort sessions by timestamp descending (most recent first)
+    const sorted = state.sessions.slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+    let html = "";
+    let currentGroup = "";
+    sorted.forEach((s) => {
+      const group = getDateGroupLabel(s.timestamp);
+      if (group !== currentGroup) {
+        currentGroup = group;
+        html += '<div class="page-chat-section-label">' + escapeHtml(group) + '</div>';
+      }
       const isActive = s.id === state.sessionId ? "is-active" : "";
       const displayTime = getRelativeTimeString(s.timestamp);
       html += `
