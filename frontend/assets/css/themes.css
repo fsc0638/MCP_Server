@@ -1,21 +1,132 @@
 /* ============================================================
    MCP Agent Console — UIUXPRO Theme Collection
-   六色主題系統：由淺到深
+   八色主題系統：由淺到深
    靈感來源：Crowz / Chaart Dashboard Design Language
    用法：在 <html> 加上 data-theme="<id>" 即可切換
 
-   主題清單（由淺到深）：
-     01. pearl     珍珠晨光  bg:#FAF8F5  主:珊瑚橙  副:薄荷青
-     02. sand      暖沙午後  bg:#F5EDE0  主:赤陶橘  副:鼠尾草綠
-     03. mint      薄荷清風  bg:#EEF7F6  主:翡翠青  副:暖橙紅
-     04. lavender  薰衣草霧  bg:#F0EDF8  主:紫羅蘭  副:活力橙
-     05. twilight  暮色靛藍  bg:#1E1B3A  主:電光紫  副:珊瑚橙 ★dark
-     06. midnight  子夜深邃  bg:#0D0D1A  主:深空紫  副:電光青 ★dark
+   主題清單：
+     00. kway      K WAY 標準  bg:#F0F4FA  主:凱衛藍  副:凱衛橘
+     01. ocean     晴湖青韻  bg:#F2F4F7  主:青湖藍  副:琥珀橙 ★首次進入預設
+     02. pearl     珍珠晨光  bg:#FAF8F5  主:珊瑚橙  副:薄荷青
+     03. sand      暖沙午後  bg:#F5EDE0  主:赤陶橘  副:鼠尾草綠
+     04. mint      薄荷清風  bg:#EEF7F6  主:翡翠青  副:暖橙紅
+     05. lavender  薰衣草霧  bg:#F0EDF8  主:紫羅蘭  副:活力橙
+     06. twilight  暮色靛藍  bg:#1E1B3A  主:電光紫  副:珊瑚橙 ★dark
+     07. midnight  子夜深邃  bg:#0D0D1A  主:深空紫  副:電光青 ★dark
+     08. slate     石板青苔  bg:#F0F1F3  主:鼠尾草綠 副:靛藍
    ============================================================ */
 
 
 /* ──────────────────────────────────────────────────────────
-   THEME 01 — 珍珠晨光 Pearl Morning（最淺）
+   THEME 00 — K WAY 標準 Corporate Blue
+   凱衛資訊企業識別  bg:#F0F4FA  主:凱衛藍  副:凱衛橘
+   ────────────────────────────────────────────────────────── */
+[data-theme="kway"] {
+  /* ── Brand ── */
+  --kway-blue:        #18409b;
+  --kway-blue-dark:   #0f2d72;
+  --kway-blue-mid:    #2355b8;
+  --kway-blue-light:  #dce8ff;
+  --kway-blue-pale:   #eef3fc;
+  --kway-orange:      #f68300;
+  --kway-orange-dark: #d97000;
+  --kway-orange-light:#fff0d6;
+
+  /* ── Background ── */
+  --bg-base:          #f0f4fa;
+  --bg-surface:       #ffffff;
+  --bg-card:          #ffffff;
+  --bg-sidebar:       #f7f9fd;
+  --bg-hover:         #eef3fc;
+  --bg-active:        #dce8ff;
+  --bg-input:         #ffffff;
+
+  /* ── Border ── */
+  --border-subtle:    rgba(24,64,155,0.10);
+  --border-medium:    rgba(24,64,155,0.18);
+  --border-focus:     rgba(24,64,155,0.55);
+
+  /* ── Text ── */
+  --text-primary:     #1a2346;
+  --text-secondary:   #4a5a8a;
+  --text-muted:       #8a9bc0;
+  --text-inverse:     #ffffff;
+
+  /* ── Shadow ── */
+  --shadow-sm:        0 1px 4px  rgba(24,64,155,0.08);
+  --shadow-md:        0 4px 16px rgba(24,64,155,0.10);
+  --shadow-lg:        0 8px 32px rgba(24,64,155,0.13);
+  --shadow-xl:        0 16px 48px rgba(24,64,155,0.16);
+  --shadow-orange:    0 4px 18px rgba(246,131,0,0.30);
+  --shadow-blue:      0 4px 18px rgba(24,64,155,0.30);
+
+  /* ── Scrollbar ── */
+  --scrollbar-thumb:  #dce8ff;
+  --scrollbar-hover:  #18409b;
+  --selection-bg:     rgba(24,64,155,0.20);
+}
+
+[data-theme="kway"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
+[data-theme="kway"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
+[data-theme="kway"] ::selection                       { background: var(--selection-bg); }
+
+
+/* ──────────────────────────────────────────────────────────
+   THEME 01 — 晴湖青韻 Ocean Teal（首次進入預設）
+   靈感：Agent K設計  bg:#F2F4F7  主:青湖藍  副:琥珀橙
+   ────────────────────────────────────────────────────────── */
+[data-theme="ocean"] {
+  /* ── Brand ── */
+  --kway-blue:        #1a9aaa;
+  --kway-blue-dark:   #12737f;
+  --kway-blue-mid:    #5ec4d0;
+  --kway-blue-light:  #b2e4ea;
+  --kway-blue-pale:   #e6f6f8;
+  --kway-orange:      #f5a623;
+  --kway-orange-dark: #d4891a;
+  --kway-orange-light:#fde8bb;
+
+  /* ── Background ── */
+  --bg-base:          #f2f4f7;
+  --bg-surface:       #ffffff;
+  --bg-card:          #ffffff;
+  --bg-sidebar:       #f8f9fb;
+  --bg-hover:         #e6f6f8;
+  --bg-active:        #b2e4ea;
+  --bg-input:         #ffffff;
+
+  /* ── Border ── */
+  --border-subtle:    rgba(26,154,170,0.10);
+  --border-medium:    rgba(26,154,170,0.18);
+  --border-focus:     rgba(26,154,170,0.55);
+
+  /* ── Text ── */
+  --text-primary:     #0f172a;
+  --text-secondary:   #334155;
+  --text-muted:       #64748b;
+  --text-inverse:     #ffffff;
+
+  /* ── Shadow ── */
+  --shadow-sm:        0 1px 4px  rgba(26,154,170,0.07);
+  --shadow-md:        0 4px 16px rgba(26,154,170,0.09);
+  --shadow-lg:        0 8px 32px rgba(26,154,170,0.12);
+  --shadow-xl:        0 16px 48px rgba(26,154,170,0.15);
+  --shadow-orange:    0 4px 18px rgba(245,166,35,0.30);
+  --shadow-blue:      0 4px 18px rgba(26,154,170,0.30);
+
+  /* ── Scrollbar ── */
+  --scrollbar-thumb:  #b2e4ea;
+  --scrollbar-hover:  #1a9aaa;
+  --selection-bg:     rgba(26,154,170,0.18);
+}
+
+[data-theme="ocean"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
+[data-theme="ocean"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
+[data-theme="ocean"] ::selection                       { background: var(--selection-bg); }
+
+
+/* ──────────────────────────────────────────────────────────
+   THEME 02 — 珍珠晨光 Pearl Morning（最淺）
    Crowz 暖奶白底 × 珊瑚橙 × 薄荷青
    ────────────────────────────────────────────────────────── */
 [data-theme="pearl"] {
@@ -344,58 +455,6 @@
 [data-theme="midnight"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
 [data-theme="midnight"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
 [data-theme="midnight"] ::selection                       { background: var(--selection-bg); }
-/* ──────────────────────────────────────────────────────────
-   THEME 07 — 晴湖青韻 Ocean Teal（淺）
-   靈感：Agent K設計  bg:#F2F4F7  主:青湖藍  副:琥珀橙
-   ────────────────────────────────────────────────────────── */
-[data-theme="ocean"] {
-  /* ── Brand ── */
-  --kway-blue:        #1a9aaa;
-  --kway-blue-dark:   #12737f;
-  --kway-blue-mid:    #5ec4d0;
-  --kway-blue-light:  #b2e4ea;
-  --kway-blue-pale:   #e6f6f8;
-  --kway-orange:      #f5a623;
-  --kway-orange-dark: #d4891a;
-  --kway-orange-light:#fde8bb;
-
-  /* ── Background ── */
-  --bg-base:          #f2f4f7;
-  --bg-surface:       #ffffff;
-  --bg-card:          #ffffff;
-  --bg-sidebar:       #f8f9fb;
-  --bg-hover:         #e6f6f8;
-  --bg-active:        #b2e4ea;
-  --bg-input:         #ffffff;
-
-  /* ── Border ── */
-  --border-subtle:    rgba(26,154,170,0.10);
-  --border-medium:    rgba(26,154,170,0.18);
-  --border-focus:     rgba(26,154,170,0.55);
-
-  /* ── Text ── */
-  --text-primary:     #0f172a;
-  --text-secondary:   #334155;
-  --text-muted:       #64748b;
-  --text-inverse:     #ffffff;
-
-  /* ── Shadow ── */
-  --shadow-sm:        0 1px 4px  rgba(26,154,170,0.07);
-  --shadow-md:        0 4px 16px rgba(26,154,170,0.09);
-  --shadow-lg:        0 8px 32px rgba(26,154,170,0.12);
-  --shadow-xl:        0 16px 48px rgba(26,154,170,0.15);
-  --shadow-orange:    0 4px 18px rgba(245,166,35,0.30);
-  --shadow-blue:      0 4px 18px rgba(26,154,170,0.30);
-
-  /* ── Scrollbar ── */
-  --scrollbar-thumb:  #b2e4ea;
-  --scrollbar-hover:  #1a9aaa;
-  --selection-bg:     rgba(26,154,170,0.18);
-}
-
-[data-theme="ocean"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
-[data-theme="ocean"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
-[data-theme="ocean"] ::selection                       { background: var(--selection-bg); }
 
 
 /* ──────────────────────────────────────────────────────────
