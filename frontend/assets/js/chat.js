@@ -131,21 +131,25 @@
     localStorage.setItem("kway_sessions", JSON.stringify(state.sessions));
   }
 
-  function renderConversationList() {
-    const convList = document.getElementById("convList");
-    if (!convList) return;
-
-    // Ensure current session always exists in the sessions list
+  /**
+   * Ensure current session exists in sessions list.
+   * Called lazily — only when user actually sends a message.
+   */
+  function ensureSessionExists() {
     if (!state.sessions.find(s => s.id === state.sessionId)) {
       state.sessions.push({
         id: state.sessionId,
         title: "新對話",
         preview: "詢問任何問題...",
-        time: "剛剛",
         timestamp: Date.now()
       });
       saveSessions();
     }
+  }
+
+  function renderConversationList() {
+    const convList = document.getElementById("convList");
+    if (!convList) return;
 
     // Sort sessions by timestamp descending (most recent first)
     const sorted = state.sessions.slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
@@ -319,15 +323,8 @@
     state.tokenCount = 0;
     state.startAt = Date.now();
     state.meetingText = "";
-    
-    // Add to sessions list
-    state.sessions.push({
-      id: state.sessionId,
-      title: "新對話",
-      preview: "詢問任何問題...",
-      timestamp: Date.now()
-    });
-    saveSessions();
+    // Session will be added to sidebar lazily via ensureSessionExists()
+    // when user sends their first message — not on creation.
     renderConversationList();
     updateStats();
   }
@@ -501,6 +498,9 @@
       chatInput.value = "";
       autoResize(chatInput);
     }
+
+    // Lazy session creation: only add to sidebar when user actually sends a message
+    ensureSessionExists();
 
     renderMessage("user", content);
     state.msgCount += 1;
