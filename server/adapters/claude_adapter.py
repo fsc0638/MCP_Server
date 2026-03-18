@@ -1,4 +1,4 @@
-﻿"""
+"""
 Claude Adapter (Phase 4)
 Handles communication with Anthropic Claude models using tool use.
 """
@@ -81,7 +81,7 @@ class ClaudeAdapter:
 
         import mimetypes
         import base64
-        
+
         mime_type, _ = mimetypes.guess_type(attached_file)
         if not mime_type or not mime_type.startswith("image/"):
             return None
@@ -106,7 +106,7 @@ class ClaudeAdapter:
         """
         Send a message to Claude with tool use support.
         D-10: Supports multi-turn tool calls (up to MAX_ITERATIONS).
-        D-12: Unified interface ??accepts messages list + user_query.
+        D-12: Unified interface - accepts messages list + user_query.
         """
         if not self.is_available:
             return {"status": "error", "message": "Claude adapter is not available"}
@@ -124,7 +124,7 @@ class ClaudeAdapter:
                 if msg.get("role") == "user":
                     user_query = self._extract_text(msg["content"])
                     break
-        
+
         # Ensure user_query is a string for tool selection
         user_query = self._extract_text(user_query) if user_query else ""
 
@@ -143,26 +143,27 @@ class ClaudeAdapter:
         # Fallback if not provided
         if not agent_system:
             agent_system = kwargs.get("system_prompt") or (
-                "You are a high-performance Autonomous AI Agent. 隢誑蝜?銝剜????n"
-                "隢???????蝑?銝血?澆???獢摰嫘????賢?蝢押?
+                "You are a high-performance Autonomous AI Agent. \u8acb\u4f7f\u7528\u7e41\u9ad4\u4e2d\u6587\u56de\u8986\u3002\n"
+                "\u8acb\u5118\u91cf\u7c21\u6f54\u4e14\u7d50\u69cb\u6e05\u6670\u5730\u56de\u7b54\uff0c\u4e26\u512a\u5148\u4f7f\u7528\u5df2\u8f09\u5165\u7684\u6280\u80fd\u3002"
             )
 
         # Multimodal Vision (NotebookLM Style)
+        attached_file = kwargs.get("attached_file")
         visual_docs = kwargs.get("visual_docs", [])
         visual_docs_display_names = kwargs.get("visual_docs_display_names", {})
         import os as _os
         all_visual_parts = []
-        
+
         # 1. Attached file (Legacy)
         img_part = self._handle_attached_file(attached_file)
         if img_part:
             all_visual_parts.append(img_part)
-            
+
         # 2. Selected Docs (New: visual_docs)
         for doc_path in visual_docs:
             display_name = visual_docs_display_names.get(doc_path, _os.path.basename(doc_path))
             # Prepend text label, then image part
-            all_visual_parts.append({"type": "text", "text": f"[???迂: {display_name}]"})
+            all_visual_parts.append({"type": "text", "text": f"[\u53c3\u8003\u6587\u4ef6: {display_name}]"})
             res = self._handle_attached_file(doc_path)
             if res:
                 all_visual_parts.append(res)
@@ -177,7 +178,7 @@ class ClaudeAdapter:
                         claude_messages.append({"role": "assistant", "content": m["content"]})
                     elif role == "user":
                         claude_messages.append({"role": "user", "content": m["content"]})
-                
+
                 # Update the LAST user message with augmented query (RAG)
                 for i in range(len(claude_messages)-1, -1, -1):
                     if claude_messages[i]["role"] == "user":
@@ -205,7 +206,7 @@ class ClaudeAdapter:
                 if all_visual_parts:
                     user_content.extend(all_visual_parts)
                 claude_messages = [{"role": "user", "content": user_content}]
-            
+
             tool_calls_made = 0
             MAX_ITERATIONS = 10
 
@@ -222,7 +223,7 @@ class ClaudeAdapter:
                 tool_calls_dict = {}
                 full_content = ""
                 stop_reason = None
-                
+
                 for event in response:
                     if event.type == "content_block_start":
                         if event.content_block.type == "tool_use":
@@ -250,27 +251,27 @@ class ClaudeAdapter:
                     content_to_append = []
                     if full_content:
                         content_to_append.append({"type": "text", "text": full_content})
-                        
+
                     for idx, tc in tool_calls_dict.items():
                         fn_name = tc["name"]
                         fn_args_str = tc["input"]
-                        
+
                         import json
                         try:
                             fn_args = json.loads(fn_args_str) if fn_args_str else {}
                         except json.JSONDecodeError:
                             logger.error(f"Failed to parse Claude tool arguments: {fn_args_str}")
                             fn_args = {}
-                            
+
                         content_to_append.append({
                             "type": "tool_use",
                             "id": tc["id"],
                             "name": fn_name,
                             "input": fn_args
                         })
-                        
+
                         logger.info(f"Claude tool call: {fn_name}({fn_args})")
-                        yield {"status": "streaming", "content": f"\n\n?? ?瑁???? `{fn_name}`\n"}
+                        yield {"status": "streaming", "content": f"\n\n\u2699\ufe0f \u57f7\u884c\u6280\u80fd: `{fn_name}`\n"}
                         result = self.uma.execute_tool_call(fn_name, fn_args)
 
                         if result.get("status") == "requires_approval":
@@ -281,7 +282,7 @@ class ClaudeAdapter:
                                 "pending_args": fn_args
                             }
                             return
-                            
+
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": tc["id"],
@@ -303,7 +304,7 @@ class ClaudeAdapter:
             # Safety: exceeded max iterations
             yield {
                 "status": "success",
-                "content": full_content + f"\n\n(撌脤??憭批極?瑕?急活??{MAX_ITERATIONS} 頛迎?撘瑕蝯?)",
+                "content": full_content + f"\n\n(\u5df2\u9054\u6700\u5927\u5de5\u5177\u547c\u53eb\u6b21\u6578 {MAX_ITERATIONS} \u8f2a\uff0c\u5f37\u5236\u7d50\u675f)",
                 "tool_calls_made": tool_calls_made
             }
             return
@@ -314,7 +315,7 @@ class ClaudeAdapter:
 
     def simple_chat(self, session_history: list, **kwargs) -> dict:
         """
-        Pure LLM conversation ??NO tools, NO skill schema injection.
+        Pure LLM conversation - NO tools, NO skill schema injection.
         Strictly isolated from skill execution.
 
         Args:
@@ -341,10 +342,10 @@ class ClaudeAdapter:
             response = self.client.messages.create(
                 model=self.model,
                 max_tokens=4096,
-                system=system_content or "雿?蝯? AI ?拍?嚗?隞亦?擃葉??閬?,
+                system=system_content or "\u4f60\u662f\u4e00\u500b AI \u52a9\u7406\uff0c\u8acb\u7c21\u6f54\u5730\u56de\u7b54\u554f\u984c\u3002",
                 messages=messages,
                 stream=True
-                # NOTE: No tools= passed ??strictly isolated
+                # NOTE: No tools= passed - strictly isolated
             )
             full_content = ""
             for event in response:
@@ -356,5 +357,3 @@ class ClaudeAdapter:
         except Exception as e:
             logger.error(f"Claude simple_chat error: {e}")
             yield {"status": "error", "message": str(e)}
-
-

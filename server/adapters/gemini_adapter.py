@@ -1,4 +1,4 @@
-﻿"""
+"""
 Gemini Adapter (Phase 4)
 Handles communication with Google Gemini models using function calling.
 """
@@ -70,10 +70,10 @@ class GeminiAdapter:
             role = m.get("role")
             if role == "system":
                 continue
-            
+
             gemini_role = "model" if role == "assistant" else "user"
             parts = self._to_gemini_parts(m.get("content", ""))
-            
+
             # Ensure parts is never empty
             if not parts:
                 parts = ["(no text content)"]
@@ -132,12 +132,12 @@ class GeminiAdapter:
                 return []
 
         parts = [cached_file]
-        
+
         # Proactively inject prompt if it's an image
         lower_path = attached_file.lower()
         if lower_path.endswith(('.png', '.jpg', '.jpeg', '.webp')):
-            parts.append("隢?蝝啗?撖?餈啣??蒂閰喟?膩?批捆嚗敺???摰孵??蒂?澆???Skills ?脰?????)
-            
+            parts.append("請詳細描述這張圖片的內容，包括場景、文字、人物等所有可見元素。如果與已載入的 Skills 相關，請一併說明。")
+
         return parts
 
     def get_tools(self, user_query: Optional[str] = None, max_tools: int = 10) -> List[Dict[str, Any]]:
@@ -154,7 +154,7 @@ class GeminiAdapter:
         """
         Send a chat request with function calling support.
         D-09: Supports multi-turn tool calls (up to MAX_ITERATIONS).
-        D-12: Unified interface ??accepts messages list + user_query.
+        D-12: Unified interface - accepts messages list + user_query.
         ARCHITECTURE: Uses router.py's pre-built RAG context and system prompt.
                       Does NOT do its own RAG retrieval.
         """
@@ -181,35 +181,36 @@ class GeminiAdapter:
         if not user_query:
             return {"status": "error", "message": "No user query provided"}
 
-        # Extract system instruction — priority:
-        # 1. system message from history (chat_core guarantees messages[0] is system with dynamic prompt)
-        # 2. explicit system_prompt kwarg (for direct callers)
-        # 3. built-in default (last resort)
-        system_instruction_text = ""
-        if messages:
-            for msg in messages:
-                if msg.get("role") == "system":
-                    system_instruction_text = self._extract_text(msg.get("content", ""))
-                    break
+        # Extract system instruction - priority:
+        # 1. system_prompt passed by router.py (contains full skill list from build_system_prompt)
+        # 2. system message from history (fallback)
+        # 3. built-in default
+        system_instruction_text = kwargs.get("system_prompt", None)
         if not system_instruction_text:
-            system_instruction_text = kwargs.get("system_prompt") or (
-                "You are a high-performance AI Assistant. "
-                "請使用繁體中文回覆。"
+            system_instruction_text = (
+                "You are a high-performance AI Assistant. 請使用繁體中文回覆。\n"
+                "回覆時請盡量簡潔、結構清晰，並優先使用系統已載入的技能。\n"
+                "如果使用者的問題涉及已載入的知識庫或文件，請優先引用相關內容作為回覆依據。"
             )
+            if messages:
+                for msg in messages:
+                    if msg.get("role") == "system":
+                        system_instruction_text = msg["content"]
+                        break
 
         visual_parts = []
         visual_docs = kwargs.get("visual_docs", [])
         visual_docs_display_names = kwargs.get("visual_docs_display_names", {})
         import os as _os
-        
+
         # Process attached_file (Legacy/Upload)
         if attached_file:
             visual_parts.extend(self._handle_attached_file(attached_file, session_id))
-            
+
         # Process visual_docs (New: NotebookLM Style selected docs)
         for doc_path in visual_docs:
             display_name = visual_docs_display_names.get(doc_path, _os.path.basename(doc_path))
-            visual_parts.append(f"[???迂: {display_name}]")
+            visual_parts.append(f"[參考文件: {display_name}]")
             visual_parts.extend(self._handle_attached_file(doc_path, session_id))
 
         # Use user_query as-is since RAG context is already embedded by router.py
@@ -236,11 +237,11 @@ class GeminiAdapter:
 
             gemini_tools = genai.protos.Tool(function_declarations=function_declarations) if function_declarations else None
 
-            # System instruction diagnostics
-            logger.debug(f"[GEMINI] system_instruction length={len(system_instruction_text)}")
-            logger.debug(f"[GEMINI] system_instruction preview: {system_instruction_text[:200]}")
-            logger.debug(f"[GEMINI] visual_parts count={len(visual_parts)}, user_query[:80]={user_query[:80]}")
-
+            # === DEBUG: Print system_instruction summary ===
+            logger.warning(f"[GEMINI DEBUG] system_instruction length={len(system_instruction_text)}")
+            logger.warning(f"[GEMINI DEBUG] system_instruction preview: {system_instruction_text[:300]}")
+            logger.warning(f"[GEMINI DEBUG] visual_parts count={len(visual_parts)}, user_query[:80]={user_query[:80]}")
+            # === END DEBUG ===
 
             model = genai.GenerativeModel(
                 model_name=self.model_name,
@@ -255,9 +256,9 @@ class GeminiAdapter:
             if messages and len(messages) > 1:
                 non_system_msgs = [m for m in messages if m.get("role") != "system"]
                 gemini_history = self._build_gemini_history(non_system_msgs[:-1])
-            
+
             chat = model.start_chat(history=gemini_history)
-            
+
             upload_parts = self._handle_attached_file(attached_file, session_id)
             message_parts = upload_parts + [augmented_query] if upload_parts else augmented_query
 
@@ -271,13 +272,13 @@ class GeminiAdapter:
             for _ in range(MAX_ITERATIONS):
                 has_function_call = False
                 pending_calls = []
-                
+
                 try:
                     # 1. Consume current stream exhaustively
                     for chunk in response:
                         if not chunk.candidates:
                             continue
-                        
+
                         cand = chunk.candidates[0]
                         if cand.content and cand.content.parts:
                             for part in cand.content.parts:
@@ -285,7 +286,7 @@ class GeminiAdapter:
                                 if hasattr(part, "text") and part.text:
                                     full_content += part.text
                                     yield {"status": "streaming", "content": part.text}
-                                
+
                                 # Handle function calls
                                 fn_call = getattr(part, "function_call", None)
                                 if fn_call:
@@ -293,9 +294,9 @@ class GeminiAdapter:
                                     fn_name = fn_call.name if hasattr(fn_call, "name") else fn_call.get("name")
                                     fn_args = dict(fn_call.args) if hasattr(fn_call, "args") else dict(fn_call.get("args", {}))
                                     pending_calls.append((fn_name, fn_args))
-                                    
+
                                     logger.info(f"Gemini detected tool: {fn_name}")
-                                    yield {"status": "streaming", "content": f"\n\n?? ?瑁???? `{fn_name}`\n"}
+                                    yield {"status": "streaming", "content": f"\n\n\u2699\ufe0f \u57f7\u884c\u6280\u80fd: `{fn_name}`\n"}
 
                     # 2. If no function calls, we are done
                     if not has_function_call:
@@ -341,13 +342,14 @@ class GeminiAdapter:
                     import traceback
                     logger.error(f"Gemini stream error: {stream_err}\n{traceback.format_exc()}")
                     if "SAFETY" in str(stream_err):
-                        yield {"status": "error", "message": "?批捆閫貊 Gemini 摰?蕪璈??}
+                        yield {"status": "error", "message": "\u5167\u5bb9\u89f8\u767c Gemini \u5b89\u5168\u904e\u6ffe\u6a5f\u5236\u3002"}
                         return
-                    raise stream_err
+                    yield {"status": "error", "message": f"Gemini Error: {str(stream_err)}"}
+                    return
 
             yield {
                 "status": "success",
-                "content": full_content + f"\n\n(撌脤??憭批極?瑕?急活??{MAX_ITERATIONS} 頛迎?撘瑕蝯?)",
+                "content": full_content + f"\n\n(\u5df2\u9054\u6700\u5927\u5de5\u5177\u547c\u53eb\u6b21\u6578 {MAX_ITERATIONS} \u8f2a\uff0c\u5f37\u5236\u7d50\u675f)",
                 "tool_calls_made": tool_calls_made
             }
             return
@@ -360,7 +362,7 @@ class GeminiAdapter:
 
     def simple_chat(self, session_history: list, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7) -> dict:
         """
-        Pure LLM conversation ??NO tools, NO skill schema injection.
+        Pure LLM conversation - NO tools, NO skill schema injection.
         Strictly isolated from skill execution.
 
         Args:
@@ -392,18 +394,18 @@ class GeminiAdapter:
             model = genai.GenerativeModel(
                 model_name=self.model_name,
                 generation_config={"temperature": temperature}
-                # NOTE: No tools= passed ??strictly isolated
+                # NOTE: No tools= passed - strictly isolated
             )
             chat = model.start_chat(history=gemini_history[:-1] if len(gemini_history) > 1 else [])
-            
+
             # Dynamic RAG Context Retrieval
             from server.core.retriever import retriever
             retrieved_context = retriever.search_context(last_user_msg) if last_user_msg else ""
-            
+
             if retrieved_context:
                 augmented_msg = f"""[System Instruction]
-隢?敹???寞?靘???????????????交?撘鞈??嚗??湔?萄?璅內?箄??澆?嚗?憒?"[?辣?迂#chunk_0:?挾]"??
-?亙?????質圾蝑?憿?隢祕??銝??
+\u8acb\u6839\u64da\u4ee5\u4e0b\u53c3\u8003\u6587\u4ef6\u56de\u7b54\u4f7f\u7528\u8005\u7684\u554f\u984c\u3002\u5982\u6709\u5f15\u7528\uff0c\u8acb\u5728\u56de\u8986\u4e2d\u6a19\u8a3b\u4f86\u6e90\uff0c\u4f8b\u5982\uff1a"[\u4f86\u6e90\u6587\u4ef6#chunk_0:\u6458\u8981]"\u3002
+\u82e5\u53c3\u8003\u6587\u4ef6\u8207\u554f\u984c\u7121\u95dc\uff0c\u8acb\u76f4\u63a5\u4f9d\u64da\u4f60\u7684\u77e5\u8b58\u56de\u8986\u3002
 
 [Reference Documents]
 {retrieved_context}
@@ -419,7 +421,7 @@ class GeminiAdapter:
                 response = chat.send_message(message_parts, stream=True)
             else:
                 response = chat.send_message(augmented_msg, stream=True)
-                
+
             full_content = ""
             for chunk in response:
                 if chunk.text:
@@ -430,5 +432,3 @@ class GeminiAdapter:
         except Exception as e:
             logger.error(f"Gemini simple_chat error: {e}")
             yield {"status": "error", "message": str(e)}
-
-
