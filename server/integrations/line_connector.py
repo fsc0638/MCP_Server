@@ -624,13 +624,28 @@ def _process_line_message(
                             user_input = f"[系統通知：使用者傳送了一張高畫質圖片 {filename}，已轉為 {os.path.basename(attached_file_path)} 供您檢視]"
                         else:
                             abs_path = os.path.abspath(attached_file_path)
-                            # Phase 2: Knowledge Base Document Instruction
+                            lower_name = filename.lower()
+
+                            # All document types: LLM reads content via python-executor then analyzes semantically
+                            # Supported: .docx, .txt, .md, .pdf, .xlsx, .xls, .csv, .json, .log, .py, .js, .xml
+                            if lower_name.endswith(('.docx',)):
+                                lib_hint = "python-docx"
+                            elif lower_name.endswith(('.pdf',)):
+                                lib_hint = "pdfplumber"
+                            elif lower_name.endswith(('.xlsx', '.xls')):
+                                lib_hint = "openpyxl 或 pandas"
+                            elif lower_name.endswith(('.csv',)):
+                                lib_hint = "pandas (pd.read_csv)"
+                            else:
+                                lib_hint = "open() with utf-8 encoding"
+
                             user_input = (
                                 f"[系統通知：使用者上傳了文件 {filename}。檔案絕對路徑：{abs_path}。\n\n"
-                                f"重大提示：\n"
-                                f"1. 先呼叫對應的指令手冊（manual）『獲取』處理程式碼範例。\n"
-                                f"2. **得到手冊後，下一輪絕對禁止再次呼叫該手冊。** 你必須立即切換並呼叫 `mcp-python-executor` 撰寫並執行分析程式碼。\n"
-                                f"3. 環境已預裝 pypdf, pdfplumber, pandas, python-docx。請直接基於手冊範例進行分析。]"
+                                f"【強制執行】你必須立即使用 Tool Call 呼叫 `mcp-python-executor` 工具，"
+                                f"傳入使用 {lib_hint} 讀取該檔案的 Python 程式碼（用 print() 輸出內容）。\n"
+                                f"嚴禁只在文字中展示程式碼而不呼叫工具。\n"
+                                f"取得檔案內容後，根據你的語意理解能力直接分析、總結或處理。\n"
+                                f"環境已預裝 python-docx, pdfplumber, pandas, openpyxl, chardet。]"
                             )
 
                     # Re-trigger loading animation after download (timer may have expired)
