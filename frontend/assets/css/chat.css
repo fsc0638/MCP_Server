@@ -207,7 +207,7 @@ html, body { height: 100%; overflow: hidden; }
 /* ── Center / Chat main ──────────────────────────────────────── */
 .page-chat-main {
   display: flex; flex-direction: column; overflow: hidden;
-  background: var(--bg-surface);
+  background: var(--bg-base);
 }
 
 .page-chat-main-topbar {
@@ -458,10 +458,6 @@ html, body { height: 100%; overflow: hidden; }
   background: var(--bg-sidebar);
   border-left: 1px solid var(--border-subtle);
   overflow: hidden;
-}
-.page-chat-sidebar-right::before {
-  content: ''; display: block; height: 3px;
-  background: linear-gradient(90deg, var(--accent-teal) 0%, var(--kway-blue) 50%, var(--kway-orange) 100%);
 }
 .page-chat-panel-header {
   padding: 14px 14px 10px; border-bottom: 1px solid var(--border-subtle);

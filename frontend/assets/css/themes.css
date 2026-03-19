@@ -87,10 +87,10 @@
   --kway-orange-light:#fde8bb;
 
   /* ── Background ── */
-  --bg-base:          #f2f4f7;
-  --bg-surface:       #ffffff;
+  --bg-base:          #ffffff;
+  --bg-surface:       #f8f9fb;
   --bg-card:          #ffffff;
-  --bg-sidebar:       #f8f9fb;
+  --bg-sidebar:       #ffffff;
   --bg-hover:         #e6f6f8;
   --bg-active:        #b2e4ea;
   --bg-input:         #ffffff;
