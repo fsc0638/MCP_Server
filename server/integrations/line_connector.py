@@ -430,9 +430,10 @@ def _preprocess_image(file_path: str) -> str:
     return file_path
 
 
-def _download_sticker_image(sticker_id: str, uploads_dir: str):
+def _download_sticker_image(sticker_id: str, uploads_dir: str, resource_type: str = "STATIC"):
     """
-    嘗試從 LINE CDN 下載貼圖圖片，供 OpenAI Vision 辨識貼圖表情與動作。
+    嘗試從 LINE CDN 下載貼圖圖片，供 OpenAI Vision 辨識貼圖表情、動作與文字。
+    針對不同貼圖類型 (STATIC / ANIMATION / POPUP) 使用不同的 CDN 路徑。
     回傳圖片路徑，失敗則回傳 None。
     """
     import os
@@ -440,23 +441,37 @@ def _download_sticker_image(sticker_id: str, uploads_dir: str):
     if os.path.exists(cached_path):
         return cached_path
 
-    cdn_urls = [
-        f"https://stickershop.line-scdn.net/stickershop/v1/sticker/{sticker_id}/iPhone/sticker@2x.png",
-        f"https://stickershop.line-scdn.net/stickershop/v1/sticker/{sticker_id}/android/sticker.png",
-    ]
+    base = f"https://stickershop.line-scdn.net/stickershop/v1/sticker/{sticker_id}"
+
+    # 依貼圖類型排列優先度：靜態 key frame 最清楚（文字可辨識），動態次之
+    if resource_type in ("ANIMATION", "ANIMATION_SOUND", "POPUP", "POPUP_SOUND"):
+        cdn_urls = [
+            f"{base}/iPhone/sticker_key@2x.png",      # 動態貼圖的靜態 key frame（最清晰）
+            f"{base}/iPhone/sticker@2x.png",           # 可能是 APNG，但 fallback 仍可用
+            f"{base}/android/sticker.png",
+        ]
+    else:
+        cdn_urls = [
+            f"{base}/iPhone/sticker@2x.png",           # 標準靜態高解析度
+            f"{base}/iPhone/sticker_key@2x.png",       # 部分靜態貼圖也有 key frame
+            f"{base}/android/sticker.png",
+            f"{base}/iPhone/sticker.png",
+        ]
+
     for url in cdn_urls:
         try:
-            resp = httpx.get(url, timeout=5, follow_redirects=True)
-            if resp.status_code == 200 and len(resp.content) > 200:
+            resp = httpx.get(url, timeout=8, follow_redirects=True)
+            if resp.status_code == 200 and len(resp.content) > 500:
                 os.makedirs(uploads_dir, exist_ok=True)
                 with open(cached_path, "wb") as f:
                     f.write(resp.content)
-                logger.info(f"[LINE] Sticker image downloaded: sticker_id={sticker_id}")
+                logger.info(f"[LINE] Sticker image downloaded: id={sticker_id} type={resource_type} url={url} size={len(resp.content)}")
                 return cached_path
         except Exception as e:
-            logger.debug(f"[LINE] Sticker CDN download failed ({url}): {e}")
+            logger.debug(f"[LINE] Sticker CDN failed ({url}): {e}")
             continue
-    logger.info(f"[LINE] Sticker image not available from CDN: sticker_id={sticker_id}")
+
+    logger.warning(f"[LINE] All CDN URLs failed for sticker_id={sticker_id} type={resource_type}")
     return None
 
 
@@ -540,9 +555,9 @@ def _process_line_message(
                     logger.info(f"[LINE BG] Just cached sticker: session={session_id}, sticker_id={sticker_id}")
                     return
 
-                # 嘗試下載貼圖圖片，供 Vision 模型辨識表情與動作
+                # 嘗試下載貼圖圖片，供 Vision 模型辨識表情、動作與文字
                 uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads")
-                sticker_image = _download_sticker_image(sticker_id, uploads_dir)
+                sticker_image = _download_sticker_image(sticker_id, uploads_dir, resource_type)
                 if sticker_image:
                     attached_file_path = sticker_image
 
@@ -551,21 +566,26 @@ def _process_line_message(
                 if sticker_keywords:
                     emotion_parts.append(f"情緒關鍵字：{', '.join(sticker_keywords)}")
                 if sticker_text:
-                    emotion_parts.append(f"貼圖中的文字：「{sticker_text}」")
-                emotion_desc = "；".join(emotion_parts) if emotion_parts else "（無明確情緒標籤，請從貼圖圖片判斷）"
+                    emotion_parts.append(f"貼圖中使用者自訂文字：「{sticker_text}」")
+                emotion_desc = "；".join(emotion_parts) if emotion_parts else "（無 API 提供的情緒標籤）"
 
                 has_image = "有" if sticker_image else "無"
                 user_input = (
                     f"[系統通知：使用者傳送了一個 LINE 貼圖。\n"
-                    f"貼圖資訊：packageId={package_id}, stickerId={sticker_id}, 類型={resource_type}\n"
+                    f"貼圖後設資料：packageId={package_id}, stickerId={sticker_id}, 類型={resource_type}\n"
                     f"{emotion_desc}\n"
-                    f"貼圖圖片：{has_image}（已附在本訊息中）\n\n"
-                    f"回覆指引：\n"
-                    f"1. 如果有貼圖圖片，請仔細觀察貼圖角色的表情、動作、姿態來理解使用者的情緒。\n"
-                    f"2. 融合使用者的情緒在你的回覆語氣中，讓對話更活潑自然。\n"
-                    f"3. 不要說「你傳了一個貼圖」或複述系統通知，直接以貼近使用者心情的語氣自然回覆。\n"
-                    f"4. 可以適當使用表情符號(emoji)讓回覆更生動，但不要過度。\n"
-                    f"5. 如果前面有對話上下文，請結合上下文與貼圖情緒一起回覆。]"
+                    f"貼圖圖片：{has_image}\n\n"
+                    f"【最重要 — 貼圖圖片 OCR】\n"
+                    f"許多 LINE 貼圖的圖片上會印有中文、日文或英文字句（例如「辛苦了」「我罩你」「加油」等）。\n"
+                    f"你必須仔細辨識圖片中所有文字並在回覆中自然融入，這是使用者表達的重點。\n"
+                    f"如果圖片中有文字，請優先根據該文字的語意來理解使用者想表達什麼。\n\n"
+                    f"【回覆風格】\n"
+                    f"1. 觀察貼圖角色的表情、動作、姿態，加上圖中文字，綜合理解使用者情緒。\n"
+                    f"2. 用活潑、口語化的語氣回覆，像朋友聊天一樣自然。\n"
+                    f"3. 禁止說「你傳了一個貼圖」或複述系統通知內容。\n"
+                    f"4. 禁止使用制式結語（如「如果有其他問題或需要協助的地方，隨時告訴我」之類的客套話）。\n"
+                    f"5. 適當使用 emoji 讓回覆生動，但不過度。\n"
+                    f"6. 結合對話上下文與貼圖情緒一起回覆。]"
                 )
 
                 _send_loading_animation(line_api, chat_id, 60)
