@@ -26,9 +26,12 @@ class OpenAIAdapter:
     def __init__(self, uma, model: Optional[str] = None, api_base: Optional[str] = None, api_key: Optional[str] = None):
         self.uma = uma
         self.client = None
-        
+
         # 1. Resolve Model
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4o")
+
+        # 1b. Resolve Token Limits (configurable via env)
+        self.max_output_tokens = int(os.getenv("OPENAI_MAX_OUTPUT_TOKENS", "16384"))
         
         # 2. Resolve Credentials / Endpoint
         resolved_key = api_key or os.getenv("OPENAI_API_KEY")
@@ -134,7 +137,7 @@ class OpenAIAdapter:
                 return None
         return None
 
-    def chat(self, messages: Any, user_query: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7, **kwargs) -> Dict[str, Any]:
+    def chat(self, messages: Any, user_query: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7, tools_enabled: bool = True, **kwargs) -> Dict[str, Any]:
         """
         Send a chat completion request with tool calling support.
         P-03 Architecture: Uses the stateful Responses API (`client.responses.create`).
@@ -195,7 +198,7 @@ class OpenAIAdapter:
                         input_payload[i]["content"] = new_content + all_visual_parts
                     break
 
-        tools = self.get_tools(user_query=user_query)
+        tools = self.get_tools(user_query=user_query) if tools_enabled else []
         tool_calls_made = 0
         MAX_ITERATIONS = 10  # Safety cap
         
@@ -215,7 +218,9 @@ class OpenAIAdapter:
                             "model": self.model,
                             "input": input_payload,
                             "stream": True,
-                            "temperature": temperature
+                            "temperature": temperature,
+                            "max_output_tokens": self.max_output_tokens,
+                            "truncation": "auto",  # Auto-truncate input when approaching context limit
                         }
                         if current_response_id:
                             kwargs_req["previous_response_id"] = current_response_id
