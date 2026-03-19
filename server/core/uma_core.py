@@ -70,46 +70,80 @@ class UMA:
         return None
 
 
+    def _detect_execution_mode(self, skill_name: str) -> str:
+        """
+        Auto-detect skill execution mode based on scripts/ directory content.
+        - 'executable': scripts/main.py exists → run directly
+        - 'code':       scripts/ has .py files (but no main.py) → reference guide + python-executor
+        - 'semantic':   no scripts/ or empty → LLM processes directly with language capabilities
+        """
+        skill_dir = self.executor.skills_home / skill_name
+        scripts_dir = skill_dir / "scripts"
+
+        # Check for main.py (case-insensitive for cross-platform: scripts/ or Scripts/)
+        for candidate in [scripts_dir, skill_dir / "Scripts"]:
+            main_py = candidate / "main.py"
+            if main_py.exists():
+                return "executable"
+
+        # Check for any .py files in scripts/
+        for candidate in [scripts_dir, skill_dir / "Scripts"]:
+            if candidate.exists() and any(candidate.rglob("*.py")):
+                return "code"
+
+        return "semantic"
+
     def execute_tool_call(self, skill_name: str, arguments: str):
         """
-        Executes a script based on model tool call arguments.
-        
-        - If the skill has a Scripts/main.py, execute it (execution-type skill).
-        - If NO script exists (knowledge-type skill), return the SKILL.md content as a
-          reference guide. The AI can then use another tool (e.g. mcp-python-executor)
-          to actually perform the task using the knowledge retrieved.
+        Executes a skill based on its auto-detected execution mode:
+        - executable: scripts/main.py exists → run the script directly
+        - code:       scripts/ has reference .py files → return guide + instruct LLM to use python-executor
+        - semantic:   no scripts at all → return guide + instruct LLM to process directly
         """
         # Parse 'arguments' string if needed, or assume it's a dict
         try:
             arg_dict = json.loads(arguments) if isinstance(arguments, str) else arguments
         except:
             arg_dict = {"raw": arguments}
-        
-        # Check if a runnable script exists for this skill
-        # D-03: Use lowercase 'scripts/' for cross-platform compatibility
-        script_path = (self.executor.skills_home / skill_name / "scripts" / "main.py")
-        if script_path.exists():
-            # Execution-type skill: run the script
+
+        mode = self._detect_execution_mode(skill_name)
+
+        # === Executable mode: run scripts/main.py directly ===
+        if mode == "executable":
             return self.executor.run_script(skill_name, "main.py", arg_dict)
+
+        # === Knowledge modes (code / semantic): return SKILL.md as guide ===
+        skill_md_path = self.executor.skills_home / skill_name / "SKILL.md"
+        if not skill_md_path.exists():
+            return {"status": "error", "message": f"Skill '{skill_name}' not found."}
+
+        content = skill_md_path.read_text(encoding="utf-8", errors="replace")
+
+        if mode == "code":
+            # Has reference scripts → LLM should use mcp-python-executor
+            message = (
+                f"INTERNAL REFERENCE RETRIEVED: This is a technical guide for '{skill_name}'. "
+                f"DO NOT repeat this guide to the user. Instead, use the 'mcp-python-executor' tool "
+                f"to write and run the Python code needed to process the user's file, "
+                f"following the logic described below."
+            )
         else:
-            # Knowledge-type skill: return SKILL.md as a reference guide
-            skill_md_path = self.executor.skills_home / skill_name / "SKILL.md"
-            if skill_md_path.exists():
-                content = skill_md_path.read_text(encoding="utf-8", errors="replace")
-                return {
-                    "status": "success",
-                    "type": "knowledge_guide",
-                    "skill": skill_name,
-                    "message": (
-                        f"INTERNAL REFERENCE RETRIEVED: This is a technical guide for '{skill_name}'. "
-                        f"DO NOT repeat this guide to the user. Instead, use the 'mcp-python-executor' tool "
-                        f"to write and run the Python code needed to process the user's file, "
-                        f"following the logic described below."
-                    ),
-                    "guide": content
-                }
-            else:
-                return {"status": "error", "message": f"Skill '{skill_name}' not found."}
+            # Semantic mode → LLM processes directly with language capabilities
+            message = (
+                f"SKILL ACTIVATED: '{skill_name}'. "
+                f"Follow the instructions in the guide below to directly process "
+                f"the user's request using your language capabilities. "
+                f"Do NOT call mcp-python-executor unless the user explicitly asks for code execution."
+            )
+
+        return {
+            "status": "success",
+            "type": "knowledge_guide",
+            "skill": skill_name,
+            "execution_mode": mode,
+            "message": message,
+            "guide": content
+        }
 
 
 class SkillRegistry:
