@@ -641,8 +641,10 @@ def _process_line_message(
 
                             user_input = (
                                 f"[系統通知：使用者上傳了文件 {filename}。檔案絕對路徑：{abs_path}。\n\n"
-                                f"請先呼叫 `mcp-python-executor` 使用 {lib_hint} 讀取檔案內容並 print 出來，"
-                                f"然後根據你的語意理解能力直接分析、總結或處理文件內容。\n"
+                                f"【強制執行】你必須立即使用 Tool Call 呼叫 `mcp-python-executor` 工具，"
+                                f"傳入使用 {lib_hint} 讀取該檔案的 Python 程式碼（用 print() 輸出內容）。\n"
+                                f"嚴禁只在文字中展示程式碼而不呼叫工具。\n"
+                                f"取得檔案內容後，根據你的語意理解能力直接分析、總結或處理。\n"
                                 f"環境已預裝 python-docx, pdfplumber, pandas, openpyxl, chardet。]"
                             )
 
