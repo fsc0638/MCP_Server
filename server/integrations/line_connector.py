@@ -624,14 +624,25 @@ def _process_line_message(
                             user_input = f"[系統通知：使用者傳送了一張高畫質圖片 {filename}，已轉為 {os.path.basename(attached_file_path)} 供您檢視]"
                         else:
                             abs_path = os.path.abspath(attached_file_path)
-                            # Phase 2: Knowledge Base Document Instruction
-                            user_input = (
-                                f"[系統通知：使用者上傳了文件 {filename}。檔案絕對路徑：{abs_path}。\n\n"
-                                f"重大提示：\n"
-                                f"1. 先呼叫對應的指令手冊（manual）『獲取』處理程式碼範例。\n"
-                                f"2. **得到手冊後，下一輪絕對禁止再次呼叫該手冊。** 你必須立即切換並呼叫 `mcp-python-executor` 撰寫並執行分析程式碼。\n"
-                                f"3. 環境已預裝 pypdf, pdfplumber, pandas, python-docx。請直接基於手冊範例進行分析。]"
-                            )
+                            lower_name = filename.lower()
+
+                            # Semantic-type files: LLM reads content directly via skill guide
+                            if lower_name.endswith(('.docx', '.txt')):
+                                user_input = (
+                                    f"[系統通知：使用者上傳了文件 {filename}。檔案絕對路徑：{abs_path}。\n\n"
+                                    f"請先呼叫 `mcp-python-executor` 讀取檔案內容（例如使用 python-docx 讀取 .docx），"
+                                    f"然後根據你的語意理解能力直接分析、總結或處理文件內容。\n"
+                                    f"環境已預裝 python-docx, chardet。]"
+                                )
+                            # Code-type files: LLM must use skill manual + python-executor
+                            else:
+                                user_input = (
+                                    f"[系統通知：使用者上傳了文件 {filename}。檔案絕對路徑：{abs_path}。\n\n"
+                                    f"重大提示：\n"
+                                    f"1. 先呼叫對應的指令手冊（manual）『獲取』處理程式碼範例。\n"
+                                    f"2. **得到手冊後，下一輪絕對禁止再次呼叫該手冊。** 你必須立即切換並呼叫 `mcp-python-executor` 撰寫並執行分析程式碼。\n"
+                                    f"3. 環境已預裝 pypdf, pdfplumber, pandas, openpyxl。請直接基於手冊範例進行分析。]"
+                                )
 
                     # Re-trigger loading animation after download (timer may have expired)
                     _send_loading_animation(line_api, chat_id, 60)
