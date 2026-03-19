@@ -111,11 +111,11 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"[LINE] Event parse error: {e}")
         raise HTTPException(status_code=400, detail=f"Event parse error: {e}")
 
-    # C. 逐一處理 TextMessage / ImageMessage / FileMessage Event
-    from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent
+    # C. 逐一處理 TextMessage / ImageMessage / FileMessage / StickerMessage Event
+    from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
     for event in events:
         if isinstance(event, MessageEvent):
-            if not isinstance(event.message, (TextMessageContent, ImageMessageContent, FileMessageContent)):
+            if not isinstance(event.message, (TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent)):
                 continue
             # 解析 session_id：依來源類型決定（user / group / room）
             source = event.source
@@ -158,18 +158,19 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         logger.info(f"[LINE] Skipped group text (cached but no mention): chat={chat_id}")
                         continue
                 else:
-                    # For Image/File in groups, check if bot was mentioned recently (window of 120s for better UX)
+                    # For Image/File/Sticker in groups, check if bot was mentioned recently (window of 120s for better UX)
                     import time
                     last_mention = _last_request_time.get(f"mention_{chat_id}", 0)
-                    
+
                     # Phase 6: Proactive Cache
                     # If mentioned within 120s, we process it as a direct command
                     just_cache = (time.time() - last_mention > 120)
-                    
+                    msg_type = type(event.message).__name__
+
                     if just_cache:
-                        logger.info(f"[LINE] Group media/file received without recent mention. Will only cache: chat={chat_id}")
+                        logger.info(f"[LINE] Group {msg_type} received without recent mention. Will only cache: chat={chat_id}")
                     else:
-                        logger.info(f"[LINE] Group media/file received with recent mention. Processing: chat={chat_id}")
+                        logger.info(f"[LINE] Group {msg_type} received with recent mention. Processing: chat={chat_id}")
                     
                     background_tasks.add_task(
                         _process_line_message,
@@ -429,6 +430,36 @@ def _preprocess_image(file_path: str) -> str:
     return file_path
 
 
+def _download_sticker_image(sticker_id: str, uploads_dir: str):
+    """
+    嘗試從 LINE CDN 下載貼圖圖片，供 OpenAI Vision 辨識貼圖表情與動作。
+    回傳圖片路徑，失敗則回傳 None。
+    """
+    import os
+    cached_path = os.path.join(uploads_dir, f"sticker_{sticker_id}.png")
+    if os.path.exists(cached_path):
+        return cached_path
+
+    cdn_urls = [
+        f"https://stickershop.line-scdn.net/stickershop/v1/sticker/{sticker_id}/iPhone/sticker@2x.png",
+        f"https://stickershop.line-scdn.net/stickershop/v1/sticker/{sticker_id}/android/sticker.png",
+    ]
+    for url in cdn_urls:
+        try:
+            resp = httpx.get(url, timeout=5, follow_redirects=True)
+            if resp.status_code == 200 and len(resp.content) > 200:
+                os.makedirs(uploads_dir, exist_ok=True)
+                with open(cached_path, "wb") as f:
+                    f.write(resp.content)
+                logger.info(f"[LINE] Sticker image downloaded: sticker_id={sticker_id}")
+                return cached_path
+        except Exception as e:
+            logger.debug(f"[LINE] Sticker CDN download failed ({url}): {e}")
+            continue
+    logger.info(f"[LINE] Sticker image not available from CDN: sticker_id={sticker_id}")
+    return None
+
+
 def _process_line_message(
     line_api,
     line_api_blob,
@@ -475,7 +506,7 @@ def _process_line_message(
         _send_loading_animation(line_api, chat_id, 60)
 
         try:
-            from linebot.v3.webhooks import TextMessageContent, ImageMessageContent, FileMessageContent
+            from linebot.v3.webhooks import TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
             import os
 
             attached_file_path = quoted_file_path
@@ -485,6 +516,60 @@ def _process_line_message(
                 if attached_file_path:
                     fname = os.path.basename(attached_file_path)
                     user_input = f"[系統通知：使用者引用了先前上傳的檔案 {fname}。檔案絕對路徑：{attached_file_path}]\n" + user_input
+
+            elif isinstance(event_msg, StickerMessageContent):
+                # ── Phase 7: Sticker Emotion Recognition ─────────────────────
+                sticker_id = event_msg.sticker_id
+                package_id = event_msg.package_id
+                sticker_keywords = event_msg.keywords or []
+                sticker_text = event_msg.text or ""
+                resource_type = event_msg.sticker_resource_type or "STATIC"
+
+                logger.info(
+                    f"[LINE BG] Sticker received: pkg={package_id} id={sticker_id} "
+                    f"keywords={sticker_keywords} text='{sticker_text}' type={resource_type}"
+                )
+
+                # 快取貼圖情緒資訊供後續引用
+                cache_text = f"[貼圖: {', '.join(sticker_keywords)}]" if sticker_keywords else "[貼圖]"
+                if sticker_text:
+                    cache_text += f" {sticker_text}"
+                _add_to_cache(chat_id, event_msg.id, text=cache_text)
+
+                if just_cache:
+                    logger.info(f"[LINE BG] Just cached sticker: session={session_id}, sticker_id={sticker_id}")
+                    return
+
+                # 嘗試下載貼圖圖片，供 Vision 模型辨識表情與動作
+                uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads")
+                sticker_image = _download_sticker_image(sticker_id, uploads_dir)
+                if sticker_image:
+                    attached_file_path = sticker_image
+
+                # 組裝情緒描述
+                emotion_parts = []
+                if sticker_keywords:
+                    emotion_parts.append(f"情緒關鍵字：{', '.join(sticker_keywords)}")
+                if sticker_text:
+                    emotion_parts.append(f"貼圖中的文字：「{sticker_text}」")
+                emotion_desc = "；".join(emotion_parts) if emotion_parts else "（無明確情緒標籤，請從貼圖圖片判斷）"
+
+                has_image = "有" if sticker_image else "無"
+                user_input = (
+                    f"[系統通知：使用者傳送了一個 LINE 貼圖。\n"
+                    f"貼圖資訊：packageId={package_id}, stickerId={sticker_id}, 類型={resource_type}\n"
+                    f"{emotion_desc}\n"
+                    f"貼圖圖片：{has_image}（已附在本訊息中）\n\n"
+                    f"回覆指引：\n"
+                    f"1. 如果有貼圖圖片，請仔細觀察貼圖角色的表情、動作、姿態來理解使用者的情緒。\n"
+                    f"2. 融合使用者的情緒在你的回覆語氣中，讓對話更活潑自然。\n"
+                    f"3. 不要說「你傳了一個貼圖」或複述系統通知，直接以貼近使用者心情的語氣自然回覆。\n"
+                    f"4. 可以適當使用表情符號(emoji)讓回覆更生動，但不要過度。\n"
+                    f"5. 如果前面有對話上下文，請結合上下文與貼圖情緒一起回覆。]"
+                )
+
+                _send_loading_animation(line_api, chat_id, 60)
+
             else:
                 # Phase 2: Inbound Multimedia Download and Processing
                 try:
@@ -571,20 +656,22 @@ def _process_line_message(
             if not adapter.is_available:
                 final_reply = "⚠️ AI 服務暫時無法使用，請確認 OPENAI_API_KEY 設定。"
             else:
-                # 為了避免背景長期對話導致 OpenAI 429 Too Many Requests (Token Limit)
-                # 強制只擷取 System Prompt + 最近 5 輪對話 (10 條訊息)
-                # 因為我們有 _update_system_prompt，重新取得最新 history
+                # 擷取 System Prompt + 最近對話歷史
+                # truncation="auto" 已在 Adapter 層防護 context overflow，
+                # 此處放寬至 20 條訊息 (10 輪) 以提供更豐富的上下文
                 history = _session_mgr.get_or_create_conversation(session_id)
                 system_msgs = [m for m in history if m.get("role") == "system"]
-                recent_msgs = [m for m in history if m.get("role") != "system"][-10:]
+                recent_msgs = [m for m in history if m.get("role") != "system"][-20:]
                 truncated_history = system_msgs + recent_msgs
 
                 # 傳入截斷的 history 副本，避免 generator 消費途中 list 被外部修改
+                # execute_mode=False (/chat 模式) 時跳過 Tool Schema 注入，大幅節省 token
                 result_gen = adapter.chat(
                     messages=truncated_history,
                     user_query=actual_input,
                     session_id=session_id,
-                    attached_file=attached_file_path
+                    attached_file=attached_file_path,
+                    tools_enabled=execute_mode
                 )
 
                 # 5. 消費同步 Generator，組裝完整回覆字串
