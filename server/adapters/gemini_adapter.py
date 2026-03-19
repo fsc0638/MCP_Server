@@ -185,18 +185,21 @@ class GeminiAdapter:
         # 1. system_prompt passed by router.py (contains full skill list from build_system_prompt)
         # 2. system message from history (fallback)
         # 3. built-in default
-        system_instruction_text = kwargs.get("system_prompt", None)
+        # 1. Priority: extract from messages (chat_core guarantees messages[0] is system)
+        system_instruction_text = ""
+        if messages:
+            for msg in messages:
+                if msg.get("role") == "system":
+                    system_instruction_text = self._extract_text(msg.get("content", ""))
+                    break
+
+        # 2. Fallback: kwargs or hardcoded default
         if not system_instruction_text:
-            system_instruction_text = (
+            system_instruction_text = kwargs.get("system_prompt") or (
                 "You are a high-performance AI Assistant. 請使用繁體中文回覆。\n"
                 "回覆時請盡量簡潔、結構清晰，並優先使用系統已載入的技能。\n"
                 "如果使用者的問題涉及已載入的知識庫或文件，請優先引用相關內容作為回覆依據。"
             )
-            if messages:
-                for msg in messages:
-                    if msg.get("role") == "system":
-                        system_instruction_text = msg["content"]
-                        break
 
         visual_parts = []
         visual_docs = kwargs.get("visual_docs", [])
@@ -238,9 +241,9 @@ class GeminiAdapter:
             gemini_tools = genai.protos.Tool(function_declarations=function_declarations) if function_declarations else None
 
             # === DEBUG: Print system_instruction summary ===
-            logger.warning(f"[GEMINI DEBUG] system_instruction length={len(system_instruction_text)}")
-            logger.warning(f"[GEMINI DEBUG] system_instruction preview: {system_instruction_text[:300]}")
-            logger.warning(f"[GEMINI DEBUG] visual_parts count={len(visual_parts)}, user_query[:80]={user_query[:80]}")
+            logger.debug(f"[GEMINI] system_instruction length={len(system_instruction_text)}")
+            logger.debug(f"[GEMINI] system_instruction preview: {system_instruction_text[:300]}")
+            logger.debug(f"[GEMINI] visual_parts count={len(visual_parts)}, user_query[:80]={user_query[:80]}")
             # === END DEBUG ===
 
             model = genai.GenerativeModel(
