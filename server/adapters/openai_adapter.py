@@ -201,7 +201,26 @@ class OpenAIAdapter:
         tools = self.get_tools(user_query=user_query) if tools_enabled else []
         tool_calls_made = 0
         MAX_ITERATIONS = 10  # Safety cap
-        
+
+        # Detect file-creation intent → force tool use via tool_choice
+        _file_creation_keywords = [
+            "製作", "建立", "產生", "生成", "建一個", "做一個", "寫一個",
+            "存檔", "輸出檔", "下載", "匯出",
+            "create", "generate", "make", "write", "export", "save as",
+        ]
+        force_tool_use = (
+            tools_enabled
+            and tools
+            and user_query
+            and any(kw in user_query for kw in _file_creation_keywords)
+        )
+
+        logger.info(
+            f"[OpenAI Adapter] Tools: {len(tools)} injected "
+            f"({[t.get('name') for t in tools]}), "
+            f"force_tool_use={force_tool_use}"
+        )
+
         # We will track the latest response id generated in this multi-round loop
         current_response_id = prev_response_id
 
@@ -211,7 +230,7 @@ class OpenAIAdapter:
                 MAX_RETRIES = 2
                 last_error = None
                 response = None
-                
+
                 for attempt in range(MAX_RETRIES + 1):
                     try:
                         kwargs_req = {
@@ -226,6 +245,10 @@ class OpenAIAdapter:
                             kwargs_req["previous_response_id"] = current_response_id
                         if tools:
                             kwargs_req["tools"] = tools
+                            # Force model to call a tool for file-creation queries
+                            # (only on first iteration; after tool results, let model decide)
+                            if force_tool_use and tool_calls_made == 0:
+                                kwargs_req["tool_choice"] = "required"
 
                         # --- DEBUG LOGGING ---
                         import copy
