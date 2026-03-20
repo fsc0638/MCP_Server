@@ -3,7 +3,7 @@ Pending State Manager — Human-in-the-Loop for LINE Bot
 
 Manages cross-message pending states that allow:
 1. Tool approval: "requires_approval" → user confirms/rejects in LINE
-2. Future: Choice proposals (A/B/C options) before execution
+2. Choice proposals: AI proposes A/B/C options → user picks one in LINE
 
 States are persisted to disk (JSON) so they survive server restarts
 and have a configurable TTL (default 10 minutes).
@@ -11,9 +11,10 @@ and have a configurable TTL (default 10 minutes).
 
 import json
 import logging
+import re
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("MCP_Server.PendingState")
 
@@ -153,3 +154,110 @@ def parse_confirmation(user_input: str) -> Optional[str]:
             return "reject"
 
     return None
+
+
+# ── Choice parsing helpers ───────────────────────────────────────────────────
+
+# Regex to match [CHOICES] ... [/CHOICES] block in LLM output
+_CHOICES_BLOCK_RE = re.compile(
+    r"\[CHOICES\]\s*\n(.*?)\n\s*\[/CHOICES\]",
+    re.DOTALL,
+)
+
+# Each option line: A. description / B. description / C. description ...
+_OPTION_LINE_RE = re.compile(
+    r"^([A-Z])[.)]\s*(.+)$", re.MULTILINE,
+)
+
+# User input patterns for selecting a choice: "A", "a", "選A", "選 A", "方案A"
+_CHOICE_INPUT_RE = re.compile(
+    r"^(?:選|方案|option|選擇)?\s*([A-Za-z])\s*[.。)）]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def extract_choices(llm_output: str) -> Optional[Tuple[str, List[Dict[str, str]]]]:
+    """
+    Extract a [CHOICES]...[/CHOICES] block from LLM output.
+
+    Returns:
+        (preamble_text, [{"key": "A", "text": "..."}, ...])
+        or None if no choices block is found.
+
+    The preamble_text is everything BEFORE the [CHOICES] block,
+    which is the AI's explanation/analysis leading to the proposal.
+    """
+    match = _CHOICES_BLOCK_RE.search(llm_output)
+    if not match:
+        return None
+
+    block_content = match.group(1)
+    options = []
+    for opt_match in _OPTION_LINE_RE.finditer(block_content):
+        options.append({
+            "key": opt_match.group(1).upper(),
+            "text": opt_match.group(2).strip(),
+        })
+
+    if len(options) < 2:
+        # Need at least 2 options for a meaningful choice
+        return None
+
+    # Preamble: everything before the [CHOICES] marker
+    preamble = llm_output[:match.start()].strip()
+
+    return preamble, options
+
+
+def parse_choice(user_input: str, valid_keys: List[str]) -> Optional[str]:
+    """
+    Parse user input as a choice selection.
+
+    Args:
+        user_input: Raw user text (e.g. "A", "選B", "方案 C")
+        valid_keys: List of valid option keys (e.g. ["A", "B", "C"])
+
+    Returns:
+        The uppercase key (e.g. "A") if matched, or None.
+    """
+    cleaned = user_input.strip()
+
+    # Direct key match: "A", "B", "C"
+    if cleaned.upper() in valid_keys:
+        return cleaned.upper()
+
+    # Pattern match: "選A", "方案B", "option C"
+    m = _CHOICE_INPUT_RE.match(cleaned)
+    if m:
+        key = m.group(1).upper()
+        if key in valid_keys:
+            return key
+
+    return None
+
+
+def format_choices_for_line(preamble: str, options: List[Dict[str, str]]) -> str:
+    """
+    Format a choices proposal into a LINE-friendly message.
+
+    Args:
+        preamble: AI's explanation text before the options.
+        options: List of {"key": "A", "text": "description"} dicts.
+
+    Returns:
+        Formatted string ready to send to LINE user.
+    """
+    lines = []
+    if preamble:
+        lines.append(preamble)
+        lines.append("")
+
+    lines.append("📋 請選擇方案：")
+    lines.append("")
+    for opt in options:
+        lines.append(f"  {opt['key']}. {opt['text']}")
+
+    lines.append("")
+    lines.append("直接回覆選項代碼即可（如「A」或「選B」）")
+
+    return "\n".join(lines)

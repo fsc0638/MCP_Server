@@ -584,15 +584,17 @@ def _handle_pending_state(
     user_text: str,
 ) -> str | None:
     """
-    檢查聊天是否有待確認的 pending state。
-    若使用者回覆的是確認/取消指令，處理 pending 操作並回傳回覆文字。
+    檢查聊天是否有待確認的 pending state（approval 或 choice）。
+    若使用者回覆的是確認/取消/選擇指令，處理 pending 操作並回傳回覆文字。
     若無 pending state 或使用者輸入不是確認指令，回傳 None（繼續正常流程）。
 
     Returns:
         str   → 已處理，回傳此文字給使用者
         None  → 無 pending 或非確認指令，繼續正常訊息處理
     """
-    from server.core.pending_state import PendingStateManager, parse_confirmation
+    from server.core.pending_state import (
+        PendingStateManager, parse_confirmation, parse_choice,
+    )
     from main import PROJECT_ROOT
 
     pending_mgr = PendingStateManager(str(PROJECT_ROOT / "workspace" / "sessions"))
@@ -601,6 +603,112 @@ def _handle_pending_state(
     if pending is None:
         return None  # 無待確認 → 正常流程
 
+    pending_type = pending.get("type", "approval")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Type: "choice" — AI 提議了 A/B/C 方案，等使用者選擇
+    # ══════════════════════════════════════════════════════════════════════
+    if pending_type == "choice":
+        valid_keys = [opt["key"] for opt in pending.get("options", [])]
+        selected = parse_choice(user_text, valid_keys)
+
+        if selected is None:
+            # 使用者輸入不像選項 → 也檢查是否是取消
+            confirmation = parse_confirmation(user_text)
+            if confirmation == "reject":
+                pending_mgr.clear_pending(chat_id)
+                logger.info(f"[LINE HitL] User cancelled choice for chat={chat_id}")
+                return "✅ 已取消方案選擇，有什麼需要可以繼續說！"
+            # 不是選項也不是取消 → 清除 pending，視為新訊息
+            pending_mgr.clear_pending(chat_id)
+            logger.info(f"[LINE HitL] Choice pending cleared: unrelated input for chat={chat_id}")
+            return None
+
+        # 使用者選擇了某個方案
+        chosen_option = next(
+            (opt for opt in pending.get("options", []) if opt["key"] == selected),
+            None,
+        )
+        chosen_text = chosen_option["text"] if chosen_option else selected
+        original_query = pending.get("original_query", "")
+        preamble = pending.get("preamble", "")
+
+        logger.info(f"[LINE HitL] User selected choice={selected} ({chosen_text}) for chat={chat_id}")
+        pending_mgr.clear_pending(chat_id)
+
+        # 觸發 loading 動畫
+        _send_loading_animation(line_api, chat_id, 60)
+
+        try:
+            from server.dependencies.uma import get_uma_instance
+            from server.adapters.openai_adapter import OpenAIAdapter
+            from server.dependencies.session import get_session_manager
+            from server.services.runtime import get_universal_system_prompt
+
+            _session_mgr = get_session_manager()
+            _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
+            _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
+
+            uma = get_uma_instance()
+            adapter = OpenAIAdapter(uma=uma)
+            if not adapter.is_available:
+                return f"⚠️ AI 服務暫時無法使用。你選擇了方案 {selected}：{chosen_text}"
+
+            # 解析選項文字中的格式關鍵字，生成明確的格式指令
+            _format_hint_map = {
+                "pdf": "PDF (.pdf)",
+                "word": "Word DOCX (.docx)",
+                "docx": "Word DOCX (.docx)",
+                "markdown": "Markdown (.md)",
+                "md": "Markdown (.md)",
+                "txt": "純文字 (.txt)",
+                "excel": "Excel (.xlsx)",
+                "xlsx": "Excel (.xlsx)",
+                "csv": "CSV (.csv)",
+                "pptx": "PowerPoint (.pptx)",
+            }
+            format_hint = ""
+            chosen_lower = chosen_text.lower()
+            for fmt_key, fmt_label in _format_hint_map.items():
+                if fmt_key in chosen_lower:
+                    format_hint = f"\n輸出檔案格式：{fmt_label}"
+                    break
+
+            # 注入使用者選擇作為 context，讓 LLM 根據選擇執行
+            choice_msg = (
+                f"[系統通知：使用者已從提議的方案中選擇了「{selected}. {chosen_text}」。\n"
+                f"原始需求：{original_query}{format_hint}\n\n"
+                f"請立即按照方案 {selected} 執行，使用 mcp-python-executor 工具建立檔案。"
+                f"不要再次詢問或提議其他方案，直接行動並回覆結果。]"
+            )
+            _session_mgr.append_message(session_id, "user", choice_msg)
+
+            history = _session_mgr.get_or_create_conversation(session_id)
+            sys_msgs = [m for m in history if m.get("role") == "system"]
+            rec_msgs = [m for m in history if m.get("role") != "system"][-20:]
+
+            result_gen = adapter.chat(
+                messages=sys_msgs + rec_msgs,
+                user_query=choice_msg,
+                session_id=session_id,
+                tools_enabled=True,
+            )
+
+            final_reply = _collect_generator(
+                result_gen,
+                line_api=line_api,
+                chat_id=chat_id,
+                session_id=session_id,
+            )
+            return final_reply
+
+        except Exception as e:
+            logger.error(f"[LINE HitL] Choice execution failed: {e}", exc_info=True)
+            return f"❌ 方案 {selected} 執行失敗：{e}"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Type: "approval" — 工具需要確認才能執行
+    # ══════════════════════════════════════════════════════════════════════
     # 解析使用者回覆
     confirmation = parse_confirmation(user_text)
 
@@ -754,6 +862,30 @@ def _process_line_message(
             _chunked_data = None  # Will be set if file exceeds 15,000 chars
             if isinstance(event_msg, TextMessageContent):
                 user_input = extracted_text
+
+                # ── Phase 2: Smart Clarification Injection ────────────────
+                # 偵測「建立檔案/報告」意圖 → 注入釐清指令讓 LLM 語意分析
+                # 缺少的資訊（地區、範圍、格式等），LLM 會一次問完
+                if _detect_file_creation_intent(extracted_text):
+                    user_input = (
+                        f"[系統指令：使用者想要產出檔案或報告。在動手之前，請先分析需求是否完整。\n"
+                        f"需要確認的關鍵資訊：\n"
+                        f"- 主題的具體細節（如「天氣報告」→ 哪個地區？哪個時間範圍？）\n"
+                        f"- 想要什麼檔案格式\n"
+                        f"- 內容範圍與深度（簡要摘要 vs 詳細分析）\n\n"
+                        f"規則：\n"
+                        f"1. 如果缺少重要資訊，用簡潔友善的口吻「一次問完」所有問題\n"
+                        f"2. 如果資訊已經完整明確，直接開始執行，不要多問\n"
+                        f"3. 問問題時不要使用任何工具，純文字回覆即可\n"
+                        f"4. 問題格式範例：「想先確認幾個細節：1) 哪個地區？2) 什麼格式？3) 要多詳細？」\n"
+                        f"5. 嚴禁使用 [CHOICES] 格式，用自然語言編號列表即可]\n\n"
+                        f"{extracted_text}"
+                    )
+                    logger.info(
+                        f"[LINE HitL] Smart clarification injected for chat={chat_id}, "
+                        f"query='{extracted_text[:50]}'"
+                    )
+
                 # 如果有引用檔案，注入特別提示
                 if attached_file_path:
                     fname = os.path.basename(attached_file_path)
@@ -1025,6 +1157,50 @@ def _parse_command_prefix(user_input: str) -> tuple[str, bool]:
     return user_input, True  # 預設啟用 Tool Calling
 
 
+# ── Phase 2: Smart Clarification Detection ──────────────────────────────────
+
+# File/report creation intent keywords
+_FILE_INTENT_KW = [
+    "整理成文件", "做成文件", "產出文件", "製作文件",
+    "整理成檔案", "做成檔案", "產出檔案", "製作檔案",
+    "做一份報告", "做份報告", "產出報告", "製作報告", "生成報告",
+    "做一份文件", "建立文件", "建立檔案", "建立報告",
+    "寫一份報告", "寫一份文件",
+    "幫我做一份", "幫我製作", "幫我產出", "幫我建立",
+]
+
+# If user's request is already very detailed (has both format + topic details),
+# skip the clarification injection and let LLM execute directly.
+_COMPLETENESS_SIGNALS = [
+    "pdf", "docx", "doc", "word", "xlsx", "excel", "csv",
+    "txt", "pptx", "ppt", "md", "markdown", "json", "html",
+]
+
+
+def _detect_file_creation_intent(user_text: str) -> bool:
+    """
+    偵測使用者是否有建立檔案/報告的意圖，且需求可能不夠完整。
+
+    Returns True → 注入釐清指令讓 LLM 先語意分析再決定問或做
+    Returns False → 直接正常流程
+    """
+    # Must have file-creation intent
+    has_intent = any(kw in user_text for kw in _FILE_INTENT_KW)
+    if not has_intent:
+        return False
+
+    # If user already specified output format AND the text is long enough
+    # (likely detailed), skip clarification to avoid unnecessary questions
+    text_lower = user_text.lower()
+    has_format = any(kw in text_lower for kw in _COMPLETENESS_SIGNALS)
+    is_detailed = len(user_text) > 30  # Rough heuristic: short = likely vague
+
+    if has_format and is_detailed:
+        return False
+
+    return True
+
+
 def _collect_generator(
     result_gen,
     line_api=None,
@@ -1039,8 +1215,8 @@ def _collect_generator(
     確保使用者在多輪 Tool Calling 期間持續看到 "..." 動畫。
 
     Human-in-the-Loop:
-    當偵測到 requires_approval 時，儲存 pending state 並回傳
-    LINE 友好的確認訊息，讓使用者直接在 LINE 內回覆確認或取消。
+    - requires_approval → 儲存 approval pending state
+    - [CHOICES]...[/CHOICES] → 儲存 choice pending state，讓使用者選方案
 
     Generator 的 chunk 格式：
     - {"status": "streaming", "content": "<partial text>"}
@@ -1060,8 +1236,15 @@ def _collect_generator(
                 _send_loading_animation(line_api, chat_id, 60)
         elif status == "success":
             # success chunk 包含完整最終內容
-            final = chunk.get("content", "")
-            return final if final else accumulated
+            final = chunk.get("content", "") or accumulated
+
+            # ── Phase 2: Choice Detection ──────────────────────────
+            # 檢查 LLM 回覆是否包含 [CHOICES]...[/CHOICES] 結構
+            final = _maybe_save_choice_pending(
+                final, chat_id=chat_id, session_id=session_id, user_input=user_input,
+            )
+            return final
+
         elif status == "error":
             err_msg = chunk.get("message", "未知錯誤")
             logger.error(f"[LINE BG] Adapter error: {err_msg}")
@@ -1099,7 +1282,66 @@ def _collect_generator(
                 f"  「取消」→ 放棄執行"
             )
 
-    return accumulated if accumulated else "（AI 未產生回覆，請稍後再試）"
+    # streaming 結束但沒收到 success → 用 accumulated
+    if accumulated:
+        accumulated = _maybe_save_choice_pending(
+            accumulated, chat_id=chat_id, session_id=session_id, user_input=user_input,
+        )
+        return accumulated
+
+    return "（AI 未產生回覆，請稍後再試）"
+
+
+def _maybe_save_choice_pending(
+    llm_output: str,
+    chat_id: str = None,
+    session_id: str = None,
+    user_input: str = None,
+) -> str:
+    """
+    檢查 LLM 回覆是否包含 [CHOICES]...[/CHOICES] 區塊。
+    若有，解析選項、儲存 choice pending state，並回傳 LINE 友好格式。
+    若無，原文回傳。
+    """
+    if not chat_id or "[CHOICES]" not in llm_output:
+        return llm_output
+
+    try:
+        from server.core.pending_state import (
+            PendingStateManager, extract_choices, format_choices_for_line,
+        )
+        from main import PROJECT_ROOT
+
+        parsed = extract_choices(llm_output)
+        if parsed is None:
+            # 格式不正確，直接回傳原文（不阻斷流程）
+            return llm_output
+
+        preamble, options = parsed
+        logger.info(
+            f"[LINE HitL] Choice proposal detected: {len(options)} options "
+            f"for chat={chat_id}, keys={[o['key'] for o in options]}"
+        )
+
+        # 儲存 choice pending state
+        pending_mgr = PendingStateManager(str(PROJECT_ROOT / "workspace" / "sessions"))
+        pending_mgr.set_pending(
+            chat_id=chat_id,
+            pending_type="choice",
+            data={
+                "options": options,
+                "preamble": preamble,
+                "original_query": user_input or "",
+                "session_id": session_id or "",
+            },
+        )
+
+        # 回傳 LINE 友好格式（取代原始包含 [CHOICES] 標記的文字）
+        return format_choices_for_line(preamble, options)
+
+    except Exception as e:
+        logger.error(f"[LINE HitL] Choice parsing failed: {e}", exc_info=True)
+        return llm_output
 
 
 def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):

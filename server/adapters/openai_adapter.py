@@ -203,17 +203,33 @@ class OpenAIAdapter:
         MAX_ITERATIONS = 10  # Safety cap
 
         # Detect file-creation intent → force tool use via tool_choice
+        # NOTE: Only force when user has specified a concrete format.
+        #       Vague requests (e.g. "做一份報告") should NOT force tool use,
+        #       so the LLM can propose choices via [CHOICES] protocol first.
         _file_creation_keywords = [
             "製作", "建立", "產生", "生成", "建一個", "做一個", "寫一個",
             "存檔", "輸出檔", "下載", "匯出",
             "create", "generate", "make", "write", "export", "save as",
         ]
-        force_tool_use = (
+        # Format indicators: if user already specified a format, force tool use
+        _format_specified_keywords = [
+            "pdf", "docx", "doc", "word", "xlsx", "excel", "csv", "txt",
+            "pptx", "ppt", "md", "markdown", "json", "html",
+            ".pdf", ".docx", ".txt", ".md", ".xlsx", ".csv", ".pptx",
+        ]
+        has_creation_intent = (
             tools_enabled
             and tools
             and user_query
             and any(kw in user_query for kw in _file_creation_keywords)
         )
+        has_format_specified = (
+            user_query
+            and any(kw in user_query.lower() for kw in _format_specified_keywords)
+        )
+        # Only force tool use when BOTH creation intent AND format are specified
+        # Otherwise, let LLM decide (may propose choices first)
+        force_tool_use = has_creation_intent and has_format_specified
 
         logger.info(
             f"[OpenAI Adapter] Tools: {len(tools)} injected "
