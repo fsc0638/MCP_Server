@@ -1,0 +1,361 @@
+/* ============================================================
+   MCP Agent Console — UIUXPRO Theme Collection
+   六色主題系統：由淺到深
+   靈感來源：Crowz / Chaart Dashboard Design Language
+   用法：在 <html> 加上 data-theme="<id>" 即可切換
+
+   主題清單（由淺到深）：
+     01. pearl     珍珠晨光  bg:#FAF8F5  主:珊瑚橙  副:薄荷青
+     02. sand      暖沙午後  bg:#F5EDE0  主:赤陶橘  副:鼠尾草綠
+     03. mint      薄荷清風  bg:#EEF7F6  主:翡翠青  副:暖橙紅
+     04. lavender  薰衣草霧  bg:#F0EDF8  主:紫羅蘭  副:活力橙
+     05. twilight  暮色靛藍  bg:#1E1B3A  主:電光紫  副:珊瑚橙 ★dark
+     06. midnight  子夜深邃  bg:#0D0D1A  主:深空紫  副:電光青 ★dark
+   ============================================================ */
+
+
+/* ──────────────────────────────────────────────────────────
+   THEME 01 — 珍珠晨光 Pearl Morning（最淺）
+   Crowz 暖奶白底 × 珊瑚橙 × 薄荷青
+   ────────────────────────────────────────────────────────── */
+[data-theme="pearl"] {
+  /* ── Brand ── */
+  --kway-blue:        #E06B52;
+  --kway-blue-dark:   #C45540;
+  --kway-blue-mid:    #E88270;
+  --kway-blue-light:  #FAD9D2;
+  --kway-blue-pale:   #FEF3F0;
+  --kway-orange:      #4ECDC4;
+  --kway-orange-dark: #3AB8B0;
+  --kway-orange-light:#D5F5F3;
+
+  /* ── Background ── */
+  --bg-base:          #FAF8F5;
+  --bg-surface:       #FFFFFF;
+  --bg-card:          #FFFFFF;
+  --bg-sidebar:       #F7F3EF;
+  --bg-hover:         #FEF3F0;
+  --bg-active:        #FAD9D2;
+  --bg-input:         #FFFFFF;
+
+  /* ── Border ── */
+  --border-subtle:    rgba(224,107,82,0.10);
+  --border-medium:    rgba(224,107,82,0.18);
+  --border-focus:     rgba(224,107,82,0.55);
+
+  /* ── Text ── */
+  --text-primary:     #2D2A26;
+  --text-secondary:   #7A6E65;
+  --text-muted:       #B5ABA4;
+  --text-inverse:     #FFFFFF;
+
+  /* ── Shadow ── */
+  --shadow-sm:        0 1px 4px  rgba(224,107,82,0.08);
+  --shadow-md:        0 4px 16px rgba(224,107,82,0.10);
+  --shadow-lg:        0 8px 32px rgba(224,107,82,0.13);
+  --shadow-xl:        0 16px 48px rgba(224,107,82,0.16);
+  --shadow-orange:    0 4px 18px rgba(78,205,196,0.30);
+  --shadow-blue:      0 4px 18px rgba(224,107,82,0.30);
+
+  /* ── Scrollbar ── */
+  --scrollbar-thumb:  #FAD9D2;
+  --scrollbar-hover:  #E06B52;
+  --selection-bg:     rgba(224,107,82,0.18);
+}
+
+[data-theme="pearl"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
+[data-theme="pearl"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
+[data-theme="pearl"] ::selection                       { background: var(--selection-bg); }
+
+
+/* ──────────────────────────────────────────────────────────
+   THEME 02 — 暖沙午後 Warm Sand（淺）
+   沙棕暖調底 × 赤陶橘 × 鼠尾草綠
+   ────────────────────────────────────────────────────────── */
+[data-theme="sand"] {
+  /* ── Brand ── */
+  --kway-blue:        #C97B4B;
+  --kway-blue-dark:   #A86338;
+  --kway-blue-mid:    #D9936A;
+  --kway-blue-light:  #F2D4BE;
+  --kway-blue-pale:   #FBF0E6;
+  --kway-orange:      #5BAA9F;
+  --kway-orange-dark: #458F85;
+  --kway-orange-light:#C8E8E5;
+
+  /* ── Background ── */
+  --bg-base:          #F5EDE0;
+  --bg-surface:       #FEFAF5;
+  --bg-card:          #FEFAF5;
+  --bg-sidebar:       #EFE3D2;
+  --bg-hover:         #FBF0E6;
+  --bg-active:        #F2D4BE;
+  --bg-input:         #FEFAF5;
+
+  /* ── Border ── */
+  --border-subtle:    rgba(201,123,75,0.10);
+  --border-medium:    rgba(201,123,75,0.18);
+  --border-focus:     rgba(201,123,75,0.55);
+
+  /* ── Text ── */
+  --text-primary:     #3D2B1F;
+  --text-secondary:   #7A5A46;
+  --text-muted:       #B59A86;
+  --text-inverse:     #FFFFFF;
+
+  /* ── Shadow ── */
+  --shadow-sm:        0 1px 4px  rgba(201,123,75,0.08);
+  --shadow-md:        0 4px 16px rgba(201,123,75,0.10);
+  --shadow-lg:        0 8px 32px rgba(201,123,75,0.13);
+  --shadow-xl:        0 16px 48px rgba(201,123,75,0.16);
+  --shadow-orange:    0 4px 18px rgba(91,170,159,0.30);
+  --shadow-blue:      0 4px 18px rgba(201,123,75,0.30);
+
+  /* ── Scrollbar ── */
+  --scrollbar-thumb:  #F2D4BE;
+  --scrollbar-hover:  #C97B4B;
+  --selection-bg:     rgba(201,123,75,0.18);
+}
+
+[data-theme="sand"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
+[data-theme="sand"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
+[data-theme="sand"] ::selection                       { background: var(--selection-bg); }
+
+
+/* ──────────────────────────────────────────────────────────
+   THEME 03 — 薄荷清風 Mint Breeze（中淺）
+   薄荷冰綠底 × 翡翠青 × 暖橙紅
+   ────────────────────────────────────────────────────────── */
+[data-theme="mint"] {
+  /* ── Brand ── */
+  --kway-blue:        #2A9D8F;
+  --kway-blue-dark:   #1D7A6F;
+  --kway-blue-mid:    #3DB8AA;
+  --kway-blue-light:  #B2E5DF;
+  --kway-blue-pale:   #E8F7F5;
+  --kway-orange:      #E76F51;
+  --kway-orange-dark: #C85A3E;
+  --kway-orange-light:#FAD5CC;
+
+  /* ── Background ── */
+  --bg-base:          #EEF7F6;
+  --bg-surface:       #FFFFFF;
+  --bg-card:          #FFFFFF;
+  --bg-sidebar:       #E2F2EF;
+  --bg-hover:         #E8F7F5;
+  --bg-active:        #B2E5DF;
+  --bg-input:         #FFFFFF;
+
+  /* ── Border ── */
+  --border-subtle:    rgba(42,157,143,0.10);
+  --border-medium:    rgba(42,157,143,0.18);
+  --border-focus:     rgba(42,157,143,0.55);
+
+  /* ── Text ── */
+  --text-primary:     #1D3D38;
+  --text-secondary:   #4A7A74;
+  --text-muted:       #8ABAB5;
+  --text-inverse:     #FFFFFF;
+
+  /* ── Shadow ── */
+  --shadow-sm:        0 1px 4px  rgba(42,157,143,0.08);
+  --shadow-md:        0 4px 16px rgba(42,157,143,0.10);
+  --shadow-lg:        0 8px 32px rgba(42,157,143,0.13);
+  --shadow-xl:        0 16px 48px rgba(42,157,143,0.16);
+  --shadow-orange:    0 4px 18px rgba(231,111,81,0.30);
+  --shadow-blue:      0 4px 18px rgba(42,157,143,0.30);
+
+  /* ── Scrollbar ── */
+  --scrollbar-thumb:  #B2E5DF;
+  --scrollbar-hover:  #2A9D8F;
+  --selection-bg:     rgba(42,157,143,0.18);
+}
+
+[data-theme="mint"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
+[data-theme="mint"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
+[data-theme="mint"] ::selection                       { background: var(--selection-bg); }
+
+
+/* ──────────────────────────────────────────────────────────
+   THEME 04 — 薰衣草霧 Lavender Mist（中）
+   淡紫灰白底 × 紫羅蘭 × 活力橙
+   靈感：Chaart 紫色專案卡
+   ────────────────────────────────────────────────────────── */
+[data-theme="lavender"] {
+  /* ── Brand ── */
+  --kway-blue:        #7C5CBF;
+  --kway-blue-dark:   #6244A8;
+  --kway-blue-mid:    #9370D1;
+  --kway-blue-light:  #D8CAEE;
+  --kway-blue-pale:   #F0EAF9;
+  --kway-orange:      #FF7043;
+  --kway-orange-dark: #E5562C;
+  --kway-orange-light:#FFCFC3;
+
+  /* ── Background ── */
+  --bg-base:          #F0EDF8;
+  --bg-surface:       #FFFFFF;
+  --bg-card:          #FFFFFF;
+  --bg-sidebar:       #EAE4F5;
+  --bg-hover:         #F0EAF9;
+  --bg-active:        #D8CAEE;
+  --bg-input:         #FFFFFF;
+
+  /* ── Border ── */
+  --border-subtle:    rgba(124,92,191,0.10);
+  --border-medium:    rgba(124,92,191,0.18);
+  --border-focus:     rgba(124,92,191,0.55);
+
+  /* ── Text ── */
+  --text-primary:     #2D1B69;
+  --text-secondary:   #6B5B9B;
+  --text-muted:       #A898CC;
+  --text-inverse:     #FFFFFF;
+
+  /* ── Shadow ── */
+  --shadow-sm:        0 1px 4px  rgba(124,92,191,0.08);
+  --shadow-md:        0 4px 16px rgba(124,92,191,0.10);
+  --shadow-lg:        0 8px 32px rgba(124,92,191,0.13);
+  --shadow-xl:        0 16px 48px rgba(124,92,191,0.16);
+  --shadow-orange:    0 4px 18px rgba(255,112,67,0.30);
+  --shadow-blue:      0 4px 18px rgba(124,92,191,0.30);
+
+  /* ── Scrollbar ── */
+  --scrollbar-thumb:  #D8CAEE;
+  --scrollbar-hover:  #7C5CBF;
+  --selection-bg:     rgba(124,92,191,0.18);
+}
+
+[data-theme="lavender"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
+[data-theme="lavender"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
+[data-theme="lavender"] ::selection                       { background: var(--selection-bg); }
+
+
+/* ──────────────────────────────────────────────────────────
+   THEME 05 — 暮色靛藍 Twilight Indigo（中深）★ Dark
+   深靛紫夜底 × 電光紫 × 珊瑚橙
+   ────────────────────────────────────────────────────────── */
+[data-theme="twilight"] {
+  color-scheme: dark;
+
+  /* ── Brand ── */
+  --kway-blue:        #7B6EFF;
+  --kway-blue-dark:   #5E50E0;
+  --kway-blue-mid:    #9389FF;
+  --kway-blue-light:  rgba(123,110,255,0.25);
+  --kway-blue-pale:   rgba(123,110,255,0.12);
+  --kway-orange:      #FF7F5C;
+  --kway-orange-dark: #E05A38;
+  --kway-orange-light:rgba(255,127,92,0.20);
+
+  /* ── Background ── */
+  --bg-base:          #1E1B3A;
+  --bg-surface:       #27244E;
+  --bg-card:          #252245;
+  --bg-sidebar:       #211E44;
+  --bg-hover:         rgba(123,110,255,0.12);
+  --bg-active:        rgba(123,110,255,0.25);
+  --bg-input:         #2D2A58;
+
+  /* ── Border ── */
+  --border-subtle:    rgba(123,110,255,0.15);
+  --border-medium:    rgba(123,110,255,0.25);
+  --border-focus:     rgba(123,110,255,0.65);
+
+  /* ── Text ── */
+  --text-primary:     #E8E6FF;
+  --text-secondary:   #A09EC0;
+  --text-muted:       #6B6990;
+  --text-inverse:     #1E1B3A;
+
+  /* ── Shadow ── */
+  --shadow-sm:        0 1px 4px  rgba(0,0,0,0.30);
+  --shadow-md:        0 4px 16px rgba(0,0,0,0.35);
+  --shadow-lg:        0 8px 32px rgba(0,0,0,0.40);
+  --shadow-xl:        0 16px 48px rgba(0,0,0,0.55);
+  --shadow-orange:    0 4px 18px rgba(255,127,92,0.35);
+  --shadow-blue:      0 4px 18px rgba(123,110,255,0.40);
+
+  /* ── Scrollbar ── */
+  --scrollbar-thumb:  rgba(123,110,255,0.30);
+  --scrollbar-hover:  #7B6EFF;
+  --selection-bg:     rgba(123,110,255,0.28);
+}
+
+[data-theme="twilight"] ::-webkit-scrollbar-track        { background: #1E1B3A; }
+[data-theme="twilight"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
+[data-theme="twilight"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
+[data-theme="twilight"] ::selection                       { background: var(--selection-bg); }
+
+
+/* ──────────────────────────────────────────────────────────
+   THEME 06 — 子夜深邃 Midnight Deep（最深）★ Dark
+   純粹黑夜底 × 深空紫 × 電光青
+   靈感：Chaart 深色模式 + 深紫卡片
+   ────────────────────────────────────────────────────────── */
+[data-theme="midnight"] {
+  color-scheme: dark;
+
+  /* ── Brand ── */
+  --kway-blue:        #6B4EFF;
+  --kway-blue-dark:   #4C2EE0;
+  --kway-blue-mid:    #8468FF;
+  --kway-blue-light:  rgba(107,78,255,0.22);
+  --kway-blue-pale:   rgba(107,78,255,0.10);
+  --kway-orange:      #4ECDC4;
+  --kway-orange-dark: #38B8B0;
+  --kway-orange-light:rgba(78,205,196,0.18);
+
+  /* ── Background ── */
+  --bg-base:          #0D0D1A;
+  --bg-surface:       #14142B;
+  --bg-card:          #161630;
+  --bg-sidebar:       #111124;
+  --bg-hover:         rgba(107,78,255,0.10);
+  --bg-active:        rgba(107,78,255,0.22);
+  --bg-input:         #1C1C38;
+
+  /* ── Border ── */
+  --border-subtle:    rgba(107,78,255,0.15);
+  --border-medium:    rgba(107,78,255,0.25);
+  --border-focus:     rgba(107,78,255,0.65);
+
+  /* ── Text ── */
+  --text-primary:     #F0EEFF;
+  --text-secondary:   #9490CC;
+  --text-muted:       #5C5990;
+  --text-inverse:     #0D0D1A;
+
+  /* ── Shadow ── */
+  --shadow-sm:        0 1px 4px  rgba(0,0,0,0.40);
+  --shadow-md:        0 4px 16px rgba(0,0,0,0.50);
+  --shadow-lg:        0 8px 32px rgba(0,0,0,0.60);
+  --shadow-xl:        0 16px 48px rgba(0,0,0,0.75);
+  --shadow-orange:    0 4px 18px rgba(78,205,196,0.35);
+  --shadow-blue:      0 4px 18px rgba(107,78,255,0.45);
+
+  /* ── Scrollbar ── */
+  --scrollbar-thumb:  rgba(107,78,255,0.30);
+  --scrollbar-hover:  #6B4EFF;
+  --selection-bg:     rgba(107,78,255,0.28);
+}
+
+[data-theme="midnight"] ::-webkit-scrollbar-track        { background: #0D0D1A; }
+[data-theme="midnight"] ::-webkit-scrollbar-thumb        { background: var(--scrollbar-thumb); }
+[data-theme="midnight"] ::-webkit-scrollbar-thumb:hover  { background: var(--scrollbar-hover); }
+[data-theme="midnight"] ::selection                       { background: var(--selection-bg); }
+/* Shared theme tokens for all pages.
+   Page-level CSS should consume these vars and avoid redefining color palettes. */
+:root {
+  --accent-teal:      #0EA5A0;
+  --accent-teal-pale: #E6F9F8;
+  --accent-coral:     #F05252;
+  --accent-yellow:    #F59E0B;
+  --accent-violet:    #7C3AED;
+
+  --shadow-clay-sm:   0 2px 8px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.80);
+  --shadow-clay-md:   0 6px 20px rgba(0,0,0,0.10), inset 0 1px 0 rgba(255,255,255,0.70);
+  --shadow-clay-lg:   0 12px 32px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.60);
+
+  --selection-bg:     rgba(24,64,155,0.20);
+}

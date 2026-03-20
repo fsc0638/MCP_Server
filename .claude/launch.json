@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "MCP Agent Console (Dev)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["main.py"],
+      "port": 8500
+    },
+    {
+      "name": "MCP Agent Console (Hot Reload)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "uvicorn", "server.app:app", "--port", "8500", "--reload"],
+      "port": 8500
+    },
+    {
+      "name": "MCP Agent Console (Docker)",
+      "runtimeExecutable": "docker",
+      "runtimeArgs": ["compose", "up", "--build"],
+      "port": 6888
+    }
+  ]
+}

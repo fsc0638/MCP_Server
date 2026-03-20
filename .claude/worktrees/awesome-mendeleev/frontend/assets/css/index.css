@@ -1,0 +1,159 @@
+/* ============================================================
+   K WAY AgentPortal — Welcome Page (index)
+   Page prefix: page-welcome-
+   ============================================================ */
+
+/* ── page-welcome (Root layout) ─────────────────────────────── */
+.page-welcome {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+/* ── page-welcome-brand (Left brand panel) ──────────────────── */
+.page-welcome-brand {
+  position: relative;
+  background: var(--kway-blue);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 48px 56px;
+}
+
+.page-welcome-brand-grid {
+  position: absolute; inset: 0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.page-welcome-brand-circle {
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.page-welcome-brand-circle--lg { width: 480px; height: 480px; bottom: -160px; right: -120px; }
+.page-welcome-brand-circle--sm { width: 280px; height: 280px; top: -60px; left: -80px; }
+.page-welcome-brand-circle--accent { width: 160px; height: 160px; top: 40%; right: 10%; border-color: rgba(246,131,0,0.22); }
+
+.page-welcome-brand-bar {
+  position: absolute; top: 0; left: 0; width: 4px; height: 100%;
+  background: linear-gradient(180deg, var(--kway-orange) 0%, rgba(246,131,0,0.05) 100%);
+}
+
+/* Logo area */
+.page-welcome-brand-header { position: relative; z-index: 2; }
+.page-welcome-brand-logo { display: flex; align-items: center; gap: 12px; }
+.page-welcome-brand-logo-icon {
+  width: 44px; height: 44px; border-radius: 10px;
+  background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2);
+  display: flex; align-items: center; justify-content: center;
+  position: relative; overflow: hidden;
+}
+.page-welcome-brand-logo-text { color: #fff; }
+.page-welcome-brand-logo-text .page-welcome-brand-name { font-size: 1.05rem; font-weight: 700; display: block; }
+.page-welcome-brand-logo-text .page-welcome-brand-tagline { font-size: 0.68rem; opacity: 0.6; letter-spacing: 0.08em; text-transform: uppercase; }
+
+/* Center content */
+.page-welcome-brand-body {
+  position: relative; z-index: 2; flex: 1;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.page-welcome-brand-headline {
+  font-size: 2.3rem; font-weight: 800; color: #fff;
+  line-height: 1.25; letter-spacing: -0.025em; margin-bottom: 18px;
+}
+.page-welcome-brand-headline .page-welcome-brand-highlight { color: var(--kway-orange); }
+.page-welcome-brand-desc {
+  font-size: 0.92rem; color: rgba(255,255,255,0.65);
+  line-height: 1.78; max-width: 360px; margin-bottom: 36px;
+}
+.page-welcome-brand-chips { display: flex; flex-wrap: wrap; gap: 9px; }
+.page-welcome-brand-chip {
+  display: flex; align-items: center; gap: 7px; padding: 7px 13px;
+  background: rgba(255,255,255,0.09); border: 1px solid rgba(255,255,255,0.14);
+  border-radius: var(--radius-full); font-size: 0.79rem; color: rgba(255,255,255,0.82); font-weight: 500;
+}
+.page-welcome-brand-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--kway-orange); flex-shrink: 0; }
+
+/* Stats footer */
+.page-welcome-brand-stats {
+  position: relative; z-index: 2; display: flex;
+  border-top: 1px solid rgba(255,255,255,0.12); padding-top: 26px;
+}
+.page-welcome-brand-stat { flex: 1; text-align: center; padding: 0 10px; border-right: 1px solid rgba(255,255,255,0.1); }
+.page-welcome-brand-stat:last-child { border-right: none; }
+.page-welcome-brand-stat-value { font-size: 1.35rem; font-weight: 800; color: #fff; letter-spacing: -0.03em; }
+.page-welcome-brand-stat-label { font-size: 0.68rem; color: rgba(255,255,255,0.48); margin-top: 3px; }
+
+/* ── page-welcome-content (Right content panel) ─────────────── */
+.page-welcome-content {
+  display: flex; flex-direction: column; justify-content: center;
+  padding: 64px 72px; background: var(--bg-surface);
+}
+.page-welcome-content-inner { max-width: 420px; width: 100%; margin: 0 auto; }
+
+.page-welcome-eyebrow { display: flex; align-items: center; gap: 10px; margin-bottom: 26px; }
+.page-welcome-eyebrow-line { width: 24px; height: 2px; background: var(--kway-orange); border-radius: 2px; }
+.page-welcome-eyebrow-text {
+  font-size: 0.73rem; font-weight: 700; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--kway-orange-dark);
+}
+
+.page-welcome-title {
+  font-size: 2.1rem; font-weight: 800; line-height: 1.2;
+  letter-spacing: -0.025em; color: var(--text-primary); margin-bottom: 12px;
+}
+.page-welcome-title .page-welcome-title-brand { color: var(--kway-blue); }
+.page-welcome-desc { font-size: 0.90rem; color: var(--text-secondary); line-height: 1.72; margin-bottom: 36px; }
+
+.page-welcome-actions { display: flex; flex-direction: column; gap: 11px; }
+.page-welcome-actions .btn { width: 100%; padding: 14px 24px; font-size: 0.96rem; }
+
+.page-welcome-divider {
+  display: flex; align-items: center; gap: 12px;
+  color: var(--text-muted); font-size: 0.79rem;
+}
+.page-welcome-divider::before,
+.page-welcome-divider::after { content: ''; flex: 1; height: 1px; background: var(--border-subtle); }
+
+.page-welcome-sso-btn {
+  width: 100%; padding: 12px 20px; background: var(--bg-sidebar);
+  border: 1.5px solid var(--border-medium); border-radius: var(--radius-md);
+  color: var(--text-secondary); font-size: 0.87rem; font-weight: 500;
+  cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px;
+  transition: var(--transition); font-family: var(--font-sans);
+}
+.page-welcome-sso-btn:hover {
+  background: var(--bg-hover); color: var(--kway-blue);
+  border-color: rgba(24,64,155,0.3);
+}
+
+/* Feature values grid */
+.page-welcome-values { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 36px; }
+.page-welcome-value-item {
+  text-align: center; padding: 14px 8px; background: var(--bg-sidebar);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+}
+.page-welcome-value-icon {
+  width: 32px; height: 32px; border-radius: 8px;
+  background: var(--kway-blue-pale); border: 1px solid var(--kway-blue-light);
+  display: flex; align-items: center; justify-content: center; margin: 0 auto 8px;
+}
+.page-welcome-value-label { font-size: 0.78rem; font-weight: 600; color: var(--kway-blue); margin-bottom: 2px; }
+.page-welcome-value-sub { font-size: 0.68rem; color: var(--text-muted); }
+
+/* Footer note */
+.page-welcome-footer { margin-top: 30px; font-size: 0.76rem; color: var(--text-muted); line-height: 1.65; }
+.page-welcome-footer a { color: var(--kway-blue); text-decoration: none; }
+.page-welcome-footer a:hover { text-decoration: underline; }
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 960px) {
+  .page-welcome { grid-template-columns: 1fr; }
+  .page-welcome-brand { display: none; }
+  .page-welcome-content { padding: 48px 32px; }
+  .page-welcome-content-inner { max-width: 100%; }
+}

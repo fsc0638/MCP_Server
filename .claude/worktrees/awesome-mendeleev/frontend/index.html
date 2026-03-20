@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>K WAY AgentPortal</title>
+  <!-- Keep this root entry for /ui/ compatibility.
+       StaticFiles(html=True) resolves /ui/ to frontend/index.html,
+       then redirects to pages/index.html for the multi-page structure. -->
+  <meta http-equiv="refresh" content="0; url=pages/index.html" />
+</head>
+<body>
+  <script>
+    window.location.replace("pages/index.html");
+  </script>
+</body>
+</html>
