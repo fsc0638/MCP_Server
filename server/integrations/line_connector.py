@@ -407,18 +407,15 @@ def _send_status_push(line_api, chat_id: str, text: str):
 def _extract_file_content(file_path: str) -> tuple:
     """
     伺服器端預提取文件全文，讓 LLM 直接進行語意分析。
+    支援多重 fallback：pdfplumber → pypdf、python-docx → docx2txt
     Returns: (full_text: str, error_message: str | None)
     """
     lower = file_path.lower()
     try:
         if lower.endswith('.docx'):
-            from docx import Document
-            doc = Document(file_path)
-            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            text = _extract_docx(file_path)
         elif lower.endswith('.pdf'):
-            import pdfplumber
-            with pdfplumber.open(file_path) as pdf:
-                text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            text = _extract_pdf(file_path)
         elif lower.endswith(('.xlsx', '.xls')):
             import pandas as pd
             df = pd.read_excel(file_path)
@@ -435,6 +432,74 @@ def _extract_file_content(file_path: str) -> tuple:
     except Exception as e:
         logger.error(f"[LINE] File content extraction failed: {file_path} → {e}")
         return "", str(e)
+
+
+def _extract_pdf(file_path: str) -> str:
+    """PDF 文字提取，依序嘗試 pdfplumber → pypdf"""
+    # 優先使用 pdfplumber（表格 / 複雜版面效果最佳）
+    try:
+        import pdfplumber
+        with pdfplumber.open(file_path) as pdf:
+            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        if text.strip():
+            logger.info("[LINE] PDF extracted via pdfplumber")
+            return text
+    except ImportError:
+        logger.warning("[LINE] pdfplumber not installed, falling back to pypdf")
+    except Exception as e:
+        logger.warning(f"[LINE] pdfplumber failed ({e}), falling back to pypdf")
+
+    # Fallback: pypdf（requirements.txt 中已列出）
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(file_path)
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        if text.strip():
+            logger.info("[LINE] PDF extracted via pypdf")
+            return text
+    except ImportError:
+        logger.warning("[LINE] pypdf not installed either")
+    except Exception as e:
+        logger.warning(f"[LINE] pypdf also failed: {e}")
+
+    raise RuntimeError("無法提取 PDF 內容：請確認伺服器已安裝 pdfplumber 或 pypdf")
+
+
+def _extract_docx(file_path: str) -> str:
+    """DOCX 文字提取，依序嘗試 python-docx → docx2txt"""
+    # 優先使用 python-docx（結構化段落提取）
+    try:
+        from docx import Document
+        doc = Document(file_path)
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        # 同時提取表格內容
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                if row_text:
+                    paragraphs.append(row_text)
+        text = "\n".join(paragraphs)
+        if text.strip():
+            logger.info("[LINE] DOCX extracted via python-docx")
+            return text
+    except ImportError:
+        logger.warning("[LINE] python-docx not installed, falling back to docx2txt")
+    except Exception as e:
+        logger.warning(f"[LINE] python-docx failed ({e}), falling back to docx2txt")
+
+    # Fallback: docx2txt（requirements.txt 中已列出）
+    try:
+        import docx2txt
+        text = docx2txt.process(file_path)
+        if text and text.strip():
+            logger.info("[LINE] DOCX extracted via docx2txt")
+            return text
+    except ImportError:
+        logger.warning("[LINE] docx2txt not installed either")
+    except Exception as e:
+        logger.warning(f"[LINE] docx2txt also failed: {e}")
+
+    raise RuntimeError("無法提取 DOCX 內容：請確認伺服器已安裝 python-docx 或 docx2txt")
 
 
 # ── Background Processing Function ────────────────────────────────────────────
