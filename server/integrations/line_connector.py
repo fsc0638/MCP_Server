@@ -402,6 +402,41 @@ def _send_status_push(line_api, chat_id: str, text: str):
         logger.warning(f"[LINE] Status push failed: {e}")
 
 
+# ── Server-side File Content Extraction ───────────────────────────────────────
+
+def _extract_file_content(file_path: str) -> tuple:
+    """
+    伺服器端預提取文件全文，讓 LLM 直接進行語意分析。
+    Returns: (full_text: str, error_message: str | None)
+    """
+    lower = file_path.lower()
+    try:
+        if lower.endswith('.docx'):
+            from docx import Document
+            doc = Document(file_path)
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        elif lower.endswith('.pdf'):
+            import pdfplumber
+            with pdfplumber.open(file_path) as pdf:
+                text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        elif lower.endswith(('.xlsx', '.xls')):
+            import pandas as pd
+            df = pd.read_excel(file_path)
+            text = df.to_markdown(index=False)
+        elif lower.endswith('.csv'):
+            import pandas as pd
+            df = pd.read_csv(file_path)
+            text = df.to_markdown(index=False)
+        else:
+            # .txt, .md, .log, .json, .py, .js, .xml, etc.
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        return text.strip(), None
+    except Exception as e:
+        logger.error(f"[LINE] File content extraction failed: {file_path} → {e}")
+        return "", str(e)
+
+
 # ── Background Processing Function ────────────────────────────────────────────
 
 def _preprocess_image(file_path: str) -> str:
@@ -525,6 +560,7 @@ def _process_line_message(
             import os
 
             attached_file_path = quoted_file_path
+            _chunked_data = None  # Will be set if file exceeds 15,000 chars
             if isinstance(event_msg, TextMessageContent):
                 user_input = extracted_text
                 # 如果有引用檔案，注入特別提示
@@ -623,15 +659,30 @@ def _process_line_message(
                             attached_file_path = _preprocess_image(attached_file_path)
                             user_input = f"[系統通知：使用者傳送了一張高畫質圖片 {filename}，已轉為 {os.path.basename(attached_file_path)} 供您檢視]"
                         else:
-                            abs_path = os.path.abspath(attached_file_path)
-                            # Phase 2: Knowledge Base Document Instruction
-                            user_input = (
-                                f"[系統通知：使用者上傳了文件 {filename}。檔案絕對路徑：{abs_path}。\n\n"
-                                f"重大提示：\n"
-                                f"1. 先呼叫對應的指令手冊（manual）『獲取』處理程式碼範例。\n"
-                                f"2. **得到手冊後，下一輪絕對禁止再次呼叫該手冊。** 你必須立即切換並呼叫 `mcp-python-executor` 撰寫並執行分析程式碼。\n"
-                                f"3. 環境已預裝 pypdf, pdfplumber, pandas, python-docx。請直接基於手冊範例進行分析。]"
-                            )
+                            # Server-side extraction: extract text content before sending to LLM
+                            extracted_text, extract_err = _extract_file_content(attached_file_path)
+
+                            if extract_err:
+                                user_input = (
+                                    f"[系統通知：使用者上傳了文件 {filename}，但伺服器無法提取內容。\n"
+                                    f"錯誤訊息：{extract_err}\n"
+                                    f"請告知使用者檔案可能已損壞、加密或格式不支援。]"
+                                )
+                            elif len(extracted_text) <= 15000:
+                                # Single-pass mode: full content fits in one message
+                                user_input = (
+                                    f"[系統通知：使用者上傳了文件 {filename}。以下是完整內容：]\n\n"
+                                    f"{extracted_text}\n\n"
+                                    f"[請根據以上文件內容，直接進行分析、總結或處理使用者的需求。]"
+                                )
+                            else:
+                                # Chunked mode: will be handled after session init
+                                # Store chunks in a temporary variable for later processing
+                                _chunked_data = {
+                                    "filename": filename,
+                                    "chunks": [extracted_text[i:i+15000] for i in range(0, len(extracted_text), 15000)]
+                                }
+                                user_input = None  # Will be set during chunked processing
 
                     # Re-trigger loading animation after download (timer may have expired)
                     _send_loading_animation(line_api, chat_id, 60)
@@ -653,7 +704,7 @@ def _process_line_message(
             # 注意：為了解決日期幻覺，偵測跨日對話並強制重置 OpenAI 狀態
             from datetime import datetime
             today_str = datetime.now().strftime("%Y-%m-%d")
-            
+
             # Check for new day or new session in tracker
             if _session_days.get(session_id) != today_str:
                 logger.info(f"[LINE BG] New day/session detected for {session_id} ({today_str}). Resetting OpenAI state.")
@@ -662,30 +713,78 @@ def _process_line_message(
 
             _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
             _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
-    
-            # 2. 追加使用者訊息至 Session
-            _session_mgr.append_message(session_id, "user", user_input)
 
-            # 3. 解析可能的指令前綴，動態切換模式
-            actual_input, execute_mode = _parse_command_prefix(user_input)
-
-            # 4. 初始化 Adapter（使用預設 model，可依需求選 Gemini/Claude）
+            # 2. 初始化 Adapter
             uma = get_uma_instance()
             adapter = OpenAIAdapter(uma=uma)
 
             if not adapter.is_available:
                 final_reply = "⚠️ AI 服務暫時無法使用，請確認 OPENAI_API_KEY 設定。"
             else:
-                # 擷取 System Prompt + 最近對話歷史
-                # truncation="auto" 已在 Adapter 層防護 context overflow，
-                # 此處放寬至 20 條訊息 (10 輪) 以提供更豐富的上下文
+                # ── Chunked Memory Processing ─────────────────────────────
+                # For large files: process chunks sequentially, LLM summarizes
+                # each chunk, then produces a final consolidated analysis.
+                if user_input is None and _chunked_data is not None:
+                    chunks = _chunked_data["chunks"]
+                    fname = _chunked_data["filename"]
+                    total = len(chunks)
+                    logger.info(f"[LINE BG] Chunked mode: {fname} → {total} chunks")
+
+                    for idx, chunk in enumerate(chunks):
+                        part = idx + 1
+                        if part < total:
+                            # Intermediate chunk: ask LLM for concise summary
+                            chunk_msg = (
+                                f"[文件分段 {part}/{total}] 以下是 {fname} 的第 {part} 段內容：\n\n"
+                                f"{chunk}\n\n"
+                                f"[指令：閱讀並記住此段重點，以 500 字以內的摘要回覆。"
+                                f"不要做最終分析，後續還有更多段落。]"
+                            )
+                            _session_mgr.append_message(session_id, "user", chunk_msg)
+
+                            history = _session_mgr.get_or_create_conversation(session_id)
+                            sys_msgs = [m for m in history if m.get("role") == "system"]
+                            rec_msgs = [m for m in history if m.get("role") != "system"][-20:]
+
+                            result_gen = adapter.chat(
+                                messages=sys_msgs + rec_msgs,
+                                user_query=chunk_msg,
+                                session_id=session_id,
+                                tools_enabled=False  # No tool calls for intermediate chunks
+                            )
+                            summary = _collect_generator(result_gen)
+                            _session_mgr.append_message(session_id, "assistant", summary)
+                            logger.info(f"[LINE BG] Chunk {part}/{total} summarized ({len(summary)} chars)")
+                            _send_loading_animation(line_api, chat_id, 60)
+                        else:
+                            # Final chunk: ask LLM to synthesize all
+                            warning = ""
+                            if total > 6:
+                                warning = "\n⚠️ 文件過長，分析基於分段摘要，細節可能有遺漏。"
+                            user_input = (
+                                f"[文件分段 {part}/{total} - 最終段] 以下是 {fname} 的最後一段內容：\n\n"
+                                f"{chunk}\n\n"
+                                f"[指令：這是文件的最後一段。請結合你先前記住的所有段落摘要，"
+                                f"產出一份完整、深度的分析報告。{warning}]"
+                            )
+
+                # ── Normal Processing ─────────────────────────────────────
+                # Safety: if user_input is still None after chunked processing, abort gracefully
+                if user_input is None:
+                    logger.error(f"[LINE BG] user_input is None after processing for session={session_id}")
+                    final_reply = "⚠️ 檔案處理異常，請重新上傳。"
+                    _send_line_reply(line_api, reply_token, chat_id, final_reply)
+                    return
+
+                # Append user message and run LLM
+                _session_mgr.append_message(session_id, "user", user_input)
+                actual_input, execute_mode = _parse_command_prefix(user_input)
+
                 history = _session_mgr.get_or_create_conversation(session_id)
                 system_msgs = [m for m in history if m.get("role") == "system"]
                 recent_msgs = [m for m in history if m.get("role") != "system"][-20:]
                 truncated_history = system_msgs + recent_msgs
 
-                # 傳入截斷的 history 副本，避免 generator 消費途中 list 被外部修改
-                # execute_mode=False (/chat 模式) 時跳過 Tool Schema 注入，大幅節省 token
                 result_gen = adapter.chat(
                     messages=truncated_history,
                     user_query=actual_input,
@@ -694,8 +793,7 @@ def _process_line_message(
                     tools_enabled=execute_mode
                 )
 
-                # 5. 消費同步 Generator，組裝完整回覆字串
-                #    傳入 line_api/chat_id 以便在 Tool Call 時刷新 loading 動畫
+                # Consume generator, assemble final reply
                 final_reply = _collect_generator(result_gen, line_api=line_api, chat_id=chat_id)
 
             # 6. 截斷至 LINE 字元上限
