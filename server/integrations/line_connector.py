@@ -575,6 +575,116 @@ def _download_sticker_image(sticker_id: str, uploads_dir: str, resource_type: st
     return None
 
 
+# ── Phase 8: Human-in-the-Loop — Pending State Handler ────────────────────────
+
+def _handle_pending_state(
+    line_api,
+    chat_id: str,
+    session_id: str,
+    user_text: str,
+) -> str | None:
+    """
+    檢查聊天是否有待確認的 pending state。
+    若使用者回覆的是確認/取消指令，處理 pending 操作並回傳回覆文字。
+    若無 pending state 或使用者輸入不是確認指令，回傳 None（繼續正常流程）。
+
+    Returns:
+        str   → 已處理，回傳此文字給使用者
+        None  → 無 pending 或非確認指令，繼續正常訊息處理
+    """
+    from server.core.pending_state import PendingStateManager, parse_confirmation
+    from main import PROJECT_ROOT
+
+    pending_mgr = PendingStateManager(str(PROJECT_ROOT / "workspace" / "sessions"))
+    pending = pending_mgr.get_pending(chat_id)
+
+    if pending is None:
+        return None  # 無待確認 → 正常流程
+
+    # 解析使用者回覆
+    confirmation = parse_confirmation(user_text)
+
+    if confirmation is None:
+        # 使用者輸入不像確認/取消 → 清除過期 state，進入正常流程
+        # 這讓使用者可以「忽略」待確認而繼續聊天
+        pending_mgr.clear_pending(chat_id)
+        logger.info(f"[LINE HitL] Pending cleared: user sent unrelated message for chat={chat_id}")
+        return None
+
+    # ── 使用者選擇「取消」 ──
+    if confirmation == "reject":
+        tool_name = pending.get("tool_name", "未知工具")
+        pending_mgr.clear_pending(chat_id)
+        logger.info(f"[LINE HitL] User rejected pending tool={tool_name} for chat={chat_id}")
+        return f"✅ 已取消 `{tool_name}` 的執行。有其他需要可以繼續告訴我！"
+
+    # ── 使用者選擇「確認」→ 執行待確認的工具 ──
+    tool_name = pending.get("tool_name", "")
+    tool_args = pending.get("tool_args", {})
+    logger.info(f"[LINE HitL] User approved pending tool={tool_name} for chat={chat_id}")
+
+    # 清除 pending（無論執行成功與否都不應重複執行）
+    pending_mgr.clear_pending(chat_id)
+
+    # 觸發 loading 動畫
+    _send_loading_animation(line_api, chat_id, 60)
+
+    try:
+        from server.dependencies.uma import get_uma_instance
+        from server.adapters.openai_adapter import OpenAIAdapter
+        from server.dependencies.session import get_session_manager
+        from server.services.runtime import get_universal_system_prompt
+        import json
+
+        uma = get_uma_instance()
+
+        # 1. 執行被暫停的工具
+        logger.info(f"[LINE HitL] Executing approved tool: {tool_name}({tool_args})")
+        result = uma.execute_tool_call(tool_name, tool_args)
+        result_text = json.dumps(result, ensure_ascii=False)
+        logger.info(f"[LINE HitL] Tool result: {result_text[:200]}...")
+
+        # 2. 把工具結果餵給 LLM，讓 AI 用自然語言回覆
+        _session_mgr = get_session_manager()
+        _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
+        _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
+
+        adapter = OpenAIAdapter(uma=uma)
+        if not adapter.is_available:
+            return f"⚠️ 工具 `{tool_name}` 已執行，但 AI 服務暫時無法生成回覆。\n\n原始結果：\n{result_text[:500]}"
+
+        # 注入工具結果作為 assistant context
+        tool_result_msg = (
+            f"[系統通知：使用者已確認執行工具 `{tool_name}`。以下是執行結果：]\n\n"
+            f"{result_text}\n\n"
+            f"[請根據工具結果，用自然語言回覆使用者。不要說「使用者確認了」之類的流程說明。]"
+        )
+        _session_mgr.append_message(session_id, "user", tool_result_msg)
+
+        history = _session_mgr.get_or_create_conversation(session_id)
+        sys_msgs = [m for m in history if m.get("role") == "system"]
+        rec_msgs = [m for m in history if m.get("role") != "system"][-20:]
+
+        result_gen = adapter.chat(
+            messages=sys_msgs + rec_msgs,
+            user_query=tool_result_msg,
+            session_id=session_id,
+            tools_enabled=True,  # Allow follow-up tool calls if needed
+        )
+
+        final_reply = _collect_generator(
+            result_gen,
+            line_api=line_api,
+            chat_id=chat_id,
+            session_id=session_id,
+        )
+        return final_reply
+
+    except Exception as e:
+        logger.error(f"[LINE HitL] Tool execution failed: {e}", exc_info=True)
+        return f"❌ 工具 `{tool_name}` 執行失敗：{e}"
+
+
 def _process_line_message(
     line_api,
     line_api_blob,
@@ -623,6 +733,22 @@ def _process_line_message(
         try:
             from linebot.v3.webhooks import TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
             import os
+
+            # ── Phase 8: Human-in-the-Loop — Pending State Check ──────────────
+            # 在處理新訊息前，先檢查此聊天是否有待確認的 pending state。
+            # 若使用者回覆的是「確認」或「取消」，直接處理 pending 操作。
+            if isinstance(event_msg, TextMessageContent) and extracted_text:
+                pending_reply = _handle_pending_state(
+                    line_api, chat_id, session_id, extracted_text
+                )
+                if pending_reply is not None:
+                    # Pending state was handled — send reply and return
+                    if len(pending_reply) > _LINE_MAX_CHARS:
+                        pending_reply = pending_reply[:_LINE_MAX_CHARS] + "\n\n…（回覆過長，已截斷）"
+                    _session_mgr.append_message(session_id, "user", extracted_text)
+                    _session_mgr.append_message(session_id, "assistant", pending_reply)
+                    _send_line_reply(line_api, reply_token, chat_id, pending_reply)
+                    return
 
             attached_file_path = quoted_file_path
             _chunked_data = None  # Will be set if file exceeds 15,000 chars
@@ -859,7 +985,13 @@ def _process_line_message(
                 )
 
                 # Consume generator, assemble final reply
-                final_reply = _collect_generator(result_gen, line_api=line_api, chat_id=chat_id)
+                final_reply = _collect_generator(
+                    result_gen,
+                    line_api=line_api,
+                    chat_id=chat_id,
+                    session_id=session_id,
+                    user_input=user_input,
+                )
 
             # 6. 截斷至 LINE 字元上限
             if len(final_reply) > _LINE_MAX_CHARS:
@@ -893,17 +1025,28 @@ def _parse_command_prefix(user_input: str) -> tuple[str, bool]:
     return user_input, True  # 預設啟用 Tool Calling
 
 
-def _collect_generator(result_gen, line_api=None, chat_id: str = None) -> str:
+def _collect_generator(
+    result_gen,
+    line_api=None,
+    chat_id: str = None,
+    session_id: str = None,
+    user_input: str = None,
+) -> str:
     """
     消費 adapter.chat() 的同步 generator，組裝完整回覆文字。
 
     當偵測到 Tool Call 中間狀態時，自動刷新 LINE loading 動畫，
     確保使用者在多輪 Tool Calling 期間持續看到 "..." 動畫。
 
+    Human-in-the-Loop:
+    當偵測到 requires_approval 時，儲存 pending state 並回傳
+    LINE 友好的確認訊息，讓使用者直接在 LINE 內回覆確認或取消。
+
     Generator 的 chunk 格式：
     - {"status": "streaming", "content": "<partial text>"}
     - {"status": "success",   "content": "<full text>"}
     - {"status": "error",     "message": "<error msg>"}
+    - {"status": "requires_approval", "tool_name": ..., "pending_args": ...}
     """
     accumulated = ""
     for chunk in result_gen:
@@ -925,9 +1068,35 @@ def _collect_generator(result_gen, line_api=None, chat_id: str = None) -> str:
             return f"❌ 發生錯誤：{err_msg}"
         elif status == "requires_approval":
             tool_name = chunk.get("tool_name", "未知工具")
+            pending_args = chunk.get("pending_args", {})
+            risk_desc = chunk.get("risk_description", "高風險操作")
+
+            # ── Human-in-the-Loop: 儲存 pending state ──────────────
+            if chat_id:
+                try:
+                    from server.core.pending_state import PendingStateManager
+                    from main import PROJECT_ROOT
+                    pending_mgr = PendingStateManager(str(PROJECT_ROOT / "workspace" / "sessions"))
+                    pending_mgr.set_pending(
+                        chat_id=chat_id,
+                        pending_type="approval",
+                        data={
+                            "tool_name": tool_name,
+                            "tool_args": pending_args,
+                            "risk_description": risk_desc,
+                            "session_id": session_id or "",
+                            "user_input": user_input or "",
+                        },
+                    )
+                except Exception as e:
+                    logger.error(f"[LINE BG] Failed to save pending state: {e}")
+
             return (
-                f"⚠️ 工具 `{tool_name}` 需要人工確認後才能執行。\n"
-                "請至 Web Console 處理此高風險操作。"
+                f"⚠️ 工具 `{tool_name}` 需要你的確認才能執行。\n\n"
+                f"📋 風險說明：{risk_desc}\n\n"
+                f"請直接回覆：\n"
+                f"  「確認」→ 執行此操作\n"
+                f"  「取消」→ 放棄執行"
             )
 
     return accumulated if accumulated else "（AI 未產生回覆，請稍後再試）"
