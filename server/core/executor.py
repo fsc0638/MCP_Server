@@ -79,11 +79,15 @@ class ExecutionEngine:
         import tempfile
         temp_param_file = None
 
-        # 1. Sanitize the skill directory and script path
+        # 1. Sanitize the skill directory and script path (case-insensitive for cross-platform)
         try:
             skill_dir = self.sanitize_path(skill_name)
             script_path = self.sanitize_path(Path(skill_name) / "scripts" / script_relative_path)
-            
+
+            if not script_path.exists():
+                # Fallback: try capitalized "Scripts/" for Windows-created skills on Linux
+                script_path = self.sanitize_path(Path(skill_name) / "Scripts" / script_relative_path)
+
             if not script_path.exists():
                 return {"status": "error", "message": f"Script not found: {script_relative_path}"}
 
