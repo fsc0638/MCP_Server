@@ -103,26 +103,36 @@
           </div>
           <h2>歡迎使用 Agent K</h2>
           <p>您好，我是研發中心的Agent K，請問您有什麼指示？</p>
-          <div class="page-chat-suggestion-grid" role="list" aria-label="快捷建議">
-            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('幫我整理一份週報範本')" aria-label="撰寫週報範本">
-              <div class="page-chat-suggestion-icon" aria-hidden="true">📋</div>
-              <div class="page-chat-suggestion-title">撰寫週報範本</div>
-              <div class="page-chat-suggestion-desc">快速生成專業的工作週報</div>
+          <div class="page-chat-suggestion-grid" role="list" aria-label="常用任務卡片">
+            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('製作語音會議記錄並更新Todo List')" aria-label="語音會議紀錄與待辦更新">
+              <div class="page-chat-suggestion-icon" aria-hidden="true">🎙️</div>
+              <div class="page-chat-suggestion-title">語音會議紀錄與待辦更新</div>
+              <div class="page-chat-suggestion-desc">彙整會議重點，自動產出紀錄並同步 Todo List。</div>
             </button>
-            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('分析以下資料並給我洞察')" aria-label="資料分析洞察">
-              <div class="page-chat-suggestion-icon" aria-hidden="true">📊</div>
-              <div class="page-chat-suggestion-title">資料分析洞察</div>
-              <div class="page-chat-suggestion-desc">從數據中提取有價值的見解</div>
+            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('啟動KWAY Orbital量子計算，給我新的分析')" aria-label="啟動 KWAY Orbital 量子分析">
+              <div class="page-chat-suggestion-icon" aria-hidden="true">⚛️</div>
+              <div class="page-chat-suggestion-title">啟動 KWAY Orbital 量子分析</div>
+              <div class="page-chat-suggestion-desc">執行高階計算流程，輸出最新模型分析與觀測結論。</div>
             </button>
-            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('幫我寫一封專業的商務郵件')" aria-label="商務郵件撰寫">
-              <div class="page-chat-suggestion-icon" aria-hidden="true">✉️</div>
-              <div class="page-chat-suggestion-title">商務郵件撰寫</div>
-              <div class="page-chat-suggestion-desc">生成得體的商務溝通郵件</div>
+            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('幫我將人力需求表自動送到104整理報表給我')" aria-label="人力需求上架與報表整理">
+              <div class="page-chat-suggestion-icon" aria-hidden="true">📄</div>
+              <div class="page-chat-suggestion-title">人力需求上架與報表整理</div>
+              <div class="page-chat-suggestion-desc">自動投遞 104 並彙整職缺、投遞與回應狀態報表。</div>
             </button>
-            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('幫我腦力激盪產品功能構想')" aria-label="創意腦力激盪">
-              <div class="page-chat-suggestion-icon" aria-hidden="true">💡</div>
-              <div class="page-chat-suggestion-title">創意腦力激盪</div>
-              <div class="page-chat-suggestion-desc">探索新想法和創新方向</div>
+            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('進行MTC系統log自動檢查，並給我分析報告')" aria-label="MTC 系統 Log 自動檢查">
+              <div class="page-chat-suggestion-icon" aria-hidden="true">🧪</div>
+              <div class="page-chat-suggestion-title">MTC 系統 Log 自動檢查</div>
+              <div class="page-chat-suggestion-desc">掃描異常事件與關鍵指標，產出可追蹤的分析報告。</div>
+            </button>
+            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('把我這一週的Todo整理到公司的工單系統')" aria-label="每週 Todo 匯入工單系統">
+              <div class="page-chat-suggestion-icon" aria-hidden="true">🗂️</div>
+              <div class="page-chat-suggestion-title">每週 Todo 匯入工單系統</div>
+              <div class="page-chat-suggestion-desc">彙整本週任務進度，轉換為工單格式並自動建立項目。</div>
+            </button>
+            <button class="page-chat-suggestion-card" type="button" role="listitem" onclick="sendSuggestion('幫我連結業務的Agent，告訴我目前專案進度')" aria-label="串接業務 Agent 查詢專案">
+              <div class="page-chat-suggestion-icon" aria-hidden="true">🤝</div>
+              <div class="page-chat-suggestion-title">串接業務 Agent 查詢專案</div>
+              <div class="page-chat-suggestion-desc">連動業務端資訊來源，快速回報目前專案里程碑與風險。</div>
             </button>
           </div>
         </div>
