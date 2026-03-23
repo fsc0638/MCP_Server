@@ -297,6 +297,53 @@ class SessionManager:
             self.flush_with_llm_summary(sid, llm_callable)
         logger.info(f"flush_all_sessions: persisted {len(session_ids)} sessions to MEMORY.md")
 
+    def remove_chunk_entries(self, session_id: str, filename: str):
+        """
+        Remove intermediate chunk headers and their summaries from session history.
+        Called after chunked file processing completes so that old chunk entries
+        don't pollute future conversations (preventing LLM from pattern-matching
+        on stale '三段摘要' text).
+
+        Removes messages matching: [文件分段 N/M：filename] and their paired assistant responses.
+        """
+        import re
+        history = self._conversations.get(session_id, [])
+        if not history:
+            return
+
+        # Build pattern to match chunk headers for this specific file
+        # e.g. "[文件分段 1/3：Groovenauts日經案例新聞.docx]"
+        chunk_pattern = re.compile(r'^\[文件分段 \d+/\d+[：:]' + re.escape(filename) + r'\]$')
+
+        cleaned = []
+        skip_next_assistant = False
+        removed_count = 0
+
+        for msg in history:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if skip_next_assistant and role == "assistant":
+                # This is the summary paired with a chunk header — skip it too
+                skip_next_assistant = False
+                removed_count += 1
+                continue
+
+            skip_next_assistant = False
+
+            if role == "user" and chunk_pattern.match(content.strip()):
+                # This is an intermediate chunk header — skip it
+                skip_next_assistant = True  # Also skip the paired assistant summary
+                removed_count += 1
+                continue
+
+            cleaned.append(msg)
+
+        if removed_count > 0:
+            self._conversations[session_id] = cleaned
+            self._save_conversation_to_disk(session_id)
+            logger.info(f"Removed {removed_count} chunk entries for '{filename}' from session {session_id}")
+
     def clear_conversation(self, session_id: str):
         """Clear a conversation session (flush first, then remove)."""
         self.flush_conversation_to_memory(session_id)

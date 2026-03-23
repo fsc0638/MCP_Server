@@ -5,13 +5,21 @@ Integrates LINE Messaging API into the existing FastAPI + UMA architecture.
 
 Architecture:
   Inbound  → POST /api/line/webhook   (signature verify + parse events)
+  Router   → model_router.route_model() (LLM-as-a-Router: nano classifies → tier)
   Session  → core.session.SessionManager  (session_id = "line_{user_id}")
   Outbound → OpenAIAdapter.chat() → reply_message / push_message fallback
 
+Model Routing (省流省錢):
+  nano  (200K TPM) → 閒聊 / 打招呼 / 簡單問答
+  mini  (200K TPM) → 一般任務 / 翻譯 / 摘要 / 文件分段摘要
+  full  (30K  TPM) → 深度分析 / 多工具串接 / 最終合成報告
+
 Design Principle:
-  -立即回覆 200 OK (解決 LINE Webhook 1~2 秒 Timeout 限制)
+  - 立即回覆 200 OK (解決 LINE Webhook 1~2 秒 Timeout 限制)
   - BackgroundTasks 非同步執行 LLM 生成與 Tool Calling
   - 完全重用現有 SessionManager + MEMORY.md 持久化機制
+  - LLM-as-a-Router 前置分類，避免所有請求都打高成本模型
+  - Token 預估 + 自動降級 (Fallback)
 """
 import logging
 import os
@@ -1037,12 +1045,31 @@ def _process_line_message(
             _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
             _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
 
-            # 2. 初始化 Adapter（LINE 專屬 Token 節省配置）
+            # 2. 初始化 Adapter（LLM-as-a-Router + Token 節省配置）
+            from server.services.model_router import (
+                route_model, apply_token_fallback,
+                get_model_chunk_summary, get_model_chunk_final,
+            )
             uma = get_uma_instance()
-            adapter = OpenAIAdapter(uma=uma)
+
+            # Create a lightweight OpenAI client for the router (reuse credentials)
+            _router_adapter = OpenAIAdapter(uma=uma)
+            _openai_client = _router_adapter.client  # share the authenticated client
+
+            # Route to optimal model tier based on task complexity
+            _has_file = (attached_file_path is not None) or (_chunked_data is not None)
+            _routed_model, _routed_tier = route_model(
+                user_input=user_input or "",
+                openai_client=_openai_client,
+                has_file=_has_file,
+                is_chunked_final=False,
+            )
+
+            adapter = OpenAIAdapter(uma=uma, model=_routed_model)
             # LINE 訊息上限 ~5000 字，OpenAI TPM 同時計算 max_output_tokens 預留量
             # 16384 → 2048 可節省 ~14336 tokens/request
             adapter.max_output_tokens = 2048
+            logger.info(f"[LINE Router] Routed to model: {_routed_model} (tier={_routed_tier})")
 
             if not adapter.is_available:
                 final_reply = "⚠️ AI 服務暫時無法使用，請確認 OPENAI_API_KEY 設定。"
@@ -1056,6 +1083,20 @@ def _process_line_message(
                     total = len(chunks)
                     logger.info(f"[LINE BG] Chunked mode: {fname} → {total} chunks")
 
+                    # ── Per-stage model routing for chunks ──
+                    # Intermediate summaries: use mini (cheap, 200K TPM, task is simple)
+                    # Final synthesis: use full model (needs deep reasoning)
+                    _chunk_summary_model = get_model_chunk_summary()
+                    _chunk_final_model = get_model_chunk_final()
+                    chunk_adapter = OpenAIAdapter(uma=uma, model=_chunk_summary_model)
+                    chunk_adapter.max_output_tokens = 1024  # Summaries are short
+                    logger.info(f"[LINE Router] Chunk summary model: {_chunk_summary_model}, final: {_chunk_final_model}")
+
+                    # Accumulate ALL intermediate summaries in memory so the final
+                    # synthesis call can receive the complete picture regardless of
+                    # how aggressively the session-history token trimmer prunes old messages.
+                    all_summaries: list[str] = []
+
                     for idx, chunk in enumerate(chunks):
                         part = idx + 1
                         if part < total:
@@ -1066,35 +1107,67 @@ def _process_line_message(
                                 f"[指令：閱讀並記住此段重點，以 500 字以內的摘要回覆。"
                                 f"不要做最終分析，後續還有更多段落。]"
                             )
-                            # Store only a short header — NOT the full 15000-char chunk content
+                            # Store only a short header in session — NOT the full 15000-char chunk
                             _session_mgr.append_message(session_id, "user", f"[文件分段 {part}/{total}：{fname}]")
 
                             history = _session_mgr.get_or_create_conversation(session_id)
                             sys_msgs = [m for m in history if m.get("role") == "system"]
-                            # Use only last 4 messages (2 turns) for chunk processing to stay lean
-                            rec_msgs = [m for m in history if m.get("role") != "system"][-4:]
-
-                            result_gen = adapter.chat(
-                                messages=sys_msgs + rec_msgs + [{"role": "user", "content": chunk_msg}],
+                            # Pass only system prompt for chunk summarisation — no prior history
+                            # needed and this keeps each chunk call lean and independent.
+                            result_gen = chunk_adapter.chat(
+                                messages=sys_msgs + [{"role": "user", "content": chunk_msg}],
                                 user_query=chunk_msg,
                                 session_id=session_id,
                                 tools_enabled=False  # No tool calls for intermediate chunks
                             )
                             summary = _collect_generator(result_gen)
+                            # Keep in session for conversational continuity
                             _session_mgr.append_message(session_id, "assistant", summary)
+                            # Also keep in local accumulator — unaffected by token trimming
+                            all_summaries.append(f"【第 {part} 段摘要】\n{summary}")
                             logger.info(f"[LINE BG] Chunk {part}/{total} summarized ({len(summary)} chars)")
                             _send_loading_animation(line_api, chat_id, 60)
                         else:
-                            # Final chunk: ask LLM to synthesize all
+                            # Final chunk: switch to full model for deep synthesis
+                            adapter = OpenAIAdapter(uma=uma, model=_chunk_final_model)
+                            adapter.max_output_tokens = 2048
+                            logger.info(f"[LINE Router] Switching to final model: {_chunk_final_model}")
+
+                            # Build synthesis context from ALL accumulated summaries
+                            # so the LLM receives the complete picture even if session history
+                            # was trimmed by the token-aware budget below.
                             warning = ""
                             if total > 6:
                                 warning = "\n⚠️ 文件過長，分析基於分段摘要，細節可能有遺漏。"
-                            user_input = (
-                                f"[文件分段 {part}/{total} - 最終段] 以下是 {fname} 的最後一段內容：\n\n"
-                                f"{chunk}\n\n"
-                                f"[指令：這是文件的最後一段。請結合你先前記住的所有段落摘要，"
-                                f"產出一份完整、深度的分析報告。{warning}]"
-                            )
+
+                            if all_summaries:
+                                # Multi-chunk file: inject every summary explicitly
+                                prior_context = "\n\n".join(all_summaries)
+                                user_input = (
+                                    f"以下是《{fname}》各段的摘要（共 {total} 段，最後一段的原文附於摘要之後）：\n\n"
+                                    f"{prior_context}\n\n"
+                                    f"【第 {part} 段（最終段）原文】\n{chunk}\n\n"
+                                    f"[指令：根據以上所有段落摘要與最終段原文，"
+                                    f"產出一份完整、深度的分析報告。{warning}]"
+                                )
+                            else:
+                                # Single-chunk fallback (total == 1)
+                                user_input = (
+                                    f"[文件分段 {part}/{total} - 最終段] 以下是 {fname} 的最後一段內容：\n\n"
+                                    f"{chunk}\n\n"
+                                    f"[指令：這是文件的最後一段。請結合你先前記住的所有段落摘要，"
+                                    f"產出一份完整、深度的分析報告。{warning}]"
+                                )
+
+                    # ── Clean up intermediate chunk entries from session ──────
+                    # Remove the [文件分段 N/M：file] headers and their paired
+                    # assistant summaries so they don't pollute future conversations.
+                    # The final synthesis prompt already contains ALL summaries
+                    # explicitly, so session no longer needs them.
+                    _session_mgr.remove_chunk_entries(session_id, fname)
+
+                    # Mark as chunked final → tools disabled for synthesis
+                    _routed_tier = "chunk_final"
 
                 # ── Normal Processing ─────────────────────────────────────
                 # Safety: if user_input is still None after chunked processing, abort gracefully
@@ -1133,13 +1206,43 @@ def _process_line_message(
                 truncated_history = system_msgs + trimmed_msgs
                 logger.info(f"[LINE BG] History: {len(non_system)} msgs → {len(trimmed_msgs)} msgs ({_acc_chars} chars)")
 
+                # ── Token-based Fallback ────────────────────────────────
+                # Pre-flight check: if estimated tokens exceed the current
+                # model's safe budget, auto-downgrade to a cheaper model.
+                _current_model = adapter.model
+                _safe_model = apply_token_fallback(
+                    model=_current_model,
+                    messages=truncated_history,
+                    max_output_tokens=adapter.max_output_tokens,
+                )
+                if _safe_model != _current_model:
+                    adapter = OpenAIAdapter(uma=uma, model=_safe_model)
+                    adapter.max_output_tokens = 2048
+                    logger.info(f"[LINE Fallback] Downgraded: {_current_model} → {_safe_model}")
+
+                # ── Tier-aware tool policy ─────────────────────────────
+                # P1: Chunked final synthesis already has all content in prompt
+                #     → no tool calls needed (saves a wasted API round-trip)
+                # P2: nano tier = casual chat → tools off (saves ~800 tokens)
+                #     mini tier = standard → max_tools=1 (light tool use)
+                #     full/file tier = complex → full tool access
+                if _routed_tier in ("chunk_final", "nano"):
+                    _tools_enabled = False
+                    _max_tools = 0
+                elif _routed_tier == "mini":
+                    _tools_enabled = execute_mode
+                    _max_tools = 1
+                else:  # full, file
+                    _tools_enabled = execute_mode
+                    _max_tools = 3
+
                 result_gen = adapter.chat(
                     messages=truncated_history,
                     user_query=actual_input,
                     session_id=session_id,
                     attached_file=attached_file_path,
-                    tools_enabled=execute_mode,
-                    max_tools=3,
+                    tools_enabled=_tools_enabled,
+                    max_tools=_max_tools,
                 )
 
                 # Consume generator, assemble final reply
