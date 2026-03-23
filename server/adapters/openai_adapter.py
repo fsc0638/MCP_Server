@@ -332,6 +332,22 @@ class OpenAIAdapter:
                             logger.error(f"Failed to parse tool args: {fn_args_str}")
                             fn_args = {}
 
+                        # ── Original file injection for transcript-dependent skills ──
+                        # When mcp-meeting-to-notion is called, the LLM may only have
+                        # session summaries (not the original text). If we have the
+                        # original file stored, inject it as the transcript parameter.
+                        if fn_name == "mcp-meeting-to-notion" and getattr(self, "_original_file_path", None):
+                            import os as _os
+                            if _os.path.exists(self._original_file_path):
+                                try:
+                                    with open(self._original_file_path, "r", encoding="utf-8") as _f:
+                                        _original_text = _f.read()
+                                    if _original_text and len(_original_text) > len(fn_args.get("transcript", "")):
+                                        fn_args["transcript"] = _original_text
+                                        logger.info(f"[Adapter] Injected original file ({len(_original_text)} chars) into mcp-meeting-to-notion transcript")
+                                except Exception as _e:
+                                    logger.warning(f"[Adapter] Failed to inject original file: {_e}")
+
                         logger.info(f"Tool call: {fn_name}({fn_args})")
                         yield {"status": "streaming", "content": f"\n\n⚙️ 執行技能: `{fn_name}`\n"}
                         result = self.uma.execute_tool_call(fn_name, fn_args)

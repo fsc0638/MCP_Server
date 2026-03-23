@@ -361,6 +361,20 @@ class SessionManager:
         """Retrieve the response ID from the latest OpenAI Responses API turn."""
         return self._latest_response_ids.get(session_id)
 
+    # ─── Per-session Metadata (Key-Value) ─────────────────────────────────────
+
+    def set_metadata(self, session_id: str, key: str, value):
+        """Store arbitrary key-value metadata scoped to a session."""
+        if not hasattr(self, "_session_metadata"):
+            self._session_metadata = {}
+        self._session_metadata.setdefault(session_id, {})[key] = value
+
+    def get_metadata(self, session_id: str, key: str, default=None):
+        """Retrieve session-scoped metadata by key."""
+        if not hasattr(self, "_session_metadata"):
+            return default
+        return self._session_metadata.get(session_id, {}).get(key, default)
+
     # ─── CLI Session Lifecycle ────────────────────────────────────────────────
 
     def create_session(self, user_id: str = "default") -> str:

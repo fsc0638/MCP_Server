@@ -1006,6 +1006,16 @@ def _process_line_message(
                                     f"{extracted_text}\n\n"
                                     f"[請根據以上文件內容，直接進行分析、總結或處理使用者的需求。]"
                                 )
+                                # Store original text for downstream skills (e.g. meeting-to-notion)
+                                try:
+                                    _temp_dir = Path(os.getenv("SKILLS_HOME", "./Agent_skills/skills")).resolve().parent / "temp"
+                                    _temp_dir.mkdir(parents=True, exist_ok=True)
+                                    _orig_file = _temp_dir / f"original_{session_id}.txt"
+                                    _orig_file.write_text(extracted_text, encoding="utf-8")
+                                    _session_mgr.set_metadata(session_id, "last_original_file", str(_orig_file))
+                                    _session_mgr.set_metadata(session_id, "last_original_filename", filename)
+                                except Exception:
+                                    pass
                             else:
                                 # Chunked mode: will be handled after session init
                                 # Store chunks in a temporary variable for later processing
@@ -1070,6 +1080,13 @@ def _process_line_message(
             # 16384 → 2048 可節省 ~14336 tokens/request
             adapter.max_output_tokens = 2048
             logger.info(f"[LINE Router] Routed to model: {_routed_model} (tier={_routed_tier})")
+
+            # Inject stored original file context for skills that need full text
+            _stored_file = _session_mgr.get_metadata(session_id, "last_original_file")
+            if _stored_file and os.path.exists(_stored_file):
+                adapter._original_file_path = _stored_file
+            else:
+                adapter._original_file_path = None
 
             if not adapter.is_available:
                 final_reply = "⚠️ AI 服務暫時無法使用，請確認 OPENAI_API_KEY 設定。"
@@ -1159,6 +1176,22 @@ def _process_line_message(
                                     f"產出一份完整、深度的分析報告。{warning}]"
                                 )
 
+                    # ── Persist original full text for downstream skills ──────
+                    # Skills like mcp-meeting-to-notion need the ORIGINAL transcript,
+                    # not the LLM-generated summaries. Save full text to a temp file
+                    # so it can be injected when the skill is executed later.
+                    try:
+                        _temp_dir = Path(os.getenv("SKILLS_HOME", "./Agent_skills/skills")).resolve().parent / "temp"
+                        _temp_dir.mkdir(parents=True, exist_ok=True)
+                        _original_file = _temp_dir / f"original_{session_id}.txt"
+                        _original_text = "".join(chunks)  # Rejoin all chunks = original extracted_text
+                        _original_file.write_text(_original_text, encoding="utf-8")
+                        _session_mgr.set_metadata(session_id, "last_original_file", str(_original_file))
+                        _session_mgr.set_metadata(session_id, "last_original_filename", fname)
+                        logger.info(f"[LINE BG] Stored original text ({len(_original_text)} chars) → {_original_file}")
+                    except Exception as _e:
+                        logger.warning(f"[LINE BG] Failed to store original text: {_e}")
+
                     # ── Clean up intermediate chunk entries from session ──────
                     # Remove the [文件分段 N/M：file] headers and their paired
                     # assistant summaries so they don't pollute future conversations.
@@ -1181,6 +1214,24 @@ def _process_line_message(
                 # File content messages can be 10000+ chars; we only store a short header
                 # so that subsequent requests don't carry gigabytes of history.
                 _SESSION_MSG_CHAR_LIMIT = 400
+
+                # ── Persist long text input for downstream skills ──────────
+                # When user pastes a long transcript directly (no file upload),
+                # the session truncation would lose the original content.
+                # Save to temp file so meeting-to-notion can use the full text.
+                if (not attached_file_path and _chunked_data is None
+                        and user_input and len(user_input) > _SESSION_MSG_CHAR_LIMIT):
+                    try:
+                        _temp_dir = Path(os.getenv("SKILLS_HOME", "./Agent_skills/skills")).resolve().parent / "temp"
+                        _temp_dir.mkdir(parents=True, exist_ok=True)
+                        _orig_file = _temp_dir / f"original_{session_id}.txt"
+                        _orig_file.write_text(user_input, encoding="utf-8")
+                        _session_mgr.set_metadata(session_id, "last_original_file", str(_orig_file))
+                        _session_mgr.set_metadata(session_id, "last_original_filename", "user_text")
+                        logger.info(f"[LINE BG] Stored long user text ({len(user_input)} chars) → {_orig_file}")
+                    except Exception:
+                        pass
+
                 session_user_input = (
                     user_input[:_SESSION_MSG_CHAR_LIMIT] + "…[已截斷，完整內容僅用於本輪分析]"
                     if len(user_input) > _SESSION_MSG_CHAR_LIMIT else user_input

@@ -68,7 +68,7 @@ class ExecutionEngine:
             shutil.rmtree(temp_path)
             temp_path.mkdir()
 
-    def run_script(self, skill_name: str, script_relative_path: str, args: Dict[str, Any], env_vars: Optional[Dict[str, str]] = None):
+    def run_script(self, skill_name: str, script_relative_path: str, args: Dict[str, Any], env_vars: Optional[Dict[str, str]] = None, timeout: int = 30):
         """
         Executes a script within a skill bundle.
         D-04: Supports three parameter passing channels:
@@ -145,7 +145,7 @@ class ExecutionEngine:
 
             try:
                 # Channel 2: STDIN JSON — piped directly to the script
-                stdout, stderr = process.communicate(input=args_json, timeout=30)
+                stdout, stderr = process.communicate(input=args_json, timeout=timeout)
                 
                 if process.returncode == 0:
                     return {
@@ -164,7 +164,7 @@ class ExecutionEngine:
 
             except subprocess.TimeoutExpired:
                 process.kill()
-                return {"status": "error", "message": "Execution Timeout (30s)"}
+                return {"status": "error", "message": f"Execution Timeout ({timeout}s)"}
 
         except PermissionError as e:
             return {"status": "security_violation", "message": str(e)}
