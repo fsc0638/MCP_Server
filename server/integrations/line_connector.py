@@ -1037,9 +1037,12 @@ def _process_line_message(
             _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
             _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
 
-            # 2. 初始化 Adapter
+            # 2. 初始化 Adapter（LINE 專屬 Token 節省配置）
             uma = get_uma_instance()
             adapter = OpenAIAdapter(uma=uma)
+            # LINE 訊息上限 ~5000 字，OpenAI TPM 同時計算 max_output_tokens 預留量
+            # 16384 → 2048 可節省 ~14336 tokens/request
+            adapter.max_output_tokens = 2048
 
             if not adapter.is_available:
                 final_reply = "⚠️ AI 服務暫時無法使用，請確認 OPENAI_API_KEY 設定。"
@@ -1063,14 +1066,16 @@ def _process_line_message(
                                 f"[指令：閱讀並記住此段重點，以 500 字以內的摘要回覆。"
                                 f"不要做最終分析，後續還有更多段落。]"
                             )
-                            _session_mgr.append_message(session_id, "user", chunk_msg)
+                            # Store only a short header — NOT the full 15000-char chunk content
+                            _session_mgr.append_message(session_id, "user", f"[文件分段 {part}/{total}：{fname}]")
 
                             history = _session_mgr.get_or_create_conversation(session_id)
                             sys_msgs = [m for m in history if m.get("role") == "system"]
-                            rec_msgs = [m for m in history if m.get("role") != "system"][-20:]
+                            # Use only last 4 messages (2 turns) for chunk processing to stay lean
+                            rec_msgs = [m for m in history if m.get("role") != "system"][-4:]
 
                             result_gen = adapter.chat(
-                                messages=sys_msgs + rec_msgs,
+                                messages=sys_msgs + rec_msgs + [{"role": "user", "content": chunk_msg}],
                                 user_query=chunk_msg,
                                 session_id=session_id,
                                 tools_enabled=False  # No tool calls for intermediate chunks
@@ -1099,21 +1104,42 @@ def _process_line_message(
                     _send_line_reply(line_api, reply_token, chat_id, final_reply)
                     return
 
-                # Append user message and run LLM
-                _session_mgr.append_message(session_id, "user", user_input)
+                # Append user message — store a TOKEN-SAFE version to prevent session bloat.
+                # File content messages can be 10000+ chars; we only store a short header
+                # so that subsequent requests don't carry gigabytes of history.
+                _SESSION_MSG_CHAR_LIMIT = 400
+                session_user_input = (
+                    user_input[:_SESSION_MSG_CHAR_LIMIT] + "…[已截斷，完整內容僅用於本輪分析]"
+                    if len(user_input) > _SESSION_MSG_CHAR_LIMIT else user_input
+                )
+                _session_mgr.append_message(session_id, "user", session_user_input)
                 actual_input, execute_mode = _parse_command_prefix(user_input)
 
                 history = _session_mgr.get_or_create_conversation(session_id)
                 system_msgs = [m for m in history if m.get("role") == "system"]
-                recent_msgs = [m for m in history if m.get("role") != "system"][-20:]
-                truncated_history = system_msgs + recent_msgs
+                non_system = [m for m in history if m.get("role") != "system"]
+
+                # Token-aware history trimming: accumulate from newest until budget is full.
+                # Budget = 4000 tokens ≈ 12000 chars (leaving room for tools + output).
+                _MAX_HISTORY_CHARS = 12000
+                _acc_chars = 0
+                trimmed_msgs = []
+                for m in reversed(non_system):
+                    mc = len(m.get("content", ""))
+                    if _acc_chars + mc > _MAX_HISTORY_CHARS:
+                        break
+                    trimmed_msgs.insert(0, m)
+                    _acc_chars += mc
+                truncated_history = system_msgs + trimmed_msgs
+                logger.info(f"[LINE BG] History: {len(non_system)} msgs → {len(trimmed_msgs)} msgs ({_acc_chars} chars)")
 
                 result_gen = adapter.chat(
                     messages=truncated_history,
                     user_query=actual_input,
                     session_id=session_id,
                     attached_file=attached_file_path,
-                    tools_enabled=execute_mode
+                    tools_enabled=execute_mode,
+                    max_tools=3,
                 )
 
                 # Consume generator, assemble final reply
