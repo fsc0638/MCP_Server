@@ -1027,7 +1027,8 @@ def _process_line_message(
                     return
 
                 # 嘗試下載貼圖圖片，供 Vision 模型辨識表情、動作與文字
-                uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads")
+                uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", chat_id)
+                os.makedirs(uploads_dir, exist_ok=True)
                 sticker_image = _download_sticker_image(sticker_id, uploads_dir, resource_type)
                 if sticker_image:
                     attached_file_path = sticker_image
@@ -1073,7 +1074,7 @@ def _process_line_message(
                         except concurrent.futures.TimeoutError:
                             raise TimeoutError(f"File download timed out after 30s (msg_id={event_msg.id})")
 
-                    uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads")
+                    uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", chat_id)
                     os.makedirs(uploads_dir, exist_ok=True)
 
                     if isinstance(event_msg, ImageMessageContent):

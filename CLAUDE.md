@@ -103,6 +103,45 @@ Skills with `risk_level: high` are intercepted in `UMA.execute_tool_call()` — 
 - `POST /chat/flush/{session_id}` triggers LLM summarization → appended to `memory/MEMORY.md`
 - `SessionManager` in `server/core/session.py` is a singleton; get it via `server/dependencies/session.py`
 - `session.set_metadata(session_id, key, value)` / `session.get_metadata(session_id, key)` — arbitrary per-session KV store (in-memory only, not persisted to disk)
+- **Message Cache Persistence** (Phase A1): `_msg_cache_loaded` lazy-loads per chat_id from `workspace/sessions/{chat_id}_msg_cache.json`. TTL 120 hours, max 500 entries per chat. Dual-write (memory + disk) on every `_add_to_cache()`.
+
+### Memory Enhancement System (Phase A–D)
+
+Four-phase system in `server/services/`:
+
+**Phase A — Group Stability**
+- **A1** (`session.py`): Message cache disk persistence with TTL 120h, lazy-load on first access
+- **A2** (`line_connector.py`): Quote retry loop — 30s max, 3s intervals, status push at 0s/15s. On timeout, sends error and `continue` (no fallback to LLM with stale data)
+
+**Phase B — Profile System**
+- **B1** (`profile_updater.py` → `trigger_if_needed()`): Auto-creates profile after 4+ messages (2 rounds), updates with 2-hour cooldown. Runs in background thread after each LINE reply. Profiles stored at `workspace/profiles/{session_id}.profile.md`
+- **B2** (`app.py`): APScheduler (BackgroundScheduler, tz=Asia/Taipei) runs 3 cron jobs:
+  - Profile update: 09:00 / 12:00 / 17:00
+  - Token summary rebuild: 17:05
+  - Message cache cleanup: 00:00
+- **B3** (`profile_updater.py` → `_PROFILE_PROMPT_TEMPLATE`): Deep reasoning prompt with 6 analysis dimensions. Profile injected into system prompt (~50-100 tokens)
+
+**Phase C — Signal Collection**
+- **C1** (`profile_updater.py`): Text correction signals (neg/pos pattern matching) + sticker emotion classification (text→keywords→vision). Signals stored as append-only JSONL at `workspace/profiles/{session_id}_signals.jsonl` with 7-day retention
+
+**Phase D — Token Management**
+- **D1** (`openai_adapter.py`): Captures `response.completed` event for real token usage. Records per-tool-call AND pure-chat to `workspace/analytics/token_usage.jsonl`
+- **D2** (`token_tracker.py` → `rebuild_summary()`): Scheduled aggregation to `workspace/analytics/token_summary.json` with by_user/by_skill/by_group/daily structure. 90-day retention
+
+### Workspace Data Paths
+
+```
+workspace/
+├── sessions/          # Session history JSON + message cache JSONL
+├── profiles/          # .profile.md + _signals.jsonl per user/group
+├── analytics/         # token_usage.jsonl + token_summary.json
+├── downloads/         # Generated files (PDF, DOCX, images) served at /downloads/
+└── temp/              # Temporary processing files
+Agent_workspace/
+└── line_uploads/      # LINE Bot uploaded files: {messageId}_{filename}
+Agent_skills/
+└── temp/              # original_{session_id}.txt for transcript injection
+```
 
 ### Model Adapters
 
@@ -150,6 +189,8 @@ All 3 write to `Agent_skills/temp/original_{session_id}.txt` and set `session.se
 
 `route_model()` returns `(model: str, tier: str)`. After chunk processing, tier is overridden to `chunk_final` (tools disabled — final synthesis is pure summarization, no tool injection needed).
 
+**Nano→Mini auto-upgrade**: If the router classifies as `nano` but the request contains tool-dependent intent keywords (畫, 生成圖, 製作圖表, draw, generate image, etc.), the tier is upgraded to `mini` so tools are injected. See `_TOOL_INTENT_KEYWORDS` in `model_router.py`.
+
 ### FAISS Vector Retriever
 
 - Index stored at `~/.mcp_faiss/` (avoids Chinese characters in Windows paths)
@@ -172,9 +213,11 @@ All 3 write to `Agent_skills/temp/original_{session_id}.txt` and set `session.se
 | `server/services/chat_core.py` | SSE streaming, tool call loop, `event_generator()` |
 | `server/services/runtime.py` | `get_universal_system_prompt()`, `delta_index_skills()` |
 | `server/services/model_router.py` | LLM-as-a-Router; `route_model()` → `(model, tier)` |
-| `server/adapters/openai_adapter.py` | OpenAI GPT; original file injection for transcript skills |
+| `server/services/profile_updater.py` | Phase B/C: Profile CRUD, signal collection, scheduled deep reasoning |
+| `server/services/token_tracker.py` | Phase D: Token usage JSONL recording + summary aggregation |
+| `server/adapters/openai_adapter.py` | OpenAI GPT; original file injection; D1 token capture from `response.completed` |
 | `server/routes/chat.py` | `/chat`, `/chat/approve/{id}`, `/chat/reject/{id}`, flush, session CRUD |
-| `server/integrations/line_connector.py` | LINE webhook, chunked processing, original text persistence |
+| `server/integrations/line_connector.py` | LINE webhook, chunked processing, original text persistence, B1 auto profile trigger, C1 signal collection |
 | `Agent_skills/skills_manifest.json` | Auto-generated skill index (do not edit manually) |
 | `frontend/config.js` | Google OAuth client ID, demo credentials |
 
@@ -209,4 +252,9 @@ All 3 write to `Agent_skills/temp/original_{session_id}.txt` and set `session.se
 | `mcp-python-executor` | executable | 30s | Python code execution |
 | `mcp-meeting-to-notion` | executable | 120s | 4-phase pipeline → Notion DB upload |
 | `mcp-groovenaust-meeting-analyst` | semantic | — | PMP/PgMP/PfMP meeting analysis |
+| `mcp-image-generator` | executable | 60s | AI image generation via gpt-image-1; returns base64 PNG saved to downloads/ |
 | `mcp-high-risk-demo` | executable | 30s | Auth Modal flow demo |
+
+### LINE Bot Image Delivery
+
+When `mcp-image-generator` returns a result with `file_path`, `line_connector.py` detects image files (`.png`, `.jpg`, etc.) and sends a LINE `ImageMessage` instead of text. The image is served via `/downloads/{filename}` (same ngrok URL). For matplotlib charts generated by `mcp-python-executor`, the same image detection logic applies.
