@@ -361,18 +361,41 @@ class SessionManager:
         """Retrieve the response ID from the latest OpenAI Responses API turn."""
         return self._latest_response_ids.get(session_id)
 
-    # ─── Per-session Metadata (Key-Value) ─────────────────────────────────────
+    # ─── Per-session Metadata (Key-Value, disk-persisted) ─────────────────────
+
+    def _meta_path(self, session_id: str) -> Path:
+        return self.sessions_dir / f"{session_id}_meta.json"
 
     def set_metadata(self, session_id: str, key: str, value):
-        """Store arbitrary key-value metadata scoped to a session."""
+        """Store arbitrary key-value metadata scoped to a session (persisted to disk)."""
+        import json
         if not hasattr(self, "_session_metadata"):
             self._session_metadata = {}
         self._session_metadata.setdefault(session_id, {})[key] = value
+        # Persist to disk so metadata survives server restarts
+        try:
+            path = self._meta_path(session_id)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._session_metadata[session_id], f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Failed to persist metadata for {session_id}: {e}")
 
     def get_metadata(self, session_id: str, key: str, default=None):
-        """Retrieve session-scoped metadata by key."""
+        """Retrieve session-scoped metadata by key (loads from disk on first access)."""
+        import json
         if not hasattr(self, "_session_metadata"):
-            return default
+            self._session_metadata = {}
+        # Load from disk if not yet in memory
+        if session_id not in self._session_metadata:
+            path = self._meta_path(session_id)
+            if path.exists():
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        self._session_metadata[session_id] = json.load(f)
+                except Exception:
+                    self._session_metadata[session_id] = {}
+            else:
+                self._session_metadata[session_id] = {}
         return self._session_metadata.get(session_id, {}).get(key, default)
 
     # ─── CLI Session Lifecycle ────────────────────────────────────────────────
