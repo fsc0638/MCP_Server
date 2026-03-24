@@ -91,3 +91,32 @@ async def download_shortcut(filename: str):
         media_type="application/octet-stream",
     )
 
+
+# ── Image serving route (proper content-type for LINE ImageMessage) ───────────
+_IMAGE_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+
+
+@router.get("/images/{filename}")
+async def serve_image(filename: str):
+    """
+    Serves image files from workspace/downloads/ with proper image content-type.
+    Required for LINE ImageMessage which needs HTTPS URLs returning image/* MIME type.
+    """
+    safe_name = sanitize_filename(filename)
+    file_path = DOWNLOADS_DIR / safe_name
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Image not found")
+    ext = file_path.suffix.lower()
+    content_type = _IMAGE_CONTENT_TYPES.get(ext, "image/png")
+    return FileResponse(
+        path=file_path,
+        filename=safe_name,
+        media_type=content_type,
+    )
+

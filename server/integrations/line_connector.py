@@ -1424,7 +1424,13 @@ def _process_line_message(
             _session_mgr.append_message(session_id, "assistant", final_reply)
 
             # 8. 回傳 LINE（reply_token 優先，逾時後備 push_message）
-            _send_line_reply(line_api, reply_token, chat_id, final_reply)
+            #    偵測回覆中的圖片 URL → 拆分為 ImageMessage + TextMessage
+            _image_urls = _extract_image_urls(final_reply)
+            if _image_urls:
+                _text_part = _strip_image_urls(final_reply, _image_urls)
+                _send_line_reply_with_images(line_api, reply_token, chat_id, _text_part, _image_urls)
+            else:
+                _send_line_reply(line_api, reply_token, chat_id, final_reply)
 
             # ── Phase B1: Auto Profile creation/update after each round ─────
             try:
@@ -1682,6 +1688,87 @@ def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
             logger.info(f"[LINE] Reply sent via push_message → chat={chat_id}")
         except Exception as push_err:
             logger.error(f"[LINE] push_message also failed: {push_err}")
+
+
+# ── Image URL extraction & mixed reply helpers ────────────────────────────────
+
+_IMAGE_URL_PATTERN = re.compile(
+    r'(https?://[^\s\)\"\']+/(?:images|downloads)/[^\s\)\"\']+\.(?:png|jpg|jpeg|gif|webp))',
+    re.IGNORECASE,
+)
+
+
+def _extract_image_urls(text: str) -> list:
+    """Extract image serving URLs from LLM response text.
+    Converts /downloads/ URLs to /images/ for proper content-type (LINE needs image/* MIME).
+    """
+    raw = list(dict.fromkeys(_IMAGE_URL_PATTERN.findall(text)))  # dedupe, keep order
+    return [url.replace("/downloads/", "/images/") for url in raw]
+
+
+def _strip_image_urls(text: str, image_urls: list) -> str:
+    """Remove image URLs (and surrounding markdown image syntax) from text."""
+    cleaned = text
+    for url in image_urls:
+        # Remove markdown image syntax: ![alt](url)
+        cleaned = re.sub(r'!\[[^\]]*\]\(' + re.escape(url) + r'\)\s*', '', cleaned)
+        # Remove bare URL
+        cleaned = cleaned.replace(url, '')
+    # Clean up leftover blank lines
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+    return cleaned
+
+
+def _send_line_reply_with_images(
+    line_api, reply_token: str, chat_id: str, text: str, image_urls: list
+):
+    """
+    Send a mixed reply: TextMessage + ImageMessage(s).
+    LINE allows up to 5 messages per reply.
+    """
+    from linebot.v3.messaging import (
+        TextMessage, ImageMessage, ReplyMessageRequest, PushMessageRequest,
+    )
+
+    messages = []
+    # Add text message first (if there's meaningful text)
+    if text and text.strip():
+        messages.append(TextMessage(text=text.strip()[:5000]))
+
+    # Add image messages (LINE max 5 messages per reply)
+    remaining_slots = 5 - len(messages)
+    for url in image_urls[:remaining_slots]:
+        messages.append(ImageMessage(
+            original_content_url=url,
+            preview_image_url=url,
+        ))
+
+    if not messages:
+        return
+
+    try:
+        line_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=messages,
+            )
+        )
+        logger.info(f"[LINE] Mixed reply sent (text+{len(image_urls)} images) → chat={chat_id}")
+    except Exception as reply_err:
+        logger.warning(
+            f"[LINE] reply_token expired/failed ({reply_err}), "
+            f"falling back to push_message → chat={chat_id}"
+        )
+        try:
+            line_api.push_message(
+                PushMessageRequest(
+                    to=chat_id,
+                    messages=messages,
+                )
+            )
+            logger.info(f"[LINE] Mixed push sent (text+{len(image_urls)} images) → chat={chat_id}")
+        except Exception as push_err:
+            logger.error(f"[LINE] push_message with images also failed: {push_err}")
 
 
 def _send_error_push(line_api, chat_id: str):

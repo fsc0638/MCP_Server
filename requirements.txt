@@ -29,3 +29,8 @@ line-bot-sdk>=3.0.0
 
 # Scheduled Tasks (Profile update, Token summary, Cache cleanup)
 apscheduler>=3.10.0
+
+# Data visualization & chart generation (mcp-python-executor)
+matplotlib>=3.7.0
+pandas>=2.0.0
+openpyxl>=3.1.0
