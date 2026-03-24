@@ -376,6 +376,24 @@ class OpenAIAdapter:
                         })
                         tool_calls_made += 1
 
+                        # ── Phase D1: Token Usage Tracking ─────────────────────
+                        try:
+                            from server.services.token_tracker import TokenTracker
+                            from pathlib import Path as _Path
+                            _tracker = TokenTracker(str(_Path(os.getcwd())))
+                            _skill_internal = 0
+                            if isinstance(result, dict) and "_usage" in result:
+                                _skill_internal = result["_usage"].get("skill_total_tokens", 0)
+                            _tracker.record_usage(
+                                session_id=session_id or "",
+                                skill=fn_name,
+                                model=self.model,
+                                skill_internal_tokens=_skill_internal,
+                                status=result.get("status", "unknown") if isinstance(result, dict) else "unknown",
+                            )
+                        except Exception:
+                            pass
+
                     input_payload = tool_results
                     continue 
 

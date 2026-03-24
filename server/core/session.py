@@ -2,15 +2,20 @@
 Session Manager (Phase 5)
 Manages session lifecycle, cleanup jobs, and MEMORY.md persistence.
 """
+import json
 import os
 import uuid
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger("MCP_Server.Session")
+
+# ── Message Cache Constants ───────────────────────────────────────────────────
+MSG_CACHE_TTL_HOURS = 120  # 5 days
+MSG_CACHE_LIMIT_PER_CHAT = 500
 
 
 class SessionManager:
@@ -397,6 +402,59 @@ class SessionManager:
             else:
                 self._session_metadata[session_id] = {}
         return self._session_metadata.get(session_id, {}).get(key, default)
+
+    # ─── Message Cache Persistence (Phase A1) ────────────────────────────────
+
+    def _msg_cache_path(self, chat_id: str) -> Path:
+        return self.sessions_dir / f"{chat_id}_msg_cache.json"
+
+    def load_msg_cache(self, chat_id: str) -> dict:
+        """Load message cache from disk (lazy, called on first access per chat)."""
+        path = self._msg_cache_path(chat_id)
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            # Filter by TTL
+            cutoff = (datetime.now() - timedelta(hours=MSG_CACHE_TTL_HOURS)).isoformat()
+            filtered = {
+                k: v for k, v in data.items()
+                if v.get("created_at", "") >= cutoff
+            }
+            return filtered
+        except Exception as e:
+            logger.warning(f"Failed to load msg_cache for {chat_id}: {e}")
+            return {}
+
+    def save_msg_cache(self, chat_id: str, cache: dict):
+        """Save message cache to disk (dual-write with in-memory)."""
+        path = self._msg_cache_path(chat_id)
+        try:
+            path.write_text(
+                json.dumps(cache, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save msg_cache for {chat_id}: {e}")
+
+    def cleanup_all_msg_caches(self):
+        """Daily cleanup: remove expired entries from all msg_cache files."""
+        cutoff = (datetime.now() - timedelta(hours=MSG_CACHE_TTL_HOURS)).isoformat()
+        for cache_file in self.sessions_dir.glob("*_msg_cache.json"):
+            try:
+                data = json.loads(cache_file.read_text(encoding="utf-8"))
+                filtered = {
+                    k: v for k, v in data.items()
+                    if v.get("created_at", "") >= cutoff
+                }
+                if len(filtered) < len(data):
+                    cache_file.write_text(
+                        json.dumps(filtered, ensure_ascii=False, indent=2),
+                        encoding="utf-8"
+                    )
+                    logger.info(f"Cleaned msg_cache {cache_file.name}: {len(data)} → {len(filtered)}")
+            except Exception:
+                pass
 
     # ─── CLI Session Lifecycle ────────────────────────────────────────────────
 

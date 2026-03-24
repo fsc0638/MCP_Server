@@ -196,7 +196,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                     )
                     continue
 
-            # Phase 6: Quote Recognition (引用識別)
+            # Phase 6 + A2: Quote Recognition with Retry (引用識別 + 等待機制)
             quoted_text = ""
             quoted_file = None
             if isinstance(event.message, TextMessageContent):
@@ -205,12 +205,45 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                 if not quoted_msg_id:
                     m_dict = event.message.to_dict()
                     quoted_msg_id = m_dict.get("quotedMessageId")
-                
+
                 if quoted_msg_id:
                     q_data = _get_from_cache(chat_id, quoted_msg_id)
                     quoted_text = q_data.get("text")
                     quoted_file = q_data.get("file_path")
-                    
+
+                    # Phase A2: Retry with status notification if quote not found
+                    if not quoted_text and not quoted_file:
+                        import time as _time
+                        _retry_max = 30  # Total wait: 30 seconds
+                        _retry_interval = 3  # Check every 3 seconds
+                        _notified_start = False
+                        _notified_mid = False
+
+                        for _attempt in range(0, _retry_max, _retry_interval):
+                            if _attempt > 0:
+                                _time.sleep(_retry_interval)
+                            q_data = _get_from_cache(chat_id, quoted_msg_id)
+                            quoted_text = q_data.get("text")
+                            quoted_file = q_data.get("file_path")
+                            if quoted_text or quoted_file:
+                                logger.info(f"[LINE A2] Quote found after {_attempt+_retry_interval}s retry: {quoted_msg_id}")
+                                break
+                            # Status notifications
+                            if _attempt == 0 and not _notified_start:
+                                _send_status_push(line_api, chat_id, "⏳ 正在讀取你引用的檔案，請稍候...")
+                                _notified_start = True
+                            elif _attempt >= 15 and not _notified_mid:
+                                _send_status_push(line_api, chat_id, f"⏳ 檔案較大，仍在處理中（已等待 {_attempt}秒）...")
+                                _notified_mid = True
+                        else:
+                            # All retries exhausted
+                            if not quoted_text and not quoted_file:
+                                logger.warning(f"[LINE A2] Quote not found after {_retry_max}s: {quoted_msg_id}")
+                                _send_status_push(
+                                    line_api, chat_id,
+                                    "⚠️ 找不到引用的檔案，可能已超過保存期限（5天）或尚未完成上傳，請重新傳送。"
+                                )
+
                     if quoted_text:
                         logger.info(f"[LINE] Quoted text found in cache: {quoted_msg_id}")
                         user_input = f"[引用內容: \"{quoted_text}\"]\n{user_input}"
@@ -304,28 +337,63 @@ _local_locks = {}
 _local_lock_mutex = threading.Lock()
 _last_request_time = {}  # 紀錄每個 session 的最後處理時間 (Debounce 用)
 
-# ── Message Caching (Phase 6: Quote Support) ──────────────────────────────────
-_message_cache = {}  # {chat_id: {msg_id: {"text": str, "file_path": str}}}
+# ── Message Caching (Phase 6 + Phase A1: Disk Persistence) ────────────────────
+_message_cache = {}  # {chat_id: {msg_id: {"text": str, "file_path": str, "created_at": str}}}
 _MESSAGE_CACHE_LIMIT = 500  # 每回話上限 (LRU 簡化版)
+_msg_cache_loaded = set()  # Track which chat_ids have been lazy-loaded from disk
+
+
+def _ensure_cache_loaded(chat_id: str):
+    """Lazy-load message cache from disk on first access per chat_id (Phase A1)."""
+    if chat_id in _msg_cache_loaded:
+        return
+    _msg_cache_loaded.add(chat_id)
+    try:
+        from server.dependencies.session import get_session_manager
+        sm = get_session_manager()
+        disk_cache = sm.load_msg_cache(chat_id)
+        if disk_cache:
+            for k, v in disk_cache.items():
+                if k not in _message_cache.get(chat_id, {}):
+                    _message_cache.setdefault(chat_id, {})[k] = v
+            logger.info(f"[LINE Cache] Loaded {len(disk_cache)} cached messages from disk for chat={chat_id}")
+    except Exception as e:
+        logger.warning(f"[LINE Cache] Failed to load disk cache for {chat_id}: {e}")
+
 
 def _add_to_cache(chat_id: str, msg_id: str, text: str = None, file_path: str = None):
+    _ensure_cache_loaded(chat_id)
     if chat_id not in _message_cache:
         _message_cache[chat_id] = {}
     cache = _message_cache[chat_id]
-    
-    # 如果已存在，更新非空欄位
+
+    from datetime import datetime as _dt
+    now_iso = _dt.now().isoformat()
+
     if msg_id in cache:
-        if text: cache[msg_id]["text"] = text
-        if file_path: cache[msg_id]["file_path"] = file_path
+        if text:
+            cache[msg_id]["text"] = text
+        if file_path:
+            cache[msg_id]["file_path"] = file_path
     else:
-        cache[msg_id] = {"text": text, "file_path": file_path}
-        
+        cache[msg_id] = {"text": text, "file_path": file_path, "created_at": now_iso}
+
     if len(cache) > _MESSAGE_CACHE_LIMIT:
         oldest_key = next(iter(cache))
         del cache[oldest_key]
 
+    # Phase A1: Dual-write to disk
+    try:
+        from server.dependencies.session import get_session_manager
+        sm = get_session_manager()
+        sm.save_msg_cache(chat_id, cache)
+    except Exception:
+        pass
+
+
 def _get_from_cache(chat_id: str, msg_id: str) -> dict:
     """回傳 {"text": str, "file_path": str}"""
+    _ensure_cache_loaded(chat_id)
     return _message_cache.get(chat_id, {}).get(msg_id, {"text": None, "file_path": None})
 
 _redis_client = None
@@ -872,6 +940,25 @@ def _process_line_message(
             if isinstance(event_msg, TextMessageContent):
                 user_input = extracted_text
 
+                # ── Phase C1: Text Correction Signal Detection ─────────────
+                try:
+                    from server.services.profile_updater import ProfileUpdater
+                    _pu = ProfileUpdater(str(Path(os.getcwd())))
+                    _text_signal = _pu.classify_text_signal(extracted_text)
+                    if _text_signal:
+                        # Attach context: what was the previous assistant message?
+                        _prev_history = _session_mgr.get_or_create_conversation(session_id)
+                        _last_asst = ""
+                        for _m in reversed(_prev_history):
+                            if _m.get("role") == "assistant":
+                                _last_asst = str(_m.get("content", ""))[:150]
+                                break
+                        _text_signal["context_preview"] = _last_asst
+                        _pu.append_signal(session_id, _text_signal)
+                        logger.info(f"[LINE C1] Text signal recorded: {_text_signal['signal']} for {session_id}")
+                except Exception:
+                    pass
+
                 # ── Phase 2: Smart Clarification Injection ────────────────
                 # 偵測「建立檔案/報告」意圖 → 注入釐清指令讓 LLM 語意分析
                 # 缺少的資訊（地區、範圍、格式等），LLM 會一次問完
@@ -918,6 +1005,20 @@ def _process_line_message(
                 if sticker_text:
                     cache_text += f" {sticker_text}"
                 _add_to_cache(chat_id, event_msg.id, text=cache_text)
+
+                # ── Phase C1: Sticker Signal Collection ────────────────────
+                try:
+                    from server.services.profile_updater import ProfileUpdater
+                    _pu = ProfileUpdater(str(Path(os.getcwd())))
+                    _sticker_signal = _pu.classify_sticker_signal(
+                        sticker_keywords=sticker_keywords,
+                        sticker_text=sticker_text,
+                    )
+                    if _sticker_signal and _sticker_signal.get("signal") != "neutral":
+                        _pu.append_signal(session_id, _sticker_signal)
+                        logger.info(f"[LINE C1] Sticker signal: {_sticker_signal.get('signal')} for {session_id}")
+                except Exception:
+                    pass
 
                 if just_cache:
                     logger.info(f"[LINE BG] Just cached sticker: session={session_id}, sticker_id={sticker_id}")
@@ -1051,8 +1152,19 @@ def _process_line_message(
                 _session_mgr.reset_openai_state(session_id)
                 _session_days[session_id] = today_str
 
-            _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
-            _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
+            # ── Phase B1: Inject Profile into system prompt ─────────────────
+            _base_system_prompt = get_universal_system_prompt(platform="line")
+            try:
+                from server.services.profile_updater import ProfileUpdater
+                _profile_updater = ProfileUpdater(str(Path(os.getcwd())))
+                _profile_content = _profile_updater.get_profile(session_id)
+                if _profile_content:
+                    _base_system_prompt += f"\n\n---\n# 使用者背景知識\n{_profile_content}"
+            except Exception as _pe:
+                logger.debug(f"[LINE B1] Profile injection skipped: {_pe}")
+
+            _session_mgr.get_or_create_conversation(session_id, _base_system_prompt)
+            _session_mgr._update_system_prompt(session_id, _base_system_prompt)
 
             # 2. 初始化 Adapter（LLM-as-a-Router + Token 節省配置）
             from server.services.model_router import (

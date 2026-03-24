@@ -17,11 +17,12 @@ from server.services.runtime import delta_index_skills, make_llm_callable
 
 logger = logging.getLogger("MCP_Server.App")
 __watcher = None
+__scheduler = None  # Phase B2: APScheduler instance
 
 app = FastAPI(
     title="MCP Agent Console API",
     description="Refactored entrypoint",
-    version="2.1.0",
+    version="2.2.0",
 )
 
 app.include_router(models.router)
@@ -35,6 +36,89 @@ app.include_router(line_router)
 
 frontend_dir = PROJECT_ROOT / "frontend"
 app.mount("/ui", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
+
+
+# ── Phase B2 + D2: Scheduled Jobs ─────────────────────────────────────────────
+
+def _scheduled_profile_update():
+    """Scheduled job: update user/group profiles via LLM deep reasoning."""
+    try:
+        from server.services.profile_updater import ProfileUpdater
+        updater = ProfileUpdater(str(PROJECT_ROOT))
+        llm_fn = make_llm_callable()
+        if llm_fn:
+            updater.run_scheduled_update(llm_callable=llm_fn)
+        else:
+            logger.warning("[Scheduler] No LLM callable available for profile update.")
+    except Exception as e:
+        logger.error(f"[Scheduler] Profile update job failed: {e}")
+
+
+def _scheduled_token_summary():
+    """Scheduled job: rebuild token usage summary (daily 17:00)."""
+    try:
+        from server.services.token_tracker import TokenTracker
+        tracker = TokenTracker(str(PROJECT_ROOT))
+        tracker.rebuild_summary()
+    except Exception as e:
+        logger.error(f"[Scheduler] Token summary rebuild failed: {e}")
+
+
+def _scheduled_cache_cleanup():
+    """Scheduled job: cleanup expired message caches (daily 00:00)."""
+    try:
+        sm = get_session_manager()
+        sm.cleanup_all_msg_caches()
+    except Exception as e:
+        logger.error(f"[Scheduler] Cache cleanup failed: {e}")
+
+
+def _setup_scheduler():
+    """Initialize APScheduler with all scheduled jobs."""
+    global __scheduler
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+
+        __scheduler = BackgroundScheduler(timezone="Asia/Taipei")
+
+        # Phase B2: Profile deep reasoning — 09:00, 12:00, 17:00 daily
+        __scheduler.add_job(
+            _scheduled_profile_update,
+            CronTrigger(hour="9,12,17", minute=0),
+            id="profile_update",
+            name="Profile Deep Reasoning Update",
+            replace_existing=True,
+        )
+
+        # Phase D2: Token summary rebuild — 17:00 daily
+        __scheduler.add_job(
+            _scheduled_token_summary,
+            CronTrigger(hour=17, minute=5),
+            id="token_summary",
+            name="Token Usage Summary Rebuild",
+            replace_existing=True,
+        )
+
+        # Phase A1: Cache cleanup — 00:00 daily
+        __scheduler.add_job(
+            _scheduled_cache_cleanup,
+            CronTrigger(hour=0, minute=0),
+            id="cache_cleanup",
+            name="Message Cache Cleanup",
+            replace_existing=True,
+        )
+
+        __scheduler.start()
+        logger.info("[Scheduler] APScheduler started with 3 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h)")
+
+    except ImportError:
+        logger.warning(
+            "[Scheduler] APScheduler not installed. Scheduled jobs disabled. "
+            "Install with: pip install apscheduler"
+        )
+    except Exception as e:
+        logger.error(f"[Scheduler] Failed to initialize: {e}")
 
 
 @app.on_event("startup")
@@ -68,16 +152,21 @@ async def startup():
         __watcher.start()
         asyncio.create_task(_background_index())
         asyncio.create_task(_sync_workspace_docs())
+
+        # Phase B2: Start APScheduler
+        _setup_scheduler()
+
     except Exception as e:
         logger.error(f"[Startup] Failed to initialize background services: {e}")
 
 
 @app.on_event("shutdown")
 async def shutdown():
-    global __watcher
+    global __watcher, __scheduler
     if __watcher is not None:
         __watcher.stop()
+    if __scheduler is not None:
+        __scheduler.shutdown(wait=False)
+        logger.info("[Scheduler] APScheduler shut down.")
     session_mgr = get_session_manager()
     session_mgr.flush_all_sessions(make_llm_callable())
-
-
