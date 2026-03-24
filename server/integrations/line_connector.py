@@ -26,6 +26,7 @@ import os
 import re
 import threading
 from contextlib import contextmanager
+from pathlib import Path
 
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
 import httpx
@@ -243,6 +244,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                                     line_api, chat_id,
                                     "⚠️ 找不到引用的檔案，可能已超過保存期限（5天）或尚未完成上傳，請重新傳送。"
                                 )
+                                continue  # A2 fix: stop processing, don't fallback to LLM with stale history
 
                     if quoted_text:
                         logger.info(f"[LINE] Quoted text found in cache: {quoted_msg_id}")
@@ -956,8 +958,8 @@ def _process_line_message(
                         _text_signal["context_preview"] = _last_asst
                         _pu.append_signal(session_id, _text_signal)
                         logger.info(f"[LINE C1] Text signal recorded: {_text_signal['signal']} for {session_id}")
-                except Exception:
-                    pass
+                except Exception as _c1e:
+                    logger.debug(f"[LINE C1] Text signal detection failed: {_c1e}")
 
                 # ── Phase 2: Smart Clarification Injection ────────────────
                 # 偵測「建立檔案/報告」意圖 → 注入釐清指令讓 LLM 語意分析
@@ -1017,8 +1019,8 @@ def _process_line_message(
                     if _sticker_signal and _sticker_signal.get("signal") != "neutral":
                         _pu.append_signal(session_id, _sticker_signal)
                         logger.info(f"[LINE C1] Sticker signal: {_sticker_signal.get('signal')} for {session_id}")
-                except Exception:
-                    pass
+                except Exception as _c1se:
+                    logger.debug(f"[LINE C1] Sticker signal detection failed: {_c1se}")
 
                 if just_cache:
                     logger.info(f"[LINE BG] Just cached sticker: session={session_id}, sticker_id={sticker_id}")
@@ -1423,6 +1425,22 @@ def _process_line_message(
 
             # 8. 回傳 LINE（reply_token 優先，逾時後備 push_message）
             _send_line_reply(line_api, reply_token, chat_id, final_reply)
+
+            # ── Phase B1: Auto Profile creation/update after each round ─────
+            try:
+                from server.services.profile_updater import ProfileUpdater
+                from server.services.runtime import make_llm_callable
+                _pu_auto = ProfileUpdater(str(Path(os.getcwd())))
+                _llm_fn = make_llm_callable()
+                if _llm_fn:
+                    import threading
+                    threading.Thread(
+                        target=_pu_auto.trigger_if_needed,
+                        args=(session_id, _llm_fn),
+                        daemon=True,
+                    ).start()
+            except Exception as _auto_pe:
+                logger.debug(f"[LINE B1] Auto profile trigger skipped: {_auto_pe}")
 
         except Exception as e:
             logger.error(

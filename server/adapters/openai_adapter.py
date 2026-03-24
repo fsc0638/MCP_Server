@@ -293,11 +293,23 @@ class OpenAIAdapter:
 
                 full_content = ""
                 tool_calls_dict = {}
-                
+                _turn_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+                _turn_start_ms = int(time.time() * 1000)
+
                 for chunk in response:
                     ctype = chunk.type
                     if ctype == "response.created" or ctype == "response.in_progress":
                         current_response_id = chunk.response.id
+                    elif ctype == "response.completed":
+                        # Capture token usage from completed response
+                        _resp = getattr(chunk, "response", None)
+                        if _resp:
+                            _u = getattr(_resp, "usage", None)
+                            if _u:
+                                _turn_usage["input_tokens"] = getattr(_u, "input_tokens", 0)
+                                _turn_usage["output_tokens"] = getattr(_u, "output_tokens", 0)
+                                _turn_usage["total_tokens"] = getattr(_u, "total_tokens", 0)
+                                logger.info(f"[OpenAI D1] Usage: in={_turn_usage['input_tokens']} out={_turn_usage['output_tokens']} total={_turn_usage['total_tokens']}")
                     elif ctype == "response.output_text.delta":
                         text = chunk.delta
                         full_content += text
@@ -384,20 +396,51 @@ class OpenAIAdapter:
                             _skill_internal = 0
                             if isinstance(result, dict) and "_usage" in result:
                                 _skill_internal = result["_usage"].get("skill_total_tokens", 0)
+                            # Derive context from session_id
+                            _sid = session_id or ""
+                            _d1_chat_type = "group" if "group" in _sid else "personal"
+                            _d1_duration = int(time.time() * 1000) - _turn_start_ms
                             _tracker.record_usage(
-                                session_id=session_id or "",
+                                session_id=_sid,
+                                chat_type=_d1_chat_type,
                                 skill=fn_name,
                                 model=self.model,
+                                input_tokens=_turn_usage.get("input_tokens", 0),
+                                output_tokens=_turn_usage.get("output_tokens", 0),
+                                total_tokens=_turn_usage.get("total_tokens", 0),
                                 skill_internal_tokens=_skill_internal,
+                                duration_ms=_d1_duration,
                                 status=result.get("status", "unknown") if isinstance(result, dict) else "unknown",
                             )
-                        except Exception:
-                            pass
+                        except Exception as _d1e:
+                            logger.debug(f"[D1] Token tracking failed: {_d1e}")
 
                     input_payload = tool_results
                     continue 
 
                 else:
+                    # ── D1: Track non-tool-call response tokens too ────────
+                    try:
+                        from server.services.token_tracker import TokenTracker
+                        from pathlib import Path as _Path
+                        _tracker = TokenTracker(str(_Path(os.getcwd())))
+                        _sid = session_id or ""
+                        _d1_chat_type = "group" if "group" in _sid else "personal"
+                        _d1_duration = int(time.time() * 1000) - _turn_start_ms
+                        _tracker.record_usage(
+                            session_id=_sid,
+                            chat_type=_d1_chat_type,
+                            skill="(chat)",
+                            model=self.model,
+                            input_tokens=_turn_usage.get("input_tokens", 0),
+                            output_tokens=_turn_usage.get("output_tokens", 0),
+                            total_tokens=_turn_usage.get("total_tokens", 0),
+                            duration_ms=_d1_duration,
+                            status="success",
+                        )
+                    except Exception:
+                        pass
+
                     if session_id and current_response_id:
                         _session_mgr.set_latest_response_id(session_id, current_response_id)
                     yield {"status": "success", "content": full_content, "tool_calls_made": tool_calls_made}

@@ -200,7 +200,8 @@ class ProfileUpdater:
         # Strong positive signals
         pos_patterns = [
             "對", "就是這樣", "完美", "很好", "太棒了", "正確",
-            "沒問題", "很讚", "讚",
+            "沒問題", "很讚", "讚", "好的", "OK", "ok", "可以",
+            "謝謝", "感謝", "不錯",
         ]
         # Positive signals need to be more careful — only trigger for short confirmations
         if len(text) < 30:
@@ -416,6 +417,60 @@ class ProfileUpdater:
         # Save
         self.save_profile(session_id, final_profile)
         self.cleanup_expired_signals(session_id)
+
+    # ─── Auto Profile Trigger (after each conversation round) ────────────────
+
+    def trigger_if_needed(self, session_id: str, llm_callable=None):
+        """
+        Called after each conversation round. Decides whether to create/update profile.
+        - First-time profile: create after >= 4 messages (2 rounds), no cooldown.
+        - Existing profile: update only if >= 2h since last update AND new messages exist.
+        """
+        if not llm_callable:
+            return
+
+        session_path = self.sessions_dir / f"{session_id}.json"
+        if not session_path.exists():
+            return
+
+        # Load conversation to check message count
+        try:
+            history = json.loads(session_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(history, list):
+            return
+        chat_msgs = [m for m in history if m.get("role") in ("user", "assistant")]
+
+        meta = self._load_meta(session_id)
+        has_profile = self._profile_path(session_id).exists()
+
+        if not has_profile:
+            # First-time: create profile after 4+ messages (2 rounds)
+            if len(chat_msgs) < 4:
+                return
+            logger.info(f"[ProfileUpdater] First-time profile creation for {session_id} ({len(chat_msgs)} msgs)")
+        else:
+            # Existing profile: enforce 2-hour cooldown
+            last_updated_str = meta.get("last_updated")
+            if last_updated_str:
+                try:
+                    last_updated = datetime.fromisoformat(last_updated_str)
+                    if datetime.now() - last_updated < timedelta(hours=2):
+                        return  # Too recently updated
+                    session_mtime = datetime.fromtimestamp(session_path.stat().st_mtime)
+                    if session_mtime <= last_updated:
+                        return  # No new messages
+                except ValueError:
+                    pass
+            # Need at least some new messages
+            if len(chat_msgs) < 4:
+                return
+
+        try:
+            self._update_single_profile(session_id, session_path, llm_callable)
+        except Exception as e:
+            logger.error(f"[ProfileUpdater] Auto trigger failed for {session_id}: {e}")
 
     # ─── Manual /flush trigger ────────────────────────────────────────────────
 
