@@ -287,69 +287,138 @@ class ScheduledPushService:
 
         return "⚠️ 自訂推送功能需要 LLM 支援。"
 
-    # Known topic keywords for news classification
-    _TOPIC_KEYWORDS = [
-        "經濟", "股市", "房市", "科技", "AI", "半導體", "金融", "國際",
-        "政治", "財經", "產業", "能源", "醫療", "健康", "教育", "體育",
-        "娛樂", "社會", "環境", "氣候", "軍事", "外交", "貿易", "投資",
-        "加密貨幣", "區塊鏈", "電動車", "生技", "航運", "房地產",
+    # ── AutoScan-inspired keyword extraction ──────────────────────────────────
+    # Strategy: strip away noise (time, actions, format, quantity) → remaining = topic
+    # Inspired by fsc0638/AutoScan's structured field-mapping approach.
+
+    # Known domain keywords (priority match)
+    _DOMAIN_KEYWORDS = [
+        # Finance / Economy
+        "經濟", "股市", "房市", "金融", "財經", "投資", "貿易", "匯率", "利率",
+        "加密貨幣", "區塊鏈", "房地產", "基金", "債券", "期貨", "外匯",
+        # Tech
+        "科技", "AI", "半導體", "電動車", "生技", "5G", "量子", "機器人",
+        "雲端", "資安", "晶片", "軟體",
+        # Industry / Sector
+        "產業", "能源", "航運", "零售", "製造", "農業", "觀光", "旅遊",
+        # Society
+        "政治", "國際", "軍事", "外交", "社會", "教育", "體育", "娛樂",
+        "醫療", "健康", "環境", "氣候", "法律",
     ]
 
-    @staticmethod
-    def _infer_news_config_from_text(text: str) -> dict | None:
+    # Stopwords: time, actions, format, quantity, modifiers — NOT topic content
+    _STOPWORDS = {
+        # Time expressions
+        "分鐘", "小時", "天", "週", "月", "年", "後", "前", "每天", "每日", "每週",
+        "明天", "今天", "今日", "早上", "下午", "晚上", "定時", "定期",
+        # Action verbs
+        "統整", "推送", "搜尋", "查找", "幫我", "給我", "傳送", "發送", "整理",
+        "製作", "建立", "產生", "生成", "做", "弄", "要",
+        # Format / output
+        "PDF", "pdf", "DOCX", "docx", "TXT", "txt", "下載", "檔案", "文件",
+        # Quantity
+        "則", "條", "篇", "筆", "個",
+        # Quality modifiers
+        "內容", "越", "好", "盡", "詳盡", "詳細", "精簡", "簡要", "深入",
+        # Generic
+        "新聞", "頭條", "報導", "時事", "資訊", "最新", "相關", "議題", "主題",
+        "請", "並", "且", "與", "和", "的", "了", "吧", "呢", "喔", "啊",
+        "標記", "出處", "來源", "包含", "涵蓋", "最好",
+    }
+
+    @classmethod
+    def _extract_topic_keywords(cls, text: str) -> str:
         """
-        If text looks like a news request, parse out topic/count/detail/extra.
-        Returns a news config dict, or None if not a news request.
+        AutoScan-inspired keyword extraction via stopword stripping.
+        1. Priority: match known domain keywords from text
+        2. Fallback: strip stopwords + noise, remaining = topic
+        3. Also extract "XXX相關" pattern
         """
         import re
-        text_lower = text.lower()
-        # Must mention news-related keywords
+
+        # ── Step 1: Match known domain keywords (priority, order-preserving) ──
+        found_domains = []
+        for kw in cls._DOMAIN_KEYWORDS:
+            if kw in text and kw not in found_domains:
+                found_domains.append(kw)
+
+        # ── Step 2: Extract "XXX相關" patterns ──
+        for m in re.finditer(r'([\u4e00-\u9fff]{2,6}?)相關', text):
+            candidate = m.group(1)
+            if candidate not in cls._STOPWORDS and candidate not in found_domains:
+                found_domains.append(candidate)
+
+        # ── Step 3: Extract "包含/涵蓋..." clause content ──
+        incl_match = re.search(r'(?:包含|涵蓋|最好包含)(.*?)(?:[，,。]|$)', text)
+        if incl_match:
+            clause = incl_match.group(1)
+            # Split by connectors and extract meaningful segments
+            for seg in re.split(r'[與和、及跟]', clause):
+                seg = seg.strip()
+                # Remove stopwords from each segment
+                for sw in cls._STOPWORDS:
+                    seg = seg.replace(sw, "")
+                seg = re.sub(r'\d+', '', seg).strip()
+                if len(seg) >= 2 and seg not in found_domains:
+                    found_domains.append(seg)
+
+        if found_domains:
+            return " ".join(found_domains)
+
+        # ── Step 4: Fallback — strip everything that's noise ──
+        cleaned = text
+        # Remove time expressions like "2分鐘後", "10分鐘後"
+        cleaned = re.sub(r'\d+\s*分鐘[後后]?', '', cleaned)
+        cleaned = re.sub(r'\d+\s*小時[後后]?', '', cleaned)
+        # Remove numbers + counters
+        cleaned = re.sub(r'\d+\s*[則條篇筆個]', '', cleaned)
+        # Remove stopwords
+        for sw in cls._STOPWORDS:
+            cleaned = cleaned.replace(sw, "")
+        # Remove remaining digits and punctuation
+        cleaned = re.sub(r'[\d,，。、！!？?：:；;（）()\[\]「」\s]+', ' ', cleaned)
+        cleaned = cleaned.strip()
+
+        return cleaned if len(cleaned) >= 2 else "綜合"
+
+    @classmethod
+    def _infer_news_config_from_text(cls, text: str) -> dict | None:
+        """
+        If text looks like a news request, extract structured config.
+        Inspired by AutoScan's field-mapping approach:
+          原文 → 拆解為獨立欄位 (topic / count / detail / extra)
+        """
+        import re
+
+        # ── Gate: must mention news-related keywords ──
         news_keywords = ["新聞", "news", "頭條", "時事", "報導"]
-        if not any(kw in text_lower for kw in news_keywords):
+        if not any(kw in text.lower() for kw in news_keywords):
             return None
 
         config = {}
 
-        # ── Count ──
+        # ── Field 1: count (數量) ──
         count_match = re.search(r'(\d+)\s*[則條篇筆]', text)
         config["count"] = int(count_match.group(1)) if count_match else 10
 
-        # ── Detail level ──
-        if any(kw in text for kw in ["詳盡", "詳細", "深入", "越詳盡越好", "越詳細越好", "內容越詳盡", "內容越詳細"]):
+        # ── Field 2: detail (摘要深度) ──
+        if any(kw in text for kw in ["詳盡", "詳細", "深入", "越詳盡越好", "越詳細越好"]):
             config["detail"] = "detailed"
         elif any(kw in text for kw in ["簡要", "精簡", "簡單"]):
             config["detail"] = "brief"
         else:
             config["detail"] = "normal"
 
-        # ── Topic (keyword matching, not regex) ──
-        # Strategy: scan for known topic keywords in the text, pick the first match.
-        # This is far more reliable than trying to regex-extract from arbitrary sentence structures.
-        found_topic = None
-        for kw in ScheduledPushService._TOPIC_KEYWORDS:
-            if kw in text:
-                found_topic = kw
-                break
+        # ── Field 3: topic (主題關鍵字 — AutoScan-style extraction) ──
+        config["topic"] = cls._extract_topic_keywords(text)
 
-        # Also check "XXX相關" pattern (e.g., "股市相關議題")
-        if not found_topic:
-            m = re.search(r'([^\s,，。、\d]{2,6}?)相關', text)
-            if m:
-                candidate = m.group(1).strip()
-                noise = {"新聞", "最新", "今日", "今天", "每日", "每天", "內容"}
-                if candidate not in noise and len(candidate) >= 2:
-                    found_topic = candidate
-
-        config["topic"] = found_topic or "綜合"
-
-        # ── Extra instructions ──
+        # ── Field 4: extra_instructions (額外需求) ──
         extra_parts = []
-        if any(kw in text_lower for kw in ["pdf", "下載"]):
+        if any(kw in text.lower() for kw in ["pdf", "下載"]):
             extra_parts.append("統整成PDF供下載")
-        # Subtopic requests: "包含國際趨勢與房市股市"
-        subtopic_match = re.search(r'(?:包含|涵蓋|最好包含|最好有)(.*?)(?:[，,。]|$)', text)
-        if subtopic_match:
-            extra_parts.append(subtopic_match.group(1).strip())
+        incl_match = re.search(r'(?:包含|涵蓋|最好包含|最好有)(.*?)(?:[，,。]|$)', text)
+        if incl_match:
+            extra_parts.append(incl_match.group(1).strip())
         if any(kw in text for kw in ["標記出處", "出處", "來源"]):
             extra_parts.append("標記出處")
         if extra_parts:
