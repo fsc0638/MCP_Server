@@ -287,6 +287,14 @@ class ScheduledPushService:
 
         return "⚠️ 自訂推送功能需要 LLM 支援。"
 
+    # Known topic keywords for news classification
+    _TOPIC_KEYWORDS = [
+        "經濟", "股市", "房市", "科技", "AI", "半導體", "金融", "國際",
+        "政治", "財經", "產業", "能源", "醫療", "健康", "教育", "體育",
+        "娛樂", "社會", "環境", "氣候", "軍事", "外交", "貿易", "投資",
+        "加密貨幣", "區塊鏈", "電動車", "生技", "航運", "房地產",
+    ]
+
     @staticmethod
     def _infer_news_config_from_text(text: str) -> dict | None:
         """
@@ -300,16 +308,13 @@ class ScheduledPushService:
         if not any(kw in text_lower for kw in news_keywords):
             return None
 
-        config = {"topic": "經濟"}  # default topic
+        config = {}
 
-        # Extract count (e.g., "20則", "30 條")
+        # ── Count ──
         count_match = re.search(r'(\d+)\s*[則條篇筆]', text)
-        if count_match:
-            config["count"] = int(count_match.group(1))
-        else:
-            config["count"] = 10
+        config["count"] = int(count_match.group(1)) if count_match else 10
 
-        # Extract detail level
+        # ── Detail level ──
         if any(kw in text for kw in ["詳盡", "詳細", "深入", "越詳盡越好", "越詳細越好", "內容越詳盡", "內容越詳細"]):
             config["detail"] = "detailed"
         elif any(kw in text for kw in ["簡要", "精簡", "簡單"]):
@@ -317,32 +322,34 @@ class ScheduledPushService:
         else:
             config["detail"] = "normal"
 
-        # Extract topic keywords
-        # First remove count patterns (e.g., "20則") to avoid them leaking into topic
-        text_cleaned = re.sub(r'\d+\s*[則條篇筆]', '', text)
-        topic_patterns = [
-            r'(?:統整|推送|搜尋|查找?).*?(?:的)?\s*([^\s,，。、\d]{2,6}?)(?:新聞|頭條|報導)',
-            r'([^\s,，。、\d]{2,6}?)(?:相關)?(?:新聞|頭條|報導)',
-        ]
-        for pat in topic_patterns:
-            m = re.search(pat, text_cleaned)
-            if m:
-                topic_candidate = m.group(1).strip()
-                # Filter out noise words
-                noise = {"最新", "今日", "今天", "每日", "每天", "統整", "給我", "幫我", "則", "條", "的", "後"}
-                if topic_candidate and topic_candidate not in noise and len(topic_candidate) >= 2:
-                    config["topic"] = topic_candidate
-                    break
+        # ── Topic (keyword matching, not regex) ──
+        # Strategy: scan for known topic keywords in the text, pick the first match.
+        # This is far more reliable than trying to regex-extract from arbitrary sentence structures.
+        found_topic = None
+        for kw in ScheduledPushService._TOPIC_KEYWORDS:
+            if kw in text:
+                found_topic = kw
+                break
 
-        # Detect extra instructions (PDF, specific subtopics, etc.)
+        # Also check "XXX相關" pattern (e.g., "股市相關議題")
+        if not found_topic:
+            m = re.search(r'([^\s,，。、\d]{2,6}?)相關', text)
+            if m:
+                candidate = m.group(1).strip()
+                noise = {"新聞", "最新", "今日", "今天", "每日", "每天", "內容"}
+                if candidate not in noise and len(candidate) >= 2:
+                    found_topic = candidate
+
+        config["topic"] = found_topic or "綜合"
+
+        # ── Extra instructions ──
         extra_parts = []
         if any(kw in text_lower for kw in ["pdf", "下載"]):
             extra_parts.append("統整成PDF供下載")
-        # Check for subtopic requests (e.g., "包含國際趨勢與房市股市")
+        # Subtopic requests: "包含國際趨勢與房市股市"
         subtopic_match = re.search(r'(?:包含|涵蓋|最好包含|最好有)(.*?)(?:[，,。]|$)', text)
         if subtopic_match:
             extra_parts.append(subtopic_match.group(1).strip())
-        # Check for source attribution
         if any(kw in text for kw in ["標記出處", "出處", "來源"]):
             extra_parts.append("標記出處")
         if extra_parts:
