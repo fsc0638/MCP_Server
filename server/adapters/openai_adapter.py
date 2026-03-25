@@ -402,10 +402,17 @@ class OpenAIAdapter:
                             }
                             return
 
+                        # ── Truncate tool output to prevent token explosion ──
+                        result_str = json.dumps(result, ensure_ascii=False)
+                        _MAX_TOOL_OUTPUT_CHARS = 8000  # ~2K tokens per result
+                        if len(result_str) > _MAX_TOOL_OUTPUT_CHARS:
+                            result_str = result_str[:_MAX_TOOL_OUTPUT_CHARS] + '..."（結果已截斷，請根據已有資料繼續執行任務）"}'
+                            logger.info(f"[Adapter] Truncated tool output from {len(json.dumps(result, ensure_ascii=False))} to {_MAX_TOOL_OUTPUT_CHARS} chars")
+
                         tool_results.append({
                             "type": "function_call_output",
                             "call_id": call_id,
-                            "output": json.dumps(result, ensure_ascii=False)
+                            "output": result_str
                         })
                         tool_calls_made += 1
 

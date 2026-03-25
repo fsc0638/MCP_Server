@@ -504,7 +504,7 @@ class ScheduledPushService:
             "label": "正常",
             "sentences": "10-20 句",
             "instruction": "涵蓋事件背景、關鍵數據、各方觀點與短期影響分析。",
-            "search_rounds": "3-5",
+            "search_rounds": "3-4",
         },
         "detailed": {
             "label": "詳盡",
@@ -514,7 +514,7 @@ class ScheduledPushService:
                 "各方觀點與專家評論、產業影響分析、未來展望與潛在風險，"
                 "像專業財經記者撰寫的深度調查報導。"
             ),
-            "search_rounds": "5-8",
+            "search_rounds": "3-5",
         },
     }
 
@@ -535,7 +535,8 @@ class ScheduledPushService:
                 f"使用 mcp-web-search 搜尋今日最新的「{topic}」相關新聞。\n"
                 f"必須搜尋至少 {level['search_rounds']} 次，每次使用不同關鍵字（例如：「{topic} 最新」「{topic} 趨勢」「{topic} 國際」等），\n"
                 f"確保蒐集到至少 {count} 則不重複的新聞。\n"
-                f"若搜尋 {level['search_rounds']} 次後仍不足 {count} 則，繼續搜尋直到湊滿為止（最多搜尋 10 次）。\n\n"
+                f"若搜尋 {level['search_rounds']} 次後仍不足 {count} 則，繼續搜尋直到湊滿為止（最多搜尋 6 次）。\n"
+                f"⚠️ 搜尋完成後，必須立刻進入步驟二，禁止只回覆進度報告就結束。\n\n"
                 f"【步驟二：撰寫摘要（{level['label']}模式）】\n"
                 f"將蒐集到的新聞整理為 {count} 則新聞摘要。\n"
                 f"摘要深度：每則 {level['sentences']}。\n"
@@ -592,6 +593,8 @@ class ScheduledPushService:
                 f"- 每則 URL 必須是個別新聞文章的連結，不是入口網站首頁\n"
                 f"- 若生成 PDF，PDF 內容深度必須與推送文字完全一致，不可精簡\n"
                 f"- 最後統計：共 N 則新聞，來源 M 個\n"
+                f"- 禁止只回覆「進度說明」或「即將進行」就結束 — 你必須在本次對話中完成所有步驟\n"
+                f"- 正確流程：搜尋 → 撰寫摘要 → 生成 PDF → 回覆下載連結，缺一不可\n"
             )
             return prompt
         elif task_type == "work_summary":
@@ -764,21 +767,46 @@ class ScheduledPushService:
                         "Sending follow-up to force file generation."
                     )
                     downloads_dir = os.path.join(os.getcwd(), "workspace", "downloads")
+
+                    # Truncate final_text to avoid token explosion in follow-up
+                    # Keep only first 3000 chars of assistant content (enough context for PDF)
+                    truncated_content = final_text[:3000]
+                    if len(final_text) > 3000:
+                        truncated_content += "\n...(以上為部分內容，請根據這些資料生成完整 PDF)"
+
+                    # Use minimal system prompt for follow-up (save tokens)
+                    follow_up_system = (
+                        "你是檔案生成助理。使用 mcp-python-executor 執行 Python 生成 PDF。\n"
+                        f"檔案存到：{downloads_dir}\n"
+                        f"下載連結：{base_url}/downloads/檔案名稱\n"
+                        "中文 PDF 必須用 ChinesePDF：\n"
+                        "```python\n"
+                        "import sys, os\n"
+                        f"sys.path.insert(0, r'{workspace_dir}/workspace')\n"
+                        "from pdf_helper import ChinesePDF\n"
+                        "```\n"
+                        "禁止使用 Markdown 超連結語法。URL 必須完整顯示。"
+                    )
+
                     follow_up_messages = [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": prompt},
-                        {"role": "assistant", "content": final_text},
+                        {"role": "system", "content": follow_up_system},
                         {"role": "user", "content": (
-                            "你剛才只回覆了文字，但還沒有生成 PDF 檔案。\n"
-                            "請立刻使用 mcp-python-executor 執行 Python 程式碼，"
-                            "將上面所有新聞內容製作成 PDF 檔案。\n"
+                            "以下是已整理好的新聞內容，請立刻用 mcp-python-executor "
+                            "將全部內容製作成一個 PDF 檔案。\n"
+                            "禁止再次搜尋，直接用以下內容生成 PDF：\n\n"
+                            f"{truncated_content}\n\n"
                             f"存放到：{downloads_dir}\n"
-                            f"完成後回覆下載連結：{base_url}/downloads/檔案名稱\n"
-                            "【這一步是必要的，不可跳過】"
+                            f"完成後回覆下載連結：{base_url}/downloads/檔案名稱"
                         )},
                     ]
+
+                    # Create fresh adapter for follow-up to avoid token accumulation
+                    follow_up_adapter = OpenAIAdapter(uma)
+                    follow_up_adapter.model = model
+                    follow_up_adapter.get_tools = _patched_get_tools
+
                     follow_up_text = ""
-                    for chunk in adapter.chat(
+                    for chunk in follow_up_adapter.chat(
                         messages=follow_up_messages,
                         user_query="生成PDF檔案",
                         session_id=session_id,
