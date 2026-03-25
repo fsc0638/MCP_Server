@@ -383,25 +383,34 @@ class ScheduledPushService:
                 f"📰 新聞標題\n"
                 f"（{level['sentences']}的摘要內容）\n"
                 f"🔗 來源名稱\n"
-                f"完整URL（直接貼上 https://... 的完整網址，不要用 Markdown 連結語法）\n\n"
-                f"【重要格式規則】\n"
-                f"- 禁止使用 Markdown 超連結語法 [文字](URL)，因為 LINE 不支援\n"
-                f"- URL 必須單獨一行，完整顯示 https://... 開頭的網址\n"
-                f"- LINE 會自動將完整 URL 轉為可點擊連結\n\n"
+                f"該篇新聞的個別完整URL\n\n"
+                f"【重要：URL 規則】\n"
+                f"- 每則新聞的 URL 必須是該篇新聞文章的個別網址（例如 https://news.cnyes.com/news/id/XXXXXX）\n"
+                f"- 禁止貼新聞入口網站首頁（如 https://news.cnyes.com 或 https://tw.stock.yahoo.com）\n"
+                f"- 禁止使用 Markdown 超連結語法 [文字](URL)，LINE 不支援\n"
+                f"- URL 必須單獨一行，LINE 會自動轉為可點擊連結\n"
+                f"- 如果 mcp-web-search 回傳的結果有個別文章 URL，直接使用；若只有首頁 URL 則省略該來源\n\n"
             )
             if extra:
                 prompt += f"【步驟三：額外要求】\n{extra}\n\n"
             if needs_pdf:
                 prompt += (
                     f"【步驟四：製作 PDF】\n"
-                    f"使用 mcp-python-executor 將上述所有新聞的完整內容製作成 PDF 檔案。\n"
-                    f"PDF 中每則新聞要包含完整摘要（不可精簡），存放到 downloads 目錄，\n"
-                    f"並在最終回覆中附上下載連結。\n\n"
+                    f"使用 mcp-python-executor 將所有新聞製作成 PDF 檔案。\n"
+                    f"⚠️ PDF 內容深度必須與摘要完全一致（{level['label']}模式 = {level['sentences']}），\n"
+                    f"不可以在 PDF 中再次精簡。PDF 內的每則新聞必須包含：\n"
+                    f"1. 完整標題\n"
+                    f"2. 完整摘要內容（與步驟二相同的完整句數，逐字寫入 PDF）\n"
+                    f"3. 來源名稱與個別文章 URL\n"
+                    f"存放到 downloads 目錄，並在最終回覆中附上下載連結。\n\n"
                 )
             prompt += (
-                f"【品質要求】\n"
+                f"【品質要求 — 必須嚴格遵守】\n"
                 f"- 用繁體中文\n"
-                f"- 嚴格遵守「{level['label']}」模式的句數要求（{level['sentences']}）\n"
+                f"- 每則新聞摘要必須達到「{level['label']}」模式的句數（{level['sentences']}），不足則補充\n"
+                f"- 每則摘要內容必須涵蓋：事件背景、關鍵數據、影響分析、專家觀點（如有）\n"
+                f"- 每則 URL 必須是個別新聞文章的連結，不是入口網站首頁\n"
+                f"- 若生成 PDF，PDF 內容深度必須與推送文字完全一致，不可精簡\n"
                 f"- 最後統計：共 N 則新聞，來源 M 個\n"
             )
             return prompt
