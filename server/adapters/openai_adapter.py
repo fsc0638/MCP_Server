@@ -243,7 +243,7 @@ class OpenAIAdapter:
         try:
             import time
             for _ in range(MAX_ITERATIONS):
-                MAX_RETRIES = 2
+                MAX_RETRIES = 3
                 last_error = None
                 response = None
 
@@ -283,11 +283,17 @@ class OpenAIAdapter:
                         
                     except Exception as e:
                         last_error = e
-                        if "Rate limit reached" in str(e) or "rate_limit" in str(e).lower():
+                        err_str = str(e)
+                        if "Rate limit reached" in err_str or "rate_limit" in err_str.lower():
                             if attempt < MAX_RETRIES:
-                                logger.warning(f"[OpenAI Adapter] Rate limit hit. Sleep 5s (Attempt {attempt+1}/{MAX_RETRIES})...")
-                                yield {"status": "streaming", "content": "\n(系統繁忙中，稍後將自動重試...)\n"}
-                                time.sleep(5)
+                                # Parse recommended wait time from error message
+                                import re as _re
+                                wait_match = _re.search(r'try again in (\d+(?:\.\d+)?)\s*s', err_str)
+                                wait_sec = float(wait_match.group(1)) + 2 if wait_match else 20
+                                wait_sec = min(wait_sec, 60)  # Cap at 60s
+                                logger.warning(f"[OpenAI Adapter] Rate limit hit. Wait {wait_sec:.0f}s (Attempt {attempt+1}/{MAX_RETRIES})...")
+                                yield {"status": "streaming", "content": f"\n⏳ 系統繁忙中，{wait_sec:.0f} 秒後自動重試（第 {attempt+1} 次）...\n"}
+                                time.sleep(wait_sec)
                                 continue
                         raise e # Fatal or retries exhausted
 
@@ -473,8 +479,12 @@ class OpenAIAdapter:
             return
 
         except Exception as e:
+            err_str = str(e)
             logger.error(f"OpenAI chat error: {e}")
-            yield {"status": "error", "message": str(e)}
+            if "Rate limit reached" in err_str or "rate_limit" in err_str.lower():
+                yield {"status": "error", "message": "⚠️ OpenAI API 目前流量已滿，請稍候 30 秒後再試一次。"}
+            else:
+                yield {"status": "error", "message": err_str}
 
 
     def simple_chat(self, session_history: list, temperature: float = 0.7, **kwargs) -> dict:
@@ -521,5 +531,9 @@ class OpenAIAdapter:
                     
             yield {"status": "success", "content": full_content}
         except Exception as e:
+            err_str = str(e)
             logger.error(f"OpenAI simple_chat error: {e}")
-            yield {"status": "error", "message": str(e)}
+            if "Rate limit reached" in err_str or "rate_limit" in err_str.lower():
+                yield {"status": "error", "message": "⚠️ OpenAI API 目前流量已滿，請稍候 30 秒後再試一次。"}
+            else:
+                yield {"status": "error", "message": err_str}
