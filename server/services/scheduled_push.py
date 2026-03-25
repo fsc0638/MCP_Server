@@ -318,16 +318,18 @@ class ScheduledPushService:
             config["detail"] = "normal"
 
         # Extract topic keywords
+        # First remove count patterns (e.g., "20則") to avoid them leaking into topic
+        text_cleaned = re.sub(r'\d+\s*[則條篇筆]', '', text)
         topic_patterns = [
-            r'(?:統整|推送|搜尋|查找?).*?(?:的|則|條|篇)?\s*([^\s,，。、]{2,6}?)(?:新聞|頭條|報導)',
-            r'([^\s,，。、]{2,6}?)(?:相關)?(?:新聞|頭條|報導)',
+            r'(?:統整|推送|搜尋|查找?).*?(?:的)?\s*([^\s,，。、\d]{2,6}?)(?:新聞|頭條|報導)',
+            r'([^\s,，。、\d]{2,6}?)(?:相關)?(?:新聞|頭條|報導)',
         ]
         for pat in topic_patterns:
-            m = re.search(pat, text)
+            m = re.search(pat, text_cleaned)
             if m:
                 topic_candidate = m.group(1).strip()
                 # Filter out noise words
-                noise = {"最新", "今日", "今天", "每日", "每天", "統整", "給我", "幫我", "則", "條"}
+                noise = {"最新", "今日", "今天", "每日", "每天", "統整", "給我", "幫我", "則", "條", "的", "後"}
                 if topic_candidate and topic_candidate not in noise and len(topic_candidate) >= 2:
                     config["topic"] = topic_candidate
                     break
@@ -386,9 +388,16 @@ class ScheduledPushService:
                 f"請用繁體中文回覆。"
             )
 
+        # Detect if file generation is expected
+        needs_file = any(kw in prompt.lower() for kw in [
+            "pdf", "docx", "txt", "md", "xlsx", "下載", "檔案", "存放到"
+        ]) or any(kw in original_request.lower() for kw in [
+            "pdf", "下載", "檔案"
+        ])
+
         # Try full adapter pipeline first (supports multi-skill chaining)
         try:
-            result = self._run_via_adapter(prompt, session_id)
+            result = self._run_via_adapter(prompt, session_id, needs_file=needs_file)
             if result:
                 return result
         except Exception as e:
@@ -529,8 +538,14 @@ class ScheduledPushService:
     # Tools that MUST be available for scheduled push tasks
     _REQUIRED_TOOLS_IN_PUSH = {"mcp-web-search", "mcp-python-executor"}
 
-    def _run_via_adapter(self, prompt: str, session_id: str) -> str | None:
-        """Run prompt through full OpenAI Adapter with tool calling enabled."""
+    def _run_via_adapter(self, prompt: str, session_id: str, needs_file: bool = False) -> str | None:
+        """Run prompt through full OpenAI Adapter with tool calling enabled.
+
+        Args:
+            prompt: The task prompt
+            session_id: LINE session ID
+            needs_file: If True, verify response contains a download link; if not, retry with follow-up
+        """
         try:
             from server.dependencies.uma import get_uma_instance
             from server.adapters.openai_adapter import OpenAIAdapter
@@ -636,6 +651,50 @@ class ScheduledPushService:
                     final_text = chunk.get("content", "")
                 elif status == "streaming":
                     pass  # Accumulating internally
+
+            # ── Follow-up: if file was expected but not generated, force a second round ──
+            if needs_file and final_text:
+                base_url = os.environ.get("BASE_URL", "")
+                has_download_link = (
+                    (base_url and base_url in final_text)
+                    or "/downloads/" in final_text
+                )
+                if not has_download_link:
+                    logger.warning(
+                        "[ScheduledPush] File expected but no download link found. "
+                        "Sending follow-up to force file generation."
+                    )
+                    downloads_dir = os.path.join(os.getcwd(), "workspace", "downloads")
+                    follow_up_messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": final_text},
+                        {"role": "user", "content": (
+                            "你剛才只回覆了文字，但還沒有生成 PDF 檔案。\n"
+                            "請立刻使用 mcp-python-executor 執行 Python 程式碼，"
+                            "將上面所有新聞內容製作成 PDF 檔案。\n"
+                            f"存放到：{downloads_dir}\n"
+                            f"完成後回覆下載連結：{base_url}/downloads/檔案名稱\n"
+                            "【這一步是必要的，不可跳過】"
+                        )},
+                    ]
+                    follow_up_text = ""
+                    for chunk in adapter.chat(
+                        messages=follow_up_messages,
+                        user_query="生成PDF檔案",
+                        session_id=session_id,
+                        tools_enabled=True,
+                    ):
+                        st = chunk.get("status", "")
+                        if st == "success":
+                            follow_up_text = chunk.get("content", "")
+
+                    if follow_up_text and ("/downloads/" in follow_up_text or (base_url and base_url in follow_up_text)):
+                        # Append the download link to the original text
+                        final_text = final_text.rstrip() + "\n\n" + follow_up_text
+                        logger.info("[ScheduledPush] Follow-up successfully generated file.")
+                    else:
+                        logger.warning("[ScheduledPush] Follow-up still didn't generate file link.")
 
             return final_text if final_text else None
 
