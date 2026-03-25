@@ -73,6 +73,40 @@ def _scheduled_cache_cleanup():
         logger.error(f"[Scheduler] Cache cleanup failed: {e}")
 
 
+def _scheduled_push_tick():
+    """Scheduled job: check and execute due push tasks (every minute)."""
+    try:
+        from server.services.scheduled_push import ScheduledPushService
+        from server.integrations.line_connector import _get_line_components, _send_status_push
+
+        svc = ScheduledPushService(str(PROJECT_ROOT))
+        llm_fn = make_llm_callable()
+
+        # Build tool_executor from UMA
+        tool_executor = None
+        try:
+            uma = get_uma()
+            tool_executor = lambda name, args: uma.execute_tool_call(name, args)
+        except Exception:
+            pass
+
+        # Build push function
+        def push_fn(chat_id: str, text: str):
+            try:
+                _, line_api, _ = _get_line_components()
+                _send_status_push(line_api, chat_id, text)
+            except Exception as e:
+                logger.error(f"[ScheduledPush] LINE push failed for {chat_id}: {e}")
+
+        svc.check_and_execute(
+            llm_callable=llm_fn,
+            tool_executor=tool_executor,
+            push_fn=push_fn,
+        )
+    except Exception as e:
+        logger.error(f"[Scheduler] Scheduled push tick failed: {e}")
+
+
 def _setup_scheduler():
     """Initialize APScheduler with all scheduled jobs."""
     global __scheduler
@@ -109,8 +143,18 @@ def _setup_scheduler():
             replace_existing=True,
         )
 
+        # Scheduled Push: check every minute for due tasks
+        from apscheduler.triggers.interval import IntervalTrigger
+        __scheduler.add_job(
+            _scheduled_push_tick,
+            IntervalTrigger(minutes=1),
+            id="scheduled_push_tick",
+            name="Scheduled Push Tick",
+            replace_existing=True,
+        )
+
         __scheduler.start()
-        logger.info("[Scheduler] APScheduler started with 3 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h)")
+        logger.info("[Scheduler] APScheduler started with 4 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), push_tick(1min)")
 
     except ImportError:
         logger.warning(

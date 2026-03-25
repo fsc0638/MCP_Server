@@ -223,11 +223,13 @@ All 3 write to `Agent_skills/temp/original_{session_id}.txt` and set `session.se
 
 ## Git Branch Strategy
 
-| Branch | Purpose |
-|--------|---------|
-| `AgentK_UAT` | Main development branch (local + remote) |
-| `AgentK_FSC` | Staging branch for tested features |
-| `main` | Production (rarely updated) |
+| Local Branch | Remote Branch | Purpose |
+|---|---|---|
+| `AgentK_FSC` | `origin/fsc` | FSC — 主要開發分支，日常工作推送到這裡 |
+| `AgentK_UAT` | `origin/AgentK_UAT` | UAT — 測試驗收分支，測試通過後從 FSC 合併過來 |
+| `main` | `origin/main` | Production (rarely updated) |
+
+Push commands: `git push origin AgentK_FSC:fsc` / `git push origin AgentK_UAT`
 
 `Agent_skills/` is a **git submodule** (separate repo `fsc0638/Agent_skills`). Always commit submodule changes first, then commit the parent repo's submodule reference update. Push both independently.
 

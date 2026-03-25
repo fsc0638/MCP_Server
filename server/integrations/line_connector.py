@@ -21,11 +21,13 @@ Design Principle:
   - LLM-as-a-Router 前置分類，避免所有請求都打高成本模型
   - Token 預估 + 自動降級 (Fallback)
 """
+import json
 import logging
 import os
 import re
 import threading
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
@@ -471,12 +473,31 @@ def _send_loading_animation(line_api, chat_id: str, seconds: int = 20):
 
 
 def _send_status_push(line_api, chat_id: str, text: str):
-    """推送中間狀態訊息給使用者（不佔用 reply_token）。"""
+    """推送中間狀態訊息給使用者（不佔用 reply_token）。支援長訊息自動分段。"""
     try:
         from linebot.v3.messaging import TextMessage, PushMessageRequest
-        line_api.push_message(
-            PushMessageRequest(to=chat_id, messages=[TextMessage(text=text)])
-        )
+        _MAX = 4800  # LINE limit is 5000, leave margin
+        if len(text) <= _MAX:
+            line_api.push_message(
+                PushMessageRequest(to=chat_id, messages=[TextMessage(text=text)])
+            )
+        else:
+            # Split into chunks at line boundaries
+            chunks = []
+            current = ""
+            for line in text.split("\n"):
+                if len(current) + len(line) + 1 > _MAX:
+                    if current:
+                        chunks.append(current)
+                    current = line
+                else:
+                    current = current + "\n" + line if current else line
+            if current:
+                chunks.append(current)
+            for chunk in chunks:
+                line_api.push_message(
+                    PushMessageRequest(to=chat_id, messages=[TextMessage(text=chunk)])
+                )
     except Exception as e:
         logger.warning(f"[LINE] Status push failed: {e}")
 
@@ -872,6 +893,143 @@ def _handle_pending_state(
         return f"❌ 工具 `{tool_name}` 執行失敗：{e}"
 
 
+# ── Scheduled Push: Chat Command Handler ──────────────────────────────────────
+
+def _handle_schedule_command(
+    line_api, reply_token: str, chat_id: str, session_id: str, text: str
+) -> str | None:
+    """
+    Handle schedule management commands from LINE chat.
+    Returns reply text if handled, None otherwise (continue normal flow).
+
+    Supported commands:
+      /schedule add <natural language description>
+      /schedule list
+      /schedule remove <task_id>
+      /schedule pause <task_id>
+      /schedule resume <task_id>
+    """
+    import re
+    stripped = text.strip()
+
+    # Check if it's a schedule command
+    schedule_match = re.match(
+        r'^[/／]?(?:schedule|排程|定時推送)\s*(add|list|remove|delete|pause|resume|新增|列表|刪除|暫停|恢復)?\s*(.*)',
+        stripped, re.IGNORECASE
+    )
+    if not schedule_match:
+        # Also check for natural language schedule intent
+        schedule_keywords = ["定時推送", "每天推送", "每日推送", "排程推送", "設定推送", "取消推送"]
+        if not any(kw in stripped for kw in schedule_keywords):
+            return None
+
+    try:
+        from server.services.scheduled_push import ScheduledPushService
+        svc = ScheduledPushService(str(Path(os.getcwd())))
+    except Exception as e:
+        logger.error(f"[Schedule] Failed to init service: {e}")
+        return None
+
+    # Parse command
+    action = ""
+    args_text = stripped
+    if schedule_match:
+        action = (schedule_match.group(1) or "").lower()
+        args_text = (schedule_match.group(2) or "").strip()
+
+    # Map Chinese commands
+    action_map = {"新增": "add", "列表": "list", "刪除": "remove", "暫停": "pause", "恢復": "resume"}
+    action = action_map.get(action, action)
+
+    # ── LIST ──
+    if action == "list" or "列表" in stripped:
+        tasks = svc.list_tasks(session_id)
+        if not tasks:
+            return "📋 目前沒有設定任何定時推送。\n\n輸入「定時推送 新增 <描述>」來建立，例如：\n• 定時推送 新增 每天早上8點推5則科技新聞\n• 定時推送 新增 工作日17點推送本週工作摘要\n• 定時推送 新增 每天9點推5個日文N3商務詞彙"
+
+        lines = ["📋 **定時推送排程列表**\n"]
+        for i, t in enumerate(tasks, 1):
+            status = "✅" if t.get("enabled", True) else "⏸️"
+            last = t.get("last_run", "尚未執行")
+            if last and last != "尚未執行":
+                try:
+                    last = datetime.fromisoformat(last).strftime("%m/%d %H:%M")
+                except Exception:
+                    pass
+            lines.append(
+                f"{i}. {status} **{t['name']}**\n"
+                f"   類型：{t['type']} | 時間：{t['cron']}\n"
+                f"   ID：`{t['id']}` | 上次：{last}"
+            )
+        lines.append("\n管理指令：\n• 定時推送 暫停 <ID>\n• 定時推送 恢復 <ID>\n• 定時推送 刪除 <ID>")
+        return "\n".join(lines)
+
+    # ── REMOVE ──
+    if action in ("remove", "delete"):
+        if not args_text:
+            return "⚠️ 請提供要刪除的任務 ID，例如：定時推送 刪除 task_abc12345"
+        task_id = args_text.split()[0]
+        if svc.remove_task(session_id, task_id):
+            return f"✅ 已刪除排程任務 `{task_id}`"
+        return f"⚠️ 找不到任務 `{task_id}`，請用「定時推送 列表」確認。"
+
+    # ── PAUSE ──
+    if action == "pause":
+        if not args_text:
+            return "⚠️ 請提供要暫停的任務 ID"
+        task_id = args_text.split()[0]
+        if svc.toggle_task(session_id, task_id, enabled=False):
+            return f"⏸️ 已暫停排程任務 `{task_id}`"
+        return f"⚠️ 找不到任務 `{task_id}`"
+
+    # ── RESUME ──
+    if action == "resume":
+        if not args_text:
+            return "⚠️ 請提供要恢復的任務 ID"
+        task_id = args_text.split()[0]
+        if svc.toggle_task(session_id, task_id, enabled=True):
+            return f"✅ 已恢復排程任務 `{task_id}`"
+        return f"⚠️ 找不到任務 `{task_id}`"
+
+    # ── ADD (natural language) ──
+    # Use the full original text for intent parsing
+    parse_text = args_text if args_text else stripped
+    intent = ScheduledPushService.parse_schedule_intent(parse_text)
+
+    if intent:
+        task = svc.add_task(
+            session_id=session_id,
+            chat_id=chat_id,
+            task_type=intent["type"],
+            name=intent.get("name", "定時推送"),
+            cron_str=intent["cron"],
+            config=intent.get("config", {}),
+        )
+        type_labels = {"news": "新聞摘要", "work_summary": "工作重點", "language": "語言學習", "custom": "自訂"}
+        return (
+            f"✅ 排程已建立！\n\n"
+            f"📌 **{task['name']}**\n"
+            f"類型：{type_labels.get(task['type'], task['type'])}\n"
+            f"時間：{task['cron']}\n"
+            f"設定：{json.dumps(task['config'], ensure_ascii=False)}\n"
+            f"ID：`{task['id']}`\n\n"
+            f"排程將自動執行，使用「定時推送 列表」查看所有排程。"
+        )
+
+    # Could not parse — give help
+    return (
+        "📋 **定時推送功能**\n\n"
+        "新增排程範例：\n"
+        "• 定時推送 新增 每天早上8點推5則科技新聞\n"
+        "• 定時推送 新增 工作日17點推送本週工作摘要\n"
+        "• 定時推送 新增 每天9點推5個日文N3商務詞彙\n\n"
+        "管理指令：\n"
+        "• 定時推送 列表\n"
+        "• 定時推送 刪除 <ID>\n"
+        "• 定時推送 暫停/恢復 <ID>"
+    )
+
+
 def _process_line_message(
     line_api,
     line_api_blob,
@@ -935,6 +1093,17 @@ def _process_line_message(
                     _session_mgr.append_message(session_id, "user", extracted_text)
                     _session_mgr.append_message(session_id, "assistant", pending_reply)
                     _send_line_reply(line_api, reply_token, chat_id, pending_reply)
+                    return
+
+            # ── Scheduled Push: Chat Commands ─────────────────────────────────
+            if isinstance(event_msg, TextMessageContent) and extracted_text:
+                _sched_reply = _handle_schedule_command(
+                    line_api, reply_token, chat_id, session_id, extracted_text
+                )
+                if _sched_reply is not None:
+                    _session_mgr.append_message(session_id, "user", extracted_text)
+                    _session_mgr.append_message(session_id, "assistant", _sched_reply)
+                    _send_line_reply(line_api, reply_token, chat_id, _sched_reply)
                     return
 
             attached_file_path = quoted_file_path
