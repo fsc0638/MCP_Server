@@ -287,6 +287,67 @@ class ScheduledPushService:
 
         return "⚠️ 自訂推送功能需要 LLM 支援。"
 
+    @staticmethod
+    def _infer_news_config_from_text(text: str) -> dict | None:
+        """
+        If text looks like a news request, parse out topic/count/detail/extra.
+        Returns a news config dict, or None if not a news request.
+        """
+        import re
+        text_lower = text.lower()
+        # Must mention news-related keywords
+        news_keywords = ["新聞", "news", "頭條", "時事", "報導"]
+        if not any(kw in text_lower for kw in news_keywords):
+            return None
+
+        config = {"topic": "經濟"}  # default topic
+
+        # Extract count (e.g., "20則", "30 條")
+        count_match = re.search(r'(\d+)\s*[則條篇筆]', text)
+        if count_match:
+            config["count"] = int(count_match.group(1))
+        else:
+            config["count"] = 10
+
+        # Extract detail level
+        if any(kw in text for kw in ["詳盡", "詳細", "深入", "越詳盡越好", "越詳細越好", "內容越詳盡", "內容越詳細"]):
+            config["detail"] = "detailed"
+        elif any(kw in text for kw in ["簡要", "精簡", "簡單"]):
+            config["detail"] = "brief"
+        else:
+            config["detail"] = "normal"
+
+        # Extract topic keywords
+        topic_patterns = [
+            r'(?:統整|推送|搜尋|查找?).*?(?:的|則|條|篇)?\s*([^\s,，。、]{2,6}?)(?:新聞|頭條|報導)',
+            r'([^\s,，。、]{2,6}?)(?:相關)?(?:新聞|頭條|報導)',
+        ]
+        for pat in topic_patterns:
+            m = re.search(pat, text)
+            if m:
+                topic_candidate = m.group(1).strip()
+                # Filter out noise words
+                noise = {"最新", "今日", "今天", "每日", "每天", "統整", "給我", "幫我", "則", "條"}
+                if topic_candidate and topic_candidate not in noise and len(topic_candidate) >= 2:
+                    config["topic"] = topic_candidate
+                    break
+
+        # Detect extra instructions (PDF, specific subtopics, etc.)
+        extra_parts = []
+        if any(kw in text_lower for kw in ["pdf", "下載"]):
+            extra_parts.append("統整成PDF供下載")
+        # Check for subtopic requests (e.g., "包含國際趨勢與房市股市")
+        subtopic_match = re.search(r'(?:包含|涵蓋|最好包含|最好有)(.*?)(?:[，,。]|$)', text)
+        if subtopic_match:
+            extra_parts.append(subtopic_match.group(1).strip())
+        # Check for source attribution
+        if any(kw in text for kw in ["標記出處", "出處", "來源"]):
+            extra_parts.append("標記出處")
+        if extra_parts:
+            config["extra_instructions"] = "，".join(extra_parts)
+
+        return config
+
     def generate_content(self, task: dict, session_id: str,
                          llm_callable=None, tool_executor=None) -> str:
         """
@@ -297,12 +358,25 @@ class ScheduledPushService:
         task_type = task.get("type", "custom")
         config = task.get("config", {})
         today = datetime.now().strftime("%Y-%m-%d")
+        original_request = config.get("original_request", "")
+
+        # ── Auto-correct: if type is "custom" but request looks like news, upgrade to "news" ──
+        if task_type == "custom" and original_request:
+            inferred = self._infer_news_config_from_text(original_request)
+            if inferred:
+                logger.info(
+                    f"[ScheduledPush] Auto-corrected type custom→news "
+                    f"(count={inferred.get('count')}, detail={inferred.get('detail')}, "
+                    f"topic={inferred.get('topic')})"
+                )
+                task_type = "news"
+                # Merge: keep original_request, overlay inferred fields
+                config = {**config, **inferred}
 
         # Build task-specific prompt for the full adapter pipeline
         prompt = self._build_task_prompt(task_type, config, today)
 
         # Safety: if prompt is nearly empty (custom with no prompt), use original_request
-        original_request = config.get("original_request", "")
         if original_request and len(prompt.strip()) < 50:
             logger.info(f"[ScheduledPush] Prompt too short, using original_request as fallback")
             prompt = (
@@ -374,7 +448,8 @@ class ScheduledPushService:
                 f"【步驟一：大量蒐集新聞】\n"
                 f"使用 mcp-web-search 搜尋今日最新的「{topic}」相關新聞。\n"
                 f"必須搜尋至少 {level['search_rounds']} 次，每次使用不同關鍵字（例如：「{topic} 最新」「{topic} 趨勢」「{topic} 國際」等），\n"
-                f"確保蒐集到至少 {count} 則不重複的新聞。\n\n"
+                f"確保蒐集到至少 {count} 則不重複的新聞。\n"
+                f"若搜尋 {level['search_rounds']} 次後仍不足 {count} 則，繼續搜尋直到湊滿為止（最多搜尋 10 次）。\n\n"
                 f"【步驟二：撰寫摘要（{level['label']}模式）】\n"
                 f"將蒐集到的新聞整理為 {count} 則新聞摘要。\n"
                 f"摘要深度：每則 {level['sentences']}。\n"
@@ -384,12 +459,13 @@ class ScheduledPushService:
                 f"（{level['sentences']}的摘要內容）\n"
                 f"🔗 來源名稱\n"
                 f"該篇新聞的個別完整URL\n\n"
-                f"【重要：URL 規則】\n"
-                f"- 每則新聞的 URL 必須是該篇新聞文章的個別網址（例如 https://news.cnyes.com/news/id/XXXXXX）\n"
+                f"【重要：URL 規則 — 嚴格禁止幻覺】\n"
+                f"- 你只能使用 mcp-web-search 搜尋結果中實際回傳的 URL，絕對禁止自己編造或猜測 URL\n"
+                f"- 每則新聞的 URL 必須是該篇新聞文章的個別網址（例如 https://news.cnyes.com/news/id/5873421）\n"
                 f"- 禁止貼新聞入口網站首頁（如 https://news.cnyes.com 或 https://tw.stock.yahoo.com）\n"
+                f"- 若 mcp-web-search 回傳的某筆結果只有首頁 URL 或沒有 URL，跳過該來源，改用其他有個別文章 URL 的結果\n"
                 f"- 禁止使用 Markdown 超連結語法 [文字](URL)，LINE 不支援\n"
-                f"- URL 必須單獨一行，LINE 會自動轉為可點擊連結\n"
-                f"- 如果 mcp-web-search 回傳的結果有個別文章 URL，直接使用；若只有首頁 URL 則省略該來源\n\n"
+                f"- URL 必須單獨一行，LINE 會自動轉為可點擊連結\n\n"
             )
             if extra:
                 prompt += f"【步驟三：額外要求】\n{extra}\n\n"
@@ -405,10 +481,12 @@ class ScheduledPushService:
                     f"存放到 downloads 目錄，並在最終回覆中附上下載連結。\n\n"
                 )
             prompt += (
-                f"【品質要求 — 必須嚴格遵守】\n"
+                f"【品質要求 — 必須嚴格遵守，違反任一條即為失敗】\n"
                 f"- 用繁體中文\n"
-                f"- 每則新聞摘要必須達到「{level['label']}」模式的句數（{level['sentences']}），不足則補充\n"
+                f"- 最終輸出必須恰好 {count} 則新聞，不可少於 {count} 則。若不足 {count} 則，必須再次呼叫 mcp-web-search 補充\n"
+                f"- 每則新聞摘要必須達到「{level['label']}」模式的句數（{level['sentences']}），不足則補充至達標\n"
                 f"- 每則摘要內容必須涵蓋：事件背景、關鍵數據、影響分析、專家觀點（如有）\n"
+                f"- 每則 URL 必須來自 mcp-web-search 的搜尋結果，禁止自行編造\n"
                 f"- 每則 URL 必須是個別新聞文章的連結，不是入口網站首頁\n"
                 f"- 若生成 PDF，PDF 內容深度必須與推送文字完全一致，不可精簡\n"
                 f"- 最後統計：共 N 則新聞，來源 M 個\n"
@@ -462,8 +540,8 @@ class ScheduledPushService:
             if not adapter.is_available:
                 return None
 
-            # Use standard model for scheduled tasks (mini may miss tool calls)
-            model = os.environ.get("LINE_MODEL_MINI", "gpt-4.1-mini")
+            # Use full model for scheduled tasks (mini often fails at complex multi-step tasks)
+            model = os.environ.get("LINE_MODEL_FULL", os.environ.get("OPENAI_MODEL", "gpt-4.1"))
             adapter.model = model
 
             # Inject session context (use original session_id, NOT scheduled_ prefix)
