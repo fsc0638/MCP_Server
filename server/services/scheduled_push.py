@@ -428,8 +428,18 @@ class ScheduledPushService:
         else:
             return f"請用繁體中文處理以下任務：{json.dumps(config, ensure_ascii=False)}"
 
-    # Tools that must NOT be available in scheduled push context (prevent recursion)
-    _EXCLUDED_TOOLS_IN_PUSH = {"mcp-schedule-manager"}
+    # Tools that must NOT be available in scheduled push context
+    _EXCLUDED_TOOLS_IN_PUSH = {
+        "mcp-schedule-manager",         # Prevent recursion
+        "mcp-pdf-llm-analyzer",         # Read-only, not for generating PDF
+        "mcp-docx-llm-analyzer",        # Read-only, not for generating DOCX
+        "mcp-txt-llm-analyzer",         # Read-only, not for generating TXT
+        "mcp-spreadsheet-llm-analyzer", # Read-only, not for generating XLSX
+        "mcp-groovenaust-meeting-analyst",  # Meeting-specific, not for general tasks
+        "mcp-meeting-to-notion",        # Meeting-specific
+        "mcp-high-risk-demo",           # Test only
+        "mcp-image-generator",          # Not needed for scheduled push
+    }
     # Tools that MUST be available for scheduled push tasks
     _REQUIRED_TOOLS_IN_PUSH = {"mcp-web-search", "mcp-python-executor"}
 
@@ -453,13 +463,36 @@ class ScheduledPushService:
 
             downloads_dir = os.path.join(os.getcwd(), "workspace", "downloads")
             base_url = os.environ.get("BASE_URL", "")
+            workspace_dir = os.getcwd()
             system_prompt = (
                 "你是定時推送助理。請根據使用者的任務指示，使用可用的工具完成任務。\n"
                 "【重要】你必須使用工具來完成任務，不要只用文字回答。\n"
                 "【禁止】你絕對不能呼叫 mcp-schedule-manager，排程已經建立了，你的任務是執行內容。\n"
-                "你可以且應該多次呼叫不同的工具來完成複雜任務。例如：\n"
-                "- 新聞任務：先用 mcp-web-search 搜尋多次（不同關鍵字），蒐集足夠新聞後再整理\n"
-                "- 需要 PDF：先用 mcp-web-search 蒐集資料，再用 mcp-python-executor 產生 PDF\n"
+                "【禁止】不要呼叫 mcp-pdf-llm-analyzer、mcp-docx-llm-analyzer、mcp-txt-llm-analyzer，\n"
+                "  這些是「讀取分析」工具，不是「生成檔案」工具。\n\n"
+                "你可以且應該多次呼叫不同的工具來完成複雜任務。\n"
+                "典型工作流程：\n"
+                "1. 用 mcp-web-search 搜尋多次（不同關鍵字），蒐集足夠資料\n"
+                "2. 整理搜尋結果為完整內容\n"
+                "3. 若需要 PDF，用 mcp-python-executor 執行 Python 程式碼產生 PDF\n\n"
+                "【PDF 生成方法 — 必須使用 mcp-python-executor】\n"
+                "```python\n"
+                "import sys, os\n"
+                f"sys.path.insert(0, r'{workspace_dir}/workspace')\n"
+                "from pdf_helper import ChinesePDF\n\n"
+                f"DOWNLOADS = r'{downloads_dir}'\n"
+                "os.makedirs(DOWNLOADS, exist_ok=True)\n\n"
+                "pdf = ChinesePDF()\n"
+                "pdf.add_page()\n"
+                "pdf.chapter_title('標題')      # 粗體置中標題\n"
+                "pdf.chapter_subtitle('子標題')  # 粗體子標題\n"
+                "pdf.chapter_body('內文...')     # 自動換行內文\n"
+                "pdf.add_bullet('項目符號')      # 項目列表\n"
+                "pdf.add_separator()             # 分隔線\n"
+                "pdf.output(os.path.join(DOWNLOADS, '檔名.pdf'))\n"
+                "print('PDF 已生成')\n"
+                "```\n"
+                "⚠️ 這是唯一正確的中文 PDF 生成方式，不要自己 import FPDF。\n\n"
                 f"- 檔案存放路徑：{downloads_dir}\n"
                 f"- 下載連結格式：{base_url}/downloads/檔案名稱\n"
                 "- 禁止使用 Markdown 超連結語法 [文字](URL)，LINE 不支援\n"
