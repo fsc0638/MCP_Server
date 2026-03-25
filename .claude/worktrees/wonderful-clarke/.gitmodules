@@ -1,0 +1,3 @@
+[submodule "Agent_skills"]
+	path = Agent_skills
+	url = https://github.com/fsc0638/Agent_skills.git

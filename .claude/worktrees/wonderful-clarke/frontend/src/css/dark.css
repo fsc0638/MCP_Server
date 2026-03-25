@@ -1,0 +1,7 @@
+/* Dark mode layer placeholder. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+  }
+}
+
