@@ -379,6 +379,9 @@ class OpenAIAdapter:
                                 os.environ["CHAT_ID"] = _sid[len("line_"):]
                             else:
                                 os.environ["CHAT_ID"] = _sid
+                            # Pass original user query so schedule-manager can store it
+                            if user_query:
+                                os.environ["USER_ORIGINAL_REQUEST"] = user_query
 
                         logger.info(f"Tool call: {fn_name}({fn_args})")
                         yield {"status": "streaming", "content": f"\n\n⚙️ 執行技能: `{fn_name}`\n"}

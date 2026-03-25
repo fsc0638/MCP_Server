@@ -301,6 +301,17 @@ class ScheduledPushService:
         # Build task-specific prompt for the full adapter pipeline
         prompt = self._build_task_prompt(task_type, config, today)
 
+        # Safety: if prompt is nearly empty (custom with no prompt), use original_request
+        original_request = config.get("original_request", "")
+        if original_request and len(prompt.strip()) < 50:
+            logger.info(f"[ScheduledPush] Prompt too short, using original_request as fallback")
+            prompt = (
+                f"現在時間：{today}\n"
+                f"使用者的完整需求如下，請使用可用的工具完成：\n\n"
+                f"「{original_request}」\n\n"
+                f"請用繁體中文回覆。"
+            )
+
         # Try full adapter pipeline first (supports multi-skill chaining)
         try:
             result = self._run_via_adapter(prompt, session_id)
@@ -436,9 +447,18 @@ class ScheduledPushService:
             # Inject session context for schedule-manager
             os.environ["SESSION_ID"] = session_id or ""
 
+            downloads_dir = os.path.join(os.getcwd(), "workspace", "downloads")
+            base_url = os.environ.get("BASE_URL", "")
             system_prompt = (
                 "你是定時推送助理。請根據使用者的任務指示，使用可用的工具完成任務。\n"
-                "你可以多次呼叫不同的工具來完成複雜任務（例如先搜尋再製作PDF）。\n"
+                "【重要】你必須使用工具來完成任務，不要只用文字回答。\n"
+                "你可以且應該多次呼叫不同的工具來完成複雜任務。例如：\n"
+                "- 新聞任務：先用 mcp-web-search 搜尋多次（不同關鍵字），再整理\n"
+                "- 需要 PDF：先用 mcp-web-search 蒐集資料，再用 mcp-python-executor 產生 PDF\n"
+                f"- 檔案存放路徑：{downloads_dir}\n"
+                f"- 下載連結格式：{base_url}/downloads/檔案名稱\n"
+                "- 禁止使用 Markdown 超連結語法 [文字](URL)，LINE 不支援\n"
+                "- URL 必須完整顯示 https://... 開頭，LINE 會自動轉為可點擊連結\n"
                 "回覆請用繁體中文。"
             )
 
