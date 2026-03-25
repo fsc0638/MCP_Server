@@ -362,12 +362,13 @@ class ScheduledPushService:
         today = datetime.now().strftime("%Y-%m-%d")
         original_request = config.get("original_request", "")
 
-        # ── Auto-correct: if type is "custom" but request looks like news, upgrade to "news" ──
-        if task_type == "custom" and original_request:
+        # ── Auto-correct: if type is wrong but request looks like news, upgrade to "news" ──
+        # LLM often misclassifies news requests as "custom" or "reminder"
+        if task_type in ("custom", "reminder") and original_request:
             inferred = self._infer_news_config_from_text(original_request)
             if inferred:
                 logger.info(
-                    f"[ScheduledPush] Auto-corrected type custom→news "
+                    f"[ScheduledPush] Auto-corrected type {task_type}→news "
                     f"(count={inferred.get('count')}, detail={inferred.get('detail')}, "
                     f"topic={inferred.get('topic')})"
                 )
@@ -518,6 +519,12 @@ class ScheduledPushService:
                 f"每個詞彙含：原文、發音、中文意思、例句（附翻譯）。\n"
                 f"最後出一道小測驗。用繁體中文。"
             )
+        elif task_type == "reminder":
+            # Pure reminder — just return the message, no LLM needed
+            message = config.get("message", "")
+            if not message:
+                message = config.get("original_request", "提醒時間到了！")
+            return f"⏰ {message}"
         elif task_type == "custom":
             prompt = config.get("prompt", "")
             return f"現在時間：{today}\n用繁體中文回覆。\n\n{prompt}"
