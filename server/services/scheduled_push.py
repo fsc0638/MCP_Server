@@ -289,9 +289,27 @@ class ScheduledPushService:
 
     def generate_content(self, task: dict, session_id: str,
                          llm_callable=None, tool_executor=None) -> str:
-        """Route to appropriate content generator by task type."""
+        """
+        Generate content using full OpenAI Adapter pipeline with tool calling.
+        This allows the LLM to chain multiple skills (e.g., web-search → python-executor → PDF).
+        Falls back to simple generators if adapter is unavailable.
+        """
         task_type = task.get("type", "custom")
+        config = task.get("config", {})
+        today = datetime.now().strftime("%Y-%m-%d")
 
+        # Build task-specific prompt for the full adapter pipeline
+        prompt = self._build_task_prompt(task_type, config, today)
+
+        # Try full adapter pipeline first (supports multi-skill chaining)
+        try:
+            result = self._run_via_adapter(prompt, session_id)
+            if result:
+                return result
+        except Exception as e:
+            logger.warning(f"[ScheduledPush] Adapter pipeline failed, falling back: {e}")
+
+        # Fallback to simple generators
         if task_type == "news":
             return self._generate_news(task, llm_callable, tool_executor)
         elif task_type == "work_summary":
@@ -302,6 +320,104 @@ class ScheduledPushService:
             return self._generate_custom(task, llm_callable)
         else:
             return f"⚠️ 不支援的推送類型：{task_type}"
+
+    def _build_task_prompt(self, task_type: str, config: dict, today: str) -> str:
+        """Build a detailed prompt for the adapter pipeline based on task type."""
+        if task_type == "news":
+            topic = config.get("topic", "經濟")
+            count = config.get("count", 10)
+            extra = config.get("extra_instructions", "")
+            needs_pdf = any(kw in extra.lower() for kw in ["pdf", "PDF", "下載", "檔案"])
+
+            prompt = (
+                f"今天是 {today}。請完成以下任務：\n\n"
+                f"1. 使用 mcp-web-search 搜尋今日最新的「{topic}」相關新聞。\n"
+                f"   若一次搜尋結果不足 {count} 則，請用不同關鍵字多次搜尋直到蒐集足夠。\n"
+                f"2. 整理出 {count} 則重點新聞摘要，每則包含：\n"
+                f"   - 📰 **標題**\n"
+                f"   - 2-3 句摘要\n"
+                f"   - 🔗 [來源名稱](URL)\n"
+            )
+            if extra:
+                prompt += f"3. 額外要求：{extra}\n"
+            if needs_pdf:
+                prompt += (
+                    f"\n4. 使用 mcp-python-executor 將完整新聞摘要製作成 PDF 檔案，存放到 downloads 目錄，"
+                    f"並在回覆中附上下載連結。\n"
+                )
+            prompt += f"\n格式要求：用繁體中文。最後統計總則數與來源數量。"
+            return prompt
+        elif task_type == "work_summary":
+            days = config.get("days", 7)
+            return (
+                f"今天是 {today}。請整理近 {days} 天的工作重點摘要：\n"
+                f"1. 已完成項目\n2. 進行中項目\n3. 待處理項目\n4. 重要提醒\n"
+                f"用繁體中文，格式清楚。"
+            )
+        elif task_type == "language":
+            lang = config.get("language", "日文")
+            level = config.get("level", "N3")
+            count = config.get("count", 5)
+            topic = config.get("topic", "商務")
+            return (
+                f"你是一位{lang}教師。請提供 {count} 個{level}程度的{topic}相關詞彙教學。\n"
+                f"每個詞彙含：原文、發音、中文意思、例句（附翻譯）。\n"
+                f"最後出一道小測驗。用繁體中文。"
+            )
+        elif task_type == "custom":
+            prompt = config.get("prompt", "")
+            return f"現在時間：{today}\n用繁體中文回覆。\n\n{prompt}"
+        else:
+            return f"請用繁體中文處理以下任務：{json.dumps(config, ensure_ascii=False)}"
+
+    def _run_via_adapter(self, prompt: str, session_id: str) -> str | None:
+        """Run prompt through full OpenAI Adapter with tool calling enabled."""
+        try:
+            from server.dependencies.uma import get_uma_instance
+            from server.adapters.openai_adapter import OpenAIAdapter
+            from server.services.runtime import get_universal_system_prompt
+
+            uma = get_uma_instance()
+            adapter = OpenAIAdapter(uma)
+            if not adapter.is_available:
+                return None
+
+            # Use mini model for scheduled tasks (balance cost vs capability)
+            model_mini = os.environ.get("LINE_MODEL_MINI", "gpt-4.1-mini")
+            adapter.model = model_mini
+
+            # Inject session context for schedule-manager
+            os.environ["SESSION_ID"] = session_id or ""
+
+            system_prompt = (
+                "你是定時推送助理。請根據使用者的任務指示，使用可用的工具完成任務。\n"
+                "你可以多次呼叫不同的工具來完成複雜任務（例如先搜尋再製作PDF）。\n"
+                "回覆請用繁體中文。"
+            )
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ]
+
+            final_text = ""
+            for chunk in adapter.chat(
+                messages=messages,
+                user_query=prompt,
+                session_id=f"scheduled_{session_id}",
+                tools_enabled=True,
+            ):
+                status = chunk.get("status", "")
+                if status == "success":
+                    final_text = chunk.get("content", "")
+                elif status == "streaming":
+                    pass  # Accumulating internally
+
+            return final_text if final_text else None
+
+        except Exception as e:
+            logger.error(f"[ScheduledPush] Adapter execution failed: {e}")
+            return None
 
     # ─── Scheduler Tick ──────────────────────────────────────────────────────
 
