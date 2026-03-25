@@ -369,9 +369,14 @@ class ScheduledPushService:
                 f"摘要深度：每則 {level['sentences']}。\n"
                 f"內容要求：{level['instruction']}\n\n"
                 f"每則新聞格式：\n"
-                f"📰 **新聞標題**\n"
+                f"📰 新聞標題\n"
                 f"（{level['sentences']}的摘要內容）\n"
-                f"🔗 [來源名稱](完整URL)\n\n"
+                f"🔗 來源名稱\n"
+                f"完整URL（直接貼上 https://... 的完整網址，不要用 Markdown 連結語法）\n\n"
+                f"【重要格式規則】\n"
+                f"- 禁止使用 Markdown 超連結語法 [文字](URL)，因為 LINE 不支援\n"
+                f"- URL 必須單獨一行，完整顯示 https://... 開頭的網址\n"
+                f"- LINE 會自動將完整 URL 轉為可點擊連結\n\n"
             )
             if extra:
                 prompt += f"【步驟三：額外要求】\n{extra}\n\n"
