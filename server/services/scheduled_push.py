@@ -430,15 +430,14 @@ class ScheduledPushService:
 
     # Tools that must NOT be available in scheduled push context
     _EXCLUDED_TOOLS_IN_PUSH = {
-        "mcp-schedule-manager",         # Prevent recursion
-        "mcp-pdf-llm-analyzer",         # Read-only, not for generating PDF
-        "mcp-docx-llm-analyzer",        # Read-only, not for generating DOCX
-        "mcp-txt-llm-analyzer",         # Read-only, not for generating TXT
-        "mcp-spreadsheet-llm-analyzer", # Read-only, not for generating XLSX
-        "mcp-groovenaust-meeting-analyst",  # Meeting-specific, not for general tasks
-        "mcp-meeting-to-notion",        # Meeting-specific
-        "mcp-high-risk-demo",           # Test only
-        "mcp-image-generator",          # Not needed for scheduled push
+        "mcp-schedule-manager",             # Prevent recursion
+        "mcp-pdf-llm-analyzer",             # Read-only analyzer, not for creating files
+        "mcp-docx-llm-analyzer",            # Read-only analyzer
+        "mcp-txt-llm-analyzer",             # Read-only analyzer
+        "mcp-spreadsheet-llm-analyzer",     # Read-only analyzer
+        "mcp-groovenaust-meeting-analyst",  # Meeting-specific
+        "mcp-meeting-to-notion",            # Meeting-specific
+        "mcp-high-risk-demo",               # Test only
     }
     # Tools that MUST be available for scheduled push tasks
     _REQUIRED_TOOLS_IN_PUSH = {"mcp-web-search", "mcp-python-executor"}
@@ -475,24 +474,35 @@ class ScheduledPushService:
                 "1. 用 mcp-web-search 搜尋多次（不同關鍵字），蒐集足夠資料\n"
                 "2. 整理搜尋結果為完整內容\n"
                 "3. 若需要 PDF，用 mcp-python-executor 執行 Python 程式碼產生 PDF\n\n"
-                "【PDF 生成方法 — 必須使用 mcp-python-executor】\n"
+                "【檔案生成方法 — 全部使用 mcp-python-executor】\n"
+                f"所有檔案必須存到：{downloads_dir}\n\n"
+                "■ PDF（中文必須用 ChinesePDF）：\n"
                 "```python\n"
                 "import sys, os\n"
                 f"sys.path.insert(0, r'{workspace_dir}/workspace')\n"
-                "from pdf_helper import ChinesePDF\n\n"
+                "from pdf_helper import ChinesePDF\n"
                 f"DOWNLOADS = r'{downloads_dir}'\n"
-                "os.makedirs(DOWNLOADS, exist_ok=True)\n\n"
+                "os.makedirs(DOWNLOADS, exist_ok=True)\n"
                 "pdf = ChinesePDF()\n"
                 "pdf.add_page()\n"
-                "pdf.chapter_title('標題')      # 粗體置中標題\n"
-                "pdf.chapter_subtitle('子標題')  # 粗體子標題\n"
-                "pdf.chapter_body('內文...')     # 自動換行內文\n"
-                "pdf.add_bullet('項目符號')      # 項目列表\n"
-                "pdf.add_separator()             # 分隔線\n"
+                "pdf.chapter_title('標題')\n"
+                "pdf.chapter_body('內文...')\n"
                 "pdf.output(os.path.join(DOWNLOADS, '檔名.pdf'))\n"
-                "print('PDF 已生成')\n"
                 "```\n"
-                "⚠️ 這是唯一正確的中文 PDF 生成方式，不要自己 import FPDF。\n\n"
+                "⚠️ 不要自己 import FPDF，必須用 ChinesePDF。\n\n"
+                "■ DOCX：\n"
+                "```python\n"
+                "from docx import Document\n"
+                "doc = Document()\n"
+                "doc.add_heading('標題', 0)\n"
+                "doc.add_paragraph('內文...')\n"
+                f"doc.save(r'{downloads_dir}/檔名.docx')\n"
+                "```\n\n"
+                "■ TXT / MD：\n"
+                "```python\n"
+                f"with open(r'{downloads_dir}/檔名.txt', 'w', encoding='utf-8') as f:\n"
+                "    f.write('內容...')\n"
+                "```\n\n"
                 f"- 檔案存放路徑：{downloads_dir}\n"
                 f"- 下載連結格式：{base_url}/downloads/檔案名稱\n"
                 "- 禁止使用 Markdown 超連結語法 [文字](URL)，LINE 不支援\n"
