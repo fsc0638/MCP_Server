@@ -321,26 +321,56 @@ class ScheduledPushService:
         else:
             return f"⚠️ 不支援的推送類型：{task_type}"
 
+    # News detail level definitions
+    _NEWS_DETAIL_LEVELS = {
+        "brief": {
+            "label": "精簡",
+            "sentences": "5-10 句",
+            "instruction": "簡要涵蓋事件重點與關鍵數據。",
+            "search_rounds": "2-3",
+        },
+        "normal": {
+            "label": "正常",
+            "sentences": "10-20 句",
+            "instruction": "涵蓋事件背景、關鍵數據、各方觀點與短期影響分析。",
+            "search_rounds": "3-5",
+        },
+        "detailed": {
+            "label": "詳盡",
+            "sentences": "至少 25 句",
+            "instruction": (
+                "深度報導等級：完整事件背景脈絡、所有關鍵數據與統計、"
+                "各方觀點與專家評論、產業影響分析、未來展望與潛在風險，"
+                "像專業財經記者撰寫的深度調查報導。"
+            ),
+            "search_rounds": "5-8",
+        },
+    }
+
     def _build_task_prompt(self, task_type: str, config: dict, today: str) -> str:
         """Build a detailed prompt for the adapter pipeline based on task type."""
         if task_type == "news":
             topic = config.get("topic", "經濟")
             count = config.get("count", 10)
+            detail = config.get("detail", "normal")  # brief / normal / detailed
             extra = config.get("extra_instructions", "")
             needs_pdf = any(kw in extra.lower() for kw in ["pdf", "PDF", "下載", "檔案"])
+
+            level = self._NEWS_DETAIL_LEVELS.get(detail, self._NEWS_DETAIL_LEVELS["normal"])
 
             prompt = (
                 f"今天是 {today}。請完成以下任務：\n\n"
                 f"【步驟一：大量蒐集新聞】\n"
                 f"使用 mcp-web-search 搜尋今日最新的「{topic}」相關新聞。\n"
-                f"必須搜尋至少 3-5 次，每次使用不同關鍵字（例如：「{topic} 最新」「{topic} 趨勢」「{topic} 國際」等），\n"
+                f"必須搜尋至少 {level['search_rounds']} 次，每次使用不同關鍵字（例如：「{topic} 最新」「{topic} 趨勢」「{topic} 國際」等），\n"
                 f"確保蒐集到至少 {count} 則不重複的新聞。\n\n"
-                f"【步驟二：撰寫詳盡摘要】\n"
-                f"將蒐集到的新聞整理為 {count} 則「詳盡」的新聞摘要。\n"
+                f"【步驟二：撰寫摘要（{level['label']}模式）】\n"
+                f"將蒐集到的新聞整理為 {count} 則新聞摘要。\n"
+                f"摘要深度：每則 {level['sentences']}。\n"
+                f"內容要求：{level['instruction']}\n\n"
                 f"每則新聞格式：\n"
                 f"📰 **新聞標題**\n"
-                f"（完整摘要：至少 5-8 句，涵蓋事件背景、關鍵數據、影響分析、未來展望。\n"
-                f"  不要只寫一句話帶過，要像專業財經記者撰寫的深度摘要。）\n"
+                f"（{level['sentences']}的摘要內容）\n"
                 f"🔗 [來源名稱](完整URL)\n\n"
             )
             if extra:
@@ -348,14 +378,14 @@ class ScheduledPushService:
             if needs_pdf:
                 prompt += (
                     f"【步驟四：製作 PDF】\n"
-                    f"使用 mcp-python-executor 將上述所有新聞的「完整詳盡內容」製作成 PDF 檔案。\n"
+                    f"使用 mcp-python-executor 將上述所有新聞的完整內容製作成 PDF 檔案。\n"
                     f"PDF 中每則新聞要包含完整摘要（不可精簡），存放到 downloads 目錄，\n"
                     f"並在最終回覆中附上下載連結。\n\n"
                 )
             prompt += (
                 f"【品質要求】\n"
                 f"- 用繁體中文\n"
-                f"- 每則摘要必須詳盡充實，禁止只寫 1-2 句話\n"
+                f"- 嚴格遵守「{level['label']}」模式的句數要求（{level['sentences']}）\n"
                 f"- 最後統計：共 N 則新聞，來源 M 個\n"
             )
             return prompt
