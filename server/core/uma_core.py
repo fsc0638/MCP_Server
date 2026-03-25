@@ -110,7 +110,12 @@ class UMA:
 
         # === Executable mode: run scripts/main.py directly ===
         if mode == "executable":
-            return self.executor.run_script(skill_name, "main.py", arg_dict)
+            # Per-skill timeout: read from SKILL.md metadata, default 30s
+            skill_data = self.registry.get_skill(skill_name)
+            skill_timeout = 30
+            if skill_data:
+                skill_timeout = int(skill_data["metadata"].get("execution_timeout", 30))
+            return self.executor.run_script(skill_name, "main.py", arg_dict, timeout=skill_timeout)
 
         # === Knowledge modes (code / semantic): return SKILL.md as guide ===
         skill_md_path = self.executor.skills_home / skill_name / "SKILL.md"

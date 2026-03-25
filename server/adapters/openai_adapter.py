@@ -201,17 +201,52 @@ class OpenAIAdapter:
         tools = self.get_tools(user_query=user_query) if tools_enabled else []
         tool_calls_made = 0
         MAX_ITERATIONS = 10  # Safety cap
-        
+
+        # Detect file-creation intent → force tool use via tool_choice
+        # NOTE: Only force when user has specified a concrete format.
+        #       Vague requests (e.g. "做一份報告") should NOT force tool use,
+        #       so the LLM can propose choices via [CHOICES] protocol first.
+        _file_creation_keywords = [
+            "製作", "建立", "產生", "生成", "建一個", "做一個", "寫一個",
+            "存檔", "輸出檔", "下載", "匯出",
+            "create", "generate", "make", "write", "export", "save as",
+        ]
+        # Format indicators: if user already specified a format, force tool use
+        _format_specified_keywords = [
+            "pdf", "docx", "doc", "word", "xlsx", "excel", "csv", "txt",
+            "pptx", "ppt", "md", "markdown", "json", "html",
+            ".pdf", ".docx", ".txt", ".md", ".xlsx", ".csv", ".pptx",
+        ]
+        has_creation_intent = (
+            tools_enabled
+            and tools
+            and user_query
+            and any(kw in user_query for kw in _file_creation_keywords)
+        )
+        has_format_specified = (
+            user_query
+            and any(kw in user_query.lower() for kw in _format_specified_keywords)
+        )
+        # Only force tool use when BOTH creation intent AND format are specified
+        # Otherwise, let LLM decide (may propose choices first)
+        force_tool_use = has_creation_intent and has_format_specified
+
+        logger.info(
+            f"[OpenAI Adapter] Tools: {len(tools)} injected "
+            f"({[t.get('name') for t in tools]}), "
+            f"force_tool_use={force_tool_use}"
+        )
+
         # We will track the latest response id generated in this multi-round loop
         current_response_id = prev_response_id
 
         try:
             import time
             for _ in range(MAX_ITERATIONS):
-                MAX_RETRIES = 2
+                MAX_RETRIES = 3
                 last_error = None
                 response = None
-                
+
                 for attempt in range(MAX_RETRIES + 1):
                     try:
                         kwargs_req = {
@@ -226,6 +261,10 @@ class OpenAIAdapter:
                             kwargs_req["previous_response_id"] = current_response_id
                         if tools:
                             kwargs_req["tools"] = tools
+                            # Force model to call a tool for file-creation queries
+                            # (only on first iteration; after tool results, let model decide)
+                            if force_tool_use and tool_calls_made == 0:
+                                kwargs_req["tool_choice"] = "required"
 
                         # --- DEBUG LOGGING ---
                         import copy
@@ -240,44 +279,63 @@ class OpenAIAdapter:
                         except: pass
                         
                         response = self.client.responses.create(**kwargs_req)
+                        
+                        full_content = ""
+                        tool_calls_dict = {}
+                        _turn_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+                        _turn_start_ms = int(time.time() * 1000)
+
+                        for chunk in response:
+                            ctype = chunk.type
+                            if ctype == "response.created" or ctype == "response.in_progress":
+                                current_response_id = chunk.response.id
+                            elif ctype == "response.completed":
+                                # Capture token usage from completed response
+                                _resp = getattr(chunk, "response", None)
+                                if _resp:
+                                    _u = getattr(_resp, "usage", None)
+                                    if _u:
+                                        _turn_usage["input_tokens"] = getattr(_u, "input_tokens", 0)
+                                        _turn_usage["output_tokens"] = getattr(_u, "output_tokens", 0)
+                                        _turn_usage["total_tokens"] = getattr(_u, "total_tokens", 0)
+                                        logger.info(f"[OpenAI D1] Usage: in={_turn_usage['input_tokens']} out={_turn_usage['output_tokens']} total={_turn_usage['total_tokens']}")
+                            elif ctype == "response.output_text.delta":
+                                text = chunk.delta
+                                full_content += text
+                                yield {"status": "streaming", "content": text}
+                            elif ctype == "response.function_call_arguments.delta":
+                                item_id = chunk.item_id
+                                if item_id not in tool_calls_dict:
+                                    tool_calls_dict[item_id] = {"arguments": "", "name": "", "call_id": item_id}
+                                tool_calls_dict[item_id]["arguments"] += chunk.delta
+                            elif ctype == "response.output_item.done":
+                                item = chunk.item
+                                if getattr(item, 'type', None) == 'function_call':
+                                    item_id = item.id
+                                    if item_id not in tool_calls_dict:
+                                        tool_calls_dict[item_id] = {"arguments": "", "name": item.name, "call_id": getattr(item, 'call_id', item.id)}
+                                    tool_calls_dict[item_id]["name"] = item.name or tool_calls_dict[item_id]["name"]
+                                    tool_calls_dict[item_id]["call_id"] = getattr(item, 'call_id', item.id)
+                                    if hasattr(item, 'arguments') and item.arguments:
+                                        tool_calls_dict[item_id]["arguments"] = item.arguments
+                        
                         break # Success, exit retry loop
                         
                     except Exception as e:
                         last_error = e
-                        if "Rate limit reached" in str(e) or "rate_limit" in str(e).lower():
+                        err_str = str(e)
+                        if "Rate limit reached" in err_str or "rate_limit" in err_str.lower():
                             if attempt < MAX_RETRIES:
-                                logger.warning(f"[OpenAI Adapter] Rate limit hit. Sleep 5s (Attempt {attempt+1}/{MAX_RETRIES})...")
-                                yield {"status": "streaming", "content": "\n(系統繁忙中，稍後將自動重試...)\n"}
-                                time.sleep(5)
+                                # Parse recommended wait time from error message
+                                import re as _re
+                                wait_match = _re.search(r'try again in (\d+(?:\.\d+)?)\s*s', err_str)
+                                wait_sec = float(wait_match.group(1)) + 2 if wait_match else 20
+                                wait_sec = min(wait_sec, 60)  # Cap at 60s
+                                logger.warning(f"[OpenAI Adapter] Rate limit hit. Wait {wait_sec:.0f}s (Attempt {attempt+1}/{MAX_RETRIES})...")
+                                yield {"status": "streaming", "content": f"\n⏳ 系統繁忙中，{wait_sec:.0f} 秒後自動重試（第 {attempt+1} 次）...\n"}
+                                time.sleep(wait_sec)
                                 continue
                         raise e # Fatal or retries exhausted
-
-                full_content = ""
-                tool_calls_dict = {}
-                
-                for chunk in response:
-                    ctype = chunk.type
-                    if ctype == "response.created" or ctype == "response.in_progress":
-                        current_response_id = chunk.response.id
-                    elif ctype == "response.output_text.delta":
-                        text = chunk.delta
-                        full_content += text
-                        yield {"status": "streaming", "content": text}
-                    elif ctype == "response.function_call_arguments.delta":
-                        item_id = chunk.item_id
-                        if item_id not in tool_calls_dict:
-                            tool_calls_dict[item_id] = {"arguments": "", "name": "", "call_id": item_id}
-                        tool_calls_dict[item_id]["arguments"] += chunk.delta
-                    elif ctype == "response.output_item.done":
-                        item = chunk.item
-                        if getattr(item, 'type', None) == 'function_call':
-                            item_id = item.id
-                            if item_id not in tool_calls_dict:
-                                tool_calls_dict[item_id] = {"arguments": "", "name": item.name, "call_id": getattr(item, 'call_id', item.id)}
-                            tool_calls_dict[item_id]["name"] = item.name or tool_calls_dict[item_id]["name"]
-                            tool_calls_dict[item_id]["call_id"] = getattr(item, 'call_id', item.id)
-                            if hasattr(item, 'arguments') and item.arguments:
-                                tool_calls_dict[item_id]["arguments"] = item.arguments
 
                 if tool_calls_dict:
                     tool_results = []
@@ -293,6 +351,45 @@ class OpenAIAdapter:
                             logger.error(f"Failed to parse tool args: {fn_args_str}")
                             fn_args = {}
 
+                        # ── Original file injection for transcript-dependent skills ──
+                        # When mcp-meeting-to-notion is called, the LLM may only have
+                        # session summaries (not the original text). If we have the
+                        # original file stored, inject it as the transcript parameter.
+                        # Also inject meeting_date extracted from the filename so Phase 3
+                        # uses the correct date instead of dates found in content.
+                        if fn_name == "mcp-meeting-to-notion" and getattr(self, "_original_file_path", None):
+                            import os as _os
+                            if _os.path.exists(self._original_file_path):
+                                try:
+                                    with open(self._original_file_path, "r", encoding="utf-8") as _f:
+                                        _original_text = _f.read()
+                                    if _original_text and len(_original_text) > len(fn_args.get("transcript", "")):
+                                        fn_args["transcript"] = _original_text
+                                        logger.info(f"[Adapter] Injected original file ({len(_original_text)} chars) into mcp-meeting-to-notion transcript")
+                                except Exception as _e:
+                                    logger.warning(f"[Adapter] Failed to inject original file: {_e}")
+                        # Inject filename-extracted date as meeting_date if not already set
+                        if fn_name == "mcp-meeting-to-notion" and not fn_args.get("meeting_date"):
+                            _file_date = getattr(self, "_original_file_date", None)
+                            if _file_date:
+                                fn_args["meeting_date"] = _file_date
+                                logger.info(f"[Adapter] Injected filename date {_file_date} as meeting_date")
+
+                        # Inject session context for schedule-manager skill
+                        if fn_name == "mcp-schedule-manager" and session_id:
+                            os.environ["SESSION_ID"] = session_id
+                            # Derive chat_id: line_U09e... → U09e... / line_group_Cf8ce... → Cf8ce...
+                            _sid = session_id
+                            if _sid.startswith("line_group_"):
+                                os.environ["CHAT_ID"] = _sid[len("line_group_"):]
+                            elif _sid.startswith("line_"):
+                                os.environ["CHAT_ID"] = _sid[len("line_"):]
+                            else:
+                                os.environ["CHAT_ID"] = _sid
+                            # Pass original user query so schedule-manager can store it
+                            if user_query:
+                                os.environ["USER_ORIGINAL_REQUEST"] = user_query
+
                         logger.info(f"Tool call: {fn_name}({fn_args})")
                         yield {"status": "streaming", "content": f"\n\n⚙️ 執行技能: `{fn_name}`\n"}
                         result = self.uma.execute_tool_call(fn_name, fn_args)
@@ -306,17 +403,73 @@ class OpenAIAdapter:
                             }
                             return
 
+                        # ── Truncate tool output to prevent token explosion ──
+                        result_str = json.dumps(result, ensure_ascii=False)
+                        _MAX_TOOL_OUTPUT_CHARS = 8000  # ~2K tokens per result
+                        if len(result_str) > _MAX_TOOL_OUTPUT_CHARS:
+                            result_str = result_str[:_MAX_TOOL_OUTPUT_CHARS] + '..."（結果已截斷，請根據已有資料繼續執行任務）"}'
+                            logger.info(f"[Adapter] Truncated tool output from {len(json.dumps(result, ensure_ascii=False))} to {_MAX_TOOL_OUTPUT_CHARS} chars")
+
                         tool_results.append({
                             "type": "function_call_output",
                             "call_id": call_id,
-                            "output": json.dumps(result, ensure_ascii=False)
+                            "output": result_str
                         })
                         tool_calls_made += 1
+
+                        # ── Phase D1: Token Usage Tracking ─────────────────────
+                        try:
+                            from server.services.token_tracker import TokenTracker
+                            from pathlib import Path as _Path
+                            _tracker = TokenTracker(str(_Path(os.getcwd())))
+                            _skill_internal = 0
+                            if isinstance(result, dict) and "_usage" in result:
+                                _skill_internal = result["_usage"].get("skill_total_tokens", 0)
+                            # Derive context from session_id
+                            _sid = session_id or ""
+                            _d1_chat_type = "group" if "group" in _sid else "personal"
+                            _d1_duration = int(time.time() * 1000) - _turn_start_ms
+                            _tracker.record_usage(
+                                session_id=_sid,
+                                chat_type=_d1_chat_type,
+                                skill=fn_name,
+                                model=self.model,
+                                input_tokens=_turn_usage.get("input_tokens", 0),
+                                output_tokens=_turn_usage.get("output_tokens", 0),
+                                total_tokens=_turn_usage.get("total_tokens", 0),
+                                skill_internal_tokens=_skill_internal,
+                                duration_ms=_d1_duration,
+                                status=result.get("status", "unknown") if isinstance(result, dict) else "unknown",
+                            )
+                        except Exception as _d1e:
+                            logger.debug(f"[D1] Token tracking failed: {_d1e}")
 
                     input_payload = tool_results
                     continue 
 
                 else:
+                    # ── D1: Track non-tool-call response tokens too ────────
+                    try:
+                        from server.services.token_tracker import TokenTracker
+                        from pathlib import Path as _Path
+                        _tracker = TokenTracker(str(_Path(os.getcwd())))
+                        _sid = session_id or ""
+                        _d1_chat_type = "group" if "group" in _sid else "personal"
+                        _d1_duration = int(time.time() * 1000) - _turn_start_ms
+                        _tracker.record_usage(
+                            session_id=_sid,
+                            chat_type=_d1_chat_type,
+                            skill="(chat)",
+                            model=self.model,
+                            input_tokens=_turn_usage.get("input_tokens", 0),
+                            output_tokens=_turn_usage.get("output_tokens", 0),
+                            total_tokens=_turn_usage.get("total_tokens", 0),
+                            duration_ms=_d1_duration,
+                            status="success",
+                        )
+                    except Exception:
+                        pass
+
                     if session_id and current_response_id:
                         _session_mgr.set_latest_response_id(session_id, current_response_id)
                     yield {"status": "success", "content": full_content, "tool_calls_made": tool_calls_made}
@@ -334,8 +487,12 @@ class OpenAIAdapter:
             return
 
         except Exception as e:
+            err_str = str(e)
             logger.error(f"OpenAI chat error: {e}")
-            yield {"status": "error", "message": str(e)}
+            if "Rate limit reached" in err_str or "rate_limit" in err_str.lower():
+                yield {"status": "error", "message": "⚠️ OpenAI API 目前流量已滿，請稍候 30 秒後再試一次。"}
+            else:
+                yield {"status": "error", "message": err_str}
 
 
     def simple_chat(self, session_history: list, temperature: float = 0.7, **kwargs) -> dict:
@@ -382,5 +539,9 @@ class OpenAIAdapter:
                     
             yield {"status": "success", "content": full_content}
         except Exception as e:
+            err_str = str(e)
             logger.error(f"OpenAI simple_chat error: {e}")
-            yield {"status": "error", "message": str(e)}
+            if "Rate limit reached" in err_str or "rate_limit" in err_str.lower():
+                yield {"status": "error", "message": "⚠️ OpenAI API 目前流量已滿，請稍候 30 秒後再試一次。"}
+            else:
+                yield {"status": "error", "message": err_str}

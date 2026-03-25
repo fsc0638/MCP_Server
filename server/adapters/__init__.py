@@ -170,7 +170,7 @@ def select_relevant_tools(
     Filters stop words and applies synonym normalization on both sides.
     ALWAYS includes core execution tools (executor, builder).
     """
-    CORE_TOOLS = {"mcp-python-executor", "mcp-builder", "mcp-skill-builder"}
+    CORE_TOOLS = {"mcp-python-executor", "mcp-builder", "mcp-skill-builder", "mcp-web-search"}
     
     # Tokenize and normalize user query
     query_tokens = _tokenize(user_query)

@@ -2,15 +2,20 @@
 Session Manager (Phase 5)
 Manages session lifecycle, cleanup jobs, and MEMORY.md persistence.
 """
+import json
 import os
 import uuid
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger("MCP_Server.Session")
+
+# ── Message Cache Constants ───────────────────────────────────────────────────
+MSG_CACHE_TTL_HOURS = 120  # 5 days
+MSG_CACHE_LIMIT_PER_CHAT = 500
 
 
 class SessionManager:
@@ -297,6 +302,53 @@ class SessionManager:
             self.flush_with_llm_summary(sid, llm_callable)
         logger.info(f"flush_all_sessions: persisted {len(session_ids)} sessions to MEMORY.md")
 
+    def remove_chunk_entries(self, session_id: str, filename: str):
+        """
+        Remove intermediate chunk headers and their summaries from session history.
+        Called after chunked file processing completes so that old chunk entries
+        don't pollute future conversations (preventing LLM from pattern-matching
+        on stale '三段摘要' text).
+
+        Removes messages matching: [文件分段 N/M：filename] and their paired assistant responses.
+        """
+        import re
+        history = self._conversations.get(session_id, [])
+        if not history:
+            return
+
+        # Build pattern to match chunk headers for this specific file
+        # e.g. "[文件分段 1/3：Groovenauts日經案例新聞.docx]"
+        chunk_pattern = re.compile(r'^\[文件分段 \d+/\d+[：:]' + re.escape(filename) + r'\]$')
+
+        cleaned = []
+        skip_next_assistant = False
+        removed_count = 0
+
+        for msg in history:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if skip_next_assistant and role == "assistant":
+                # This is the summary paired with a chunk header — skip it too
+                skip_next_assistant = False
+                removed_count += 1
+                continue
+
+            skip_next_assistant = False
+
+            if role == "user" and chunk_pattern.match(content.strip()):
+                # This is an intermediate chunk header — skip it
+                skip_next_assistant = True  # Also skip the paired assistant summary
+                removed_count += 1
+                continue
+
+            cleaned.append(msg)
+
+        if removed_count > 0:
+            self._conversations[session_id] = cleaned
+            self._save_conversation_to_disk(session_id)
+            logger.info(f"Removed {removed_count} chunk entries for '{filename}' from session {session_id}")
+
     def clear_conversation(self, session_id: str):
         """Clear a conversation session (flush first, then remove)."""
         self.flush_conversation_to_memory(session_id)
@@ -313,6 +365,96 @@ class SessionManager:
     def get_latest_response_id(self, session_id: str) -> Optional[str]:
         """Retrieve the response ID from the latest OpenAI Responses API turn."""
         return self._latest_response_ids.get(session_id)
+
+    # ─── Per-session Metadata (Key-Value, disk-persisted) ─────────────────────
+
+    def _meta_path(self, session_id: str) -> Path:
+        return self.sessions_dir / f"{session_id}_meta.json"
+
+    def set_metadata(self, session_id: str, key: str, value):
+        """Store arbitrary key-value metadata scoped to a session (persisted to disk)."""
+        import json
+        if not hasattr(self, "_session_metadata"):
+            self._session_metadata = {}
+        self._session_metadata.setdefault(session_id, {})[key] = value
+        # Persist to disk so metadata survives server restarts
+        try:
+            path = self._meta_path(session_id)
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._session_metadata[session_id], f, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Failed to persist metadata for {session_id}: {e}")
+
+    def get_metadata(self, session_id: str, key: str, default=None):
+        """Retrieve session-scoped metadata by key (loads from disk on first access)."""
+        import json
+        if not hasattr(self, "_session_metadata"):
+            self._session_metadata = {}
+        # Load from disk if not yet in memory
+        if session_id not in self._session_metadata:
+            path = self._meta_path(session_id)
+            if path.exists():
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        self._session_metadata[session_id] = json.load(f)
+                except Exception:
+                    self._session_metadata[session_id] = {}
+            else:
+                self._session_metadata[session_id] = {}
+        return self._session_metadata.get(session_id, {}).get(key, default)
+
+    # ─── Message Cache Persistence (Phase A1) ────────────────────────────────
+
+    def _msg_cache_path(self, chat_id: str) -> Path:
+        return self.sessions_dir / f"{chat_id}_msg_cache.json"
+
+    def load_msg_cache(self, chat_id: str) -> dict:
+        """Load message cache from disk (lazy, called on first access per chat)."""
+        path = self._msg_cache_path(chat_id)
+        if not path.exists():
+            return {}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            # Filter by TTL
+            cutoff = (datetime.now() - timedelta(hours=MSG_CACHE_TTL_HOURS)).isoformat()
+            filtered = {
+                k: v for k, v in data.items()
+                if v.get("created_at", "") >= cutoff
+            }
+            return filtered
+        except Exception as e:
+            logger.warning(f"Failed to load msg_cache for {chat_id}: {e}")
+            return {}
+
+    def save_msg_cache(self, chat_id: str, cache: dict):
+        """Save message cache to disk (dual-write with in-memory)."""
+        path = self._msg_cache_path(chat_id)
+        try:
+            path.write_text(
+                json.dumps(cache, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save msg_cache for {chat_id}: {e}")
+
+    def cleanup_all_msg_caches(self):
+        """Daily cleanup: remove expired entries from all msg_cache files."""
+        cutoff = (datetime.now() - timedelta(hours=MSG_CACHE_TTL_HOURS)).isoformat()
+        for cache_file in self.sessions_dir.glob("*_msg_cache.json"):
+            try:
+                data = json.loads(cache_file.read_text(encoding="utf-8"))
+                filtered = {
+                    k: v for k, v in data.items()
+                    if v.get("created_at", "") >= cutoff
+                }
+                if len(filtered) < len(data):
+                    cache_file.write_text(
+                        json.dumps(filtered, ensure_ascii=False, indent=2),
+                        encoding="utf-8"
+                    )
+                    logger.info(f"Cleaned msg_cache {cache_file.name}: {len(data)} → {len(filtered)}")
+            except Exception:
+                pass
 
     # ─── CLI Session Lifecycle ────────────────────────────────────────────────
 

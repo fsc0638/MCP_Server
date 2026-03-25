@@ -11,3 +11,10 @@ workspace/
 downloads/
 uploads/
 memory/MEMORY.md
+.claude/
+*.json
+!skills.json
+!package.json
+!tsconfig.json
+!composer.json
+!*.md
