@@ -301,9 +301,11 @@ class ScheduledPushService:
         "雲端", "資安", "晶片", "軟體",
         # Industry / Sector
         "產業", "能源", "航運", "零售", "製造", "農業", "觀光", "旅遊",
-        # Society
-        "政治", "國際", "軍事", "外交", "社會", "教育", "體育", "娛樂",
-        "醫療", "健康", "環境", "氣候", "法律",
+        # Society / Crime / Law
+        "政治", "國際", "軍事", "外交", "社會", "社會案件", "社會事件",
+        "犯罪", "警政", "刑事", "詐騙", "治安",
+        "教育", "體育", "娛樂",
+        "醫療", "健康", "環境", "氣候", "法律", "法規",
     ]
 
     # Stopwords: time, actions, format, quantity, modifiers — NOT topic content
@@ -521,18 +523,29 @@ class ScheduledPushService:
     def _build_task_prompt(self, task_type: str, config: dict, today: str) -> str:
         """Build a detailed prompt for the adapter pipeline based on task type."""
         if task_type == "news":
-            topic = config.get("topic", "經濟")
+            topic = config.get("topic", "綜合")
             count = config.get("count", 10)
             detail = config.get("detail", "normal")  # brief / normal / detailed
             extra = config.get("extra_instructions", "")
             needs_pdf = any(kw in extra.lower() for kw in ["pdf", "PDF", "下載", "檔案"])
+
+            # ── Auto-infer missing fields from original_request ──
+            original_request = config.get("original_request", "")
+            if original_request and topic == "綜合":
+                inferred_topic = self._extract_topic_keywords(original_request)
+                if inferred_topic and inferred_topic != "綜合":
+                    topic = inferred_topic
+                    logger.info(f"[ScheduledPush] Auto-inferred topic from original_request: {topic}")
 
             level = self._NEWS_DETAIL_LEVELS.get(detail, self._NEWS_DETAIL_LEVELS["normal"])
 
             prompt = (
                 f"⚠️ 以下是任務指令。絕對禁止在回覆中輸出任何步驟說明、流程說明、進度預告或「請稍候」訊息。直接執行，只回覆最終結果。\n\n"
                 f"今天是 {today}。\n"
+                f"🔒 主題約束：搜尋與整理內容必須完全符合主題「{topic}」，嚴禁產生無關主題的內容。\n"
+                f"🌏 地區偏好：搜尋範圍預設以台灣為主、日本為輔。若使用者有指定特定區域、國家或新聞入口網，以使用者指定為主。\n\n"
                 f"使用 mcp-web-search 搜尋今日「{topic}」最新新聞，至少搜尋 {level['search_rounds']} 次（不同關鍵字），直到蒐集滿 {count} 則不重複新聞為止（最多搜尋 6 次）。\n"
+                f"搜尋關鍵字必須包含「{topic}」相關詞彙，禁止用無關主題（如財經、科技）搜尋。\n"
                 f"蒐集完後，直接整理為 {count} 則新聞摘要，每則格式如下：\n\n"
                 f"📰 新聞標題\n"
                 f"摘要內容（{level['sentences']}，{level['instruction']}）\n"
