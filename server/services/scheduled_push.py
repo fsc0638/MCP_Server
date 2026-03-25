@@ -331,21 +331,33 @@ class ScheduledPushService:
 
             prompt = (
                 f"今天是 {today}。請完成以下任務：\n\n"
-                f"1. 使用 mcp-web-search 搜尋今日最新的「{topic}」相關新聞。\n"
-                f"   若一次搜尋結果不足 {count} 則，請用不同關鍵字多次搜尋直到蒐集足夠。\n"
-                f"2. 整理出 {count} 則重點新聞摘要，每則包含：\n"
-                f"   - 📰 **標題**\n"
-                f"   - 2-3 句摘要\n"
-                f"   - 🔗 [來源名稱](URL)\n"
+                f"【步驟一：大量蒐集新聞】\n"
+                f"使用 mcp-web-search 搜尋今日最新的「{topic}」相關新聞。\n"
+                f"必須搜尋至少 3-5 次，每次使用不同關鍵字（例如：「{topic} 最新」「{topic} 趨勢」「{topic} 國際」等），\n"
+                f"確保蒐集到至少 {count} 則不重複的新聞。\n\n"
+                f"【步驟二：撰寫詳盡摘要】\n"
+                f"將蒐集到的新聞整理為 {count} 則「詳盡」的新聞摘要。\n"
+                f"每則新聞格式：\n"
+                f"📰 **新聞標題**\n"
+                f"（完整摘要：至少 5-8 句，涵蓋事件背景、關鍵數據、影響分析、未來展望。\n"
+                f"  不要只寫一句話帶過，要像專業財經記者撰寫的深度摘要。）\n"
+                f"🔗 [來源名稱](完整URL)\n\n"
             )
             if extra:
-                prompt += f"3. 額外要求：{extra}\n"
+                prompt += f"【步驟三：額外要求】\n{extra}\n\n"
             if needs_pdf:
                 prompt += (
-                    f"\n4. 使用 mcp-python-executor 將完整新聞摘要製作成 PDF 檔案，存放到 downloads 目錄，"
-                    f"並在回覆中附上下載連結。\n"
+                    f"【步驟四：製作 PDF】\n"
+                    f"使用 mcp-python-executor 將上述所有新聞的「完整詳盡內容」製作成 PDF 檔案。\n"
+                    f"PDF 中每則新聞要包含完整摘要（不可精簡），存放到 downloads 目錄，\n"
+                    f"並在最終回覆中附上下載連結。\n\n"
                 )
-            prompt += f"\n格式要求：用繁體中文。最後統計總則數與來源數量。"
+            prompt += (
+                f"【品質要求】\n"
+                f"- 用繁體中文\n"
+                f"- 每則摘要必須詳盡充實，禁止只寫 1-2 句話\n"
+                f"- 最後統計：共 N 則新聞，來源 M 個\n"
+            )
             return prompt
         elif task_type == "work_summary":
             days = config.get("days", 7)
