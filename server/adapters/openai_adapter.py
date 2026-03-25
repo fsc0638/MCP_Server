@@ -368,6 +368,18 @@ class OpenAIAdapter:
                                 fn_args["meeting_date"] = _file_date
                                 logger.info(f"[Adapter] Injected filename date {_file_date} as meeting_date")
 
+                        # Inject session context for schedule-manager skill
+                        if fn_name == "mcp-schedule-manager" and session_id:
+                            os.environ["SESSION_ID"] = session_id
+                            # Derive chat_id: line_U09e... → U09e... / line_group_Cf8ce... → Cf8ce...
+                            _sid = session_id
+                            if _sid.startswith("line_group_"):
+                                os.environ["CHAT_ID"] = _sid[len("line_group_"):]
+                            elif _sid.startswith("line_"):
+                                os.environ["CHAT_ID"] = _sid[len("line_"):]
+                            else:
+                                os.environ["CHAT_ID"] = _sid
+
                         logger.info(f"Tool call: {fn_name}({fn_args})")
                         yield {"status": "streaming", "content": f"\n\n⚙️ 執行技能: `{fn_name}`\n"}
                         result = self.uma.execute_tool_call(fn_name, fn_args)
