@@ -149,14 +149,17 @@ class ScheduledPushService:
         config = task.get("config", {})
         topic = config.get("topic", "科技與AI")
         count = config.get("count", 5)
+        detail = config.get("detail", "normal")
 
         # Step 1: Web search
         search_results = ""
         if tool_executor:
             try:
+                search_depth = "advanced" if detail == "detailed" else "basic"
                 result = tool_executor("mcp-web-search", {
-                    "query": f"{topic} 最新新聞 today",
+                    "query": f"{topic} 最新新聞 today 台灣 日本",
                     "max_results": count * 2,
+                    "search_depth": search_depth,
                 })
                 if isinstance(result, dict):
                     search_results = result.get("content", result.get("result", str(result)))
@@ -169,18 +172,27 @@ class ScheduledPushService:
         # Step 2: LLM summarize
         if llm_callable and search_results:
             today = datetime.now().strftime("%Y-%m-%d")
+            
+            detail_instruction = "摘要（2-3 句）"
+            if detail == "detailed":
+                detail_instruction = "詳細報導（至少 25 句，包含事件背景、發展經過與各方觀點）"
+            elif detail == "brief":
+                detail_instruction = "簡短一兩句話總結"
+
             prompt = (
-                f"你是一位專業新聞編輯。根據以下搜尋結果，用繁體中文整理出 {count} 則「{topic}」領域的重點新聞摘要。\n"
+                f"你是一位專業新聞編輯。根據以下搜尋結果，用繁體中文整理出 {count} 則「{topic}」領域的重點新聞。\n"
+                f"搜尋範圍請預設以台灣為主、日本為輔。\n"
                 f"今天日期：{today}\n"
                 f"格式要求：\n"
                 f"📰 **標題**\n"
-                f"摘要（2-3 句）\n"
-                f"🔗 來源\n\n"
+                f"{detail_instruction}\n"
+                f"🔗 來源標記\n\n"
                 f"搜尋結果：\n{search_results}"
             )
             try:
                 summary = llm_callable(prompt)
-                return summary
+                fallback_warning = "\n\n⚠️ *(System Note: 因達到系統流量上限，本次採純文字回覆模式，未能完整產生 PDF 檔案)*"
+                return summary + fallback_warning
             except Exception as e:
                 logger.error(f"[ScheduledPush] LLM news summary failed: {e}")
                 return f"📰 今日{topic}新聞摘要生成失敗，請稍後重試。"

@@ -279,6 +279,46 @@ class OpenAIAdapter:
                         except: pass
                         
                         response = self.client.responses.create(**kwargs_req)
+                        
+                        full_content = ""
+                        tool_calls_dict = {}
+                        _turn_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+                        _turn_start_ms = int(time.time() * 1000)
+
+                        for chunk in response:
+                            ctype = chunk.type
+                            if ctype == "response.created" or ctype == "response.in_progress":
+                                current_response_id = chunk.response.id
+                            elif ctype == "response.completed":
+                                # Capture token usage from completed response
+                                _resp = getattr(chunk, "response", None)
+                                if _resp:
+                                    _u = getattr(_resp, "usage", None)
+                                    if _u:
+                                        _turn_usage["input_tokens"] = getattr(_u, "input_tokens", 0)
+                                        _turn_usage["output_tokens"] = getattr(_u, "output_tokens", 0)
+                                        _turn_usage["total_tokens"] = getattr(_u, "total_tokens", 0)
+                                        logger.info(f"[OpenAI D1] Usage: in={_turn_usage['input_tokens']} out={_turn_usage['output_tokens']} total={_turn_usage['total_tokens']}")
+                            elif ctype == "response.output_text.delta":
+                                text = chunk.delta
+                                full_content += text
+                                yield {"status": "streaming", "content": text}
+                            elif ctype == "response.function_call_arguments.delta":
+                                item_id = chunk.item_id
+                                if item_id not in tool_calls_dict:
+                                    tool_calls_dict[item_id] = {"arguments": "", "name": "", "call_id": item_id}
+                                tool_calls_dict[item_id]["arguments"] += chunk.delta
+                            elif ctype == "response.output_item.done":
+                                item = chunk.item
+                                if getattr(item, 'type', None) == 'function_call':
+                                    item_id = item.id
+                                    if item_id not in tool_calls_dict:
+                                        tool_calls_dict[item_id] = {"arguments": "", "name": item.name, "call_id": getattr(item, 'call_id', item.id)}
+                                    tool_calls_dict[item_id]["name"] = item.name or tool_calls_dict[item_id]["name"]
+                                    tool_calls_dict[item_id]["call_id"] = getattr(item, 'call_id', item.id)
+                                    if hasattr(item, 'arguments') and item.arguments:
+                                        tool_calls_dict[item_id]["arguments"] = item.arguments
+                        
                         break # Success, exit retry loop
                         
                     except Exception as e:
@@ -296,45 +336,6 @@ class OpenAIAdapter:
                                 time.sleep(wait_sec)
                                 continue
                         raise e # Fatal or retries exhausted
-
-                full_content = ""
-                tool_calls_dict = {}
-                _turn_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-                _turn_start_ms = int(time.time() * 1000)
-
-                for chunk in response:
-                    ctype = chunk.type
-                    if ctype == "response.created" or ctype == "response.in_progress":
-                        current_response_id = chunk.response.id
-                    elif ctype == "response.completed":
-                        # Capture token usage from completed response
-                        _resp = getattr(chunk, "response", None)
-                        if _resp:
-                            _u = getattr(_resp, "usage", None)
-                            if _u:
-                                _turn_usage["input_tokens"] = getattr(_u, "input_tokens", 0)
-                                _turn_usage["output_tokens"] = getattr(_u, "output_tokens", 0)
-                                _turn_usage["total_tokens"] = getattr(_u, "total_tokens", 0)
-                                logger.info(f"[OpenAI D1] Usage: in={_turn_usage['input_tokens']} out={_turn_usage['output_tokens']} total={_turn_usage['total_tokens']}")
-                    elif ctype == "response.output_text.delta":
-                        text = chunk.delta
-                        full_content += text
-                        yield {"status": "streaming", "content": text}
-                    elif ctype == "response.function_call_arguments.delta":
-                        item_id = chunk.item_id
-                        if item_id not in tool_calls_dict:
-                            tool_calls_dict[item_id] = {"arguments": "", "name": "", "call_id": item_id}
-                        tool_calls_dict[item_id]["arguments"] += chunk.delta
-                    elif ctype == "response.output_item.done":
-                        item = chunk.item
-                        if getattr(item, 'type', None) == 'function_call':
-                            item_id = item.id
-                            if item_id not in tool_calls_dict:
-                                tool_calls_dict[item_id] = {"arguments": "", "name": item.name, "call_id": getattr(item, 'call_id', item.id)}
-                            tool_calls_dict[item_id]["name"] = item.name or tool_calls_dict[item_id]["name"]
-                            tool_calls_dict[item_id]["call_id"] = getattr(item, 'call_id', item.id)
-                            if hasattr(item, 'arguments') and item.arguments:
-                                tool_calls_dict[item_id]["arguments"] = item.arguments
 
                 if tool_calls_dict:
                     tool_results = []
