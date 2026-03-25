@@ -428,23 +428,27 @@ class ScheduledPushService:
         else:
             return f"請用繁體中文處理以下任務：{json.dumps(config, ensure_ascii=False)}"
 
+    # Tools that must NOT be available in scheduled push context (prevent recursion)
+    _EXCLUDED_TOOLS_IN_PUSH = {"mcp-schedule-manager"}
+    # Tools that MUST be available for scheduled push tasks
+    _REQUIRED_TOOLS_IN_PUSH = {"mcp-web-search", "mcp-python-executor"}
+
     def _run_via_adapter(self, prompt: str, session_id: str) -> str | None:
         """Run prompt through full OpenAI Adapter with tool calling enabled."""
         try:
             from server.dependencies.uma import get_uma_instance
             from server.adapters.openai_adapter import OpenAIAdapter
-            from server.services.runtime import get_universal_system_prompt
 
             uma = get_uma_instance()
             adapter = OpenAIAdapter(uma)
             if not adapter.is_available:
                 return None
 
-            # Use mini model for scheduled tasks (balance cost vs capability)
-            model_mini = os.environ.get("LINE_MODEL_MINI", "gpt-4.1-mini")
-            adapter.model = model_mini
+            # Use standard model for scheduled tasks (mini may miss tool calls)
+            model = os.environ.get("LINE_MODEL_MINI", "gpt-4.1-mini")
+            adapter.model = model
 
-            # Inject session context for schedule-manager
+            # Inject session context (use original session_id, NOT scheduled_ prefix)
             os.environ["SESSION_ID"] = session_id or ""
 
             downloads_dir = os.path.join(os.getcwd(), "workspace", "downloads")
@@ -452,8 +456,9 @@ class ScheduledPushService:
             system_prompt = (
                 "你是定時推送助理。請根據使用者的任務指示，使用可用的工具完成任務。\n"
                 "【重要】你必須使用工具來完成任務，不要只用文字回答。\n"
+                "【禁止】你絕對不能呼叫 mcp-schedule-manager，排程已經建立了，你的任務是執行內容。\n"
                 "你可以且應該多次呼叫不同的工具來完成複雜任務。例如：\n"
-                "- 新聞任務：先用 mcp-web-search 搜尋多次（不同關鍵字），再整理\n"
+                "- 新聞任務：先用 mcp-web-search 搜尋多次（不同關鍵字），蒐集足夠新聞後再整理\n"
                 "- 需要 PDF：先用 mcp-web-search 蒐集資料，再用 mcp-python-executor 產生 PDF\n"
                 f"- 檔案存放路徑：{downloads_dir}\n"
                 f"- 下載連結格式：{base_url}/downloads/檔案名稱\n"
@@ -467,11 +472,33 @@ class ScheduledPushService:
                 {"role": "user", "content": prompt},
             ]
 
+            # Override get_tools to ensure web-search is included and schedule-manager is excluded
+            _original_get_tools = adapter.get_tools
+
+            def _patched_get_tools(user_query="", max_tools=15):
+                tools = _original_get_tools(user_query=user_query, max_tools=max_tools)
+                # Remove excluded tools (prevent recursion)
+                tools = [t for t in tools if t.get("name") not in self._EXCLUDED_TOOLS_IN_PUSH]
+                # Check if required tools are present
+                tool_names = {t.get("name") for t in tools}
+                for required in self._REQUIRED_TOOLS_IN_PUSH:
+                    if required not in tool_names:
+                        # Fetch from full list
+                        all_tools = _original_get_tools(user_query="", max_tools=50)
+                        for t in all_tools:
+                            if t.get("name") == required:
+                                tools.append(t)
+                                logger.info(f"[ScheduledPush] Force-injected required tool: {required}")
+                                break
+                return tools
+
+            adapter.get_tools = _patched_get_tools
+
             final_text = ""
             for chunk in adapter.chat(
                 messages=messages,
                 user_query=prompt,
-                session_id=f"scheduled_{session_id}",
+                session_id=session_id,  # Use original session_id, no prefix
                 tools_enabled=True,
             ):
                 status = chunk.get("status", "")
