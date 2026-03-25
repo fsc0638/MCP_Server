@@ -12,6 +12,14 @@ PDF Helper — 預設支援中文的 PDF 生成器
     pdf.chapter_title('台北市松山區天氣報告')
     pdf.chapter_body('今日氣溫 19°C 至 22°C，陰天到多雲...')
     pdf.output('output.pdf')
+
+可用方法一覽（請直接使用這些名稱，不要自創）：
+    chapter_title(title, size=16)      — 大標題（粗體置中），別名：add_title, add_heading, set_title
+    chapter_subtitle(subtitle, size=13) — 子標題，別名：add_subheading, add_subtitle
+    chapter_body(body, size=11)        — 內文段落，別名：add_text, add_paragraph, write_text, add_content
+    add_bullet(text, size=11)          — 項目符號
+    add_separator()                    — 分隔線
+    output(path)                       — 輸出 PDF 檔案
 """
 
 import os
@@ -25,14 +33,42 @@ _FONT_CANDIDATES = [
     (r'C:/Windows/Fonts/simsun.ttc', '新宋體'),
 ]
 
+# 判斷是否為路徑字串（LLM 常誤將 output path 傳入 constructor）
+def _looks_like_path(s: str) -> bool:
+    return (
+        isinstance(s, str) and (
+            '\\' in s or
+            s.startswith('/') or
+            (len(s) > 4 and '.' in s.split('\\')[-1].split('/')[-1]) or
+            s.upper().endswith('.PDF')
+        )
+    )
+
 
 class ChinesePDF(FPDF):
     """
     繼承 FPDF，自動載入中文字體。
     所有文字輸出自動使用中文字體，不會出現亂碼。
+
+    ⚠️ 正確用法：
+        pdf = ChinesePDF()          ← 不傳任何路徑
+        pdf.add_page()
+        pdf.chapter_title('標題')
+        pdf.chapter_body('內容')
+        pdf.output('output.pdf')    ← 路徑在 output() 傳入
+
+    ❌ 錯誤用法（會自動修正）：
+        pdf = ChinesePDF('output.pdf')  ← 路徑不該放這裡
     """
 
     def __init__(self, orientation='portrait', unit='mm', format='A4'):
+        # Guard: LLM sometimes passes output path as orientation
+        if _looks_like_path(orientation):
+            self._deferred_output = orientation
+            orientation = 'portrait'
+        else:
+            self._deferred_output = None
+
         super().__init__(orientation=orientation, unit=unit, format=format)
         self._chinese_font_name = None
         self._load_chinese_font()
@@ -58,29 +94,31 @@ class ChinesePDF(FPDF):
         style = 'B' if bold else ''
         self.set_font(self._chinese_font_name, style, size)
 
+    # ── 核心方法 ──────────────────────────────────────────────
+
     def chapter_title(self, title, size=16):
         """寫入章節標題（粗體、置中）"""
         self.set_chinese_font(size=size, bold=True)
-        self.cell(0, 12, text=title, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
+        self.cell(0, 12, text=str(title), new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C')
         self.ln(4)
 
     def chapter_subtitle(self, subtitle, size=13):
         """寫入子標題"""
         self.set_chinese_font(size=size, bold=True)
-        self.cell(0, 10, text=subtitle, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.cell(0, 10, text=str(subtitle), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         self.ln(2)
 
     def chapter_body(self, body, size=11):
         """寫入內文段落（自動換行）"""
         self.set_chinese_font(size=size)
-        self.multi_cell(0, 7, text=body)
+        self.multi_cell(0, 7, text=str(body))
         self.ln(3)
 
     def add_bullet(self, text, size=11):
         """寫入項目符號列表項"""
         self.set_chinese_font(size=size)
         self.cell(8, 7, text='•')
-        self.multi_cell(0, 7, text=text)
+        self.multi_cell(0, 7, text=str(text))
         self.ln(1)
 
     def add_separator(self):
@@ -89,6 +127,52 @@ class ChinesePDF(FPDF):
         y = self.get_y()
         self.line(self.l_margin, y, self.w - self.r_margin, y)
         self.ln(5)
+
+    # ── 別名（容錯 LLM 常猜錯的名稱）───────────────────────────
+
+    def add_title(self, title, size=16):
+        """別名 → chapter_title"""
+        return self.chapter_title(title, size)
+
+    def add_heading(self, title, size=16):
+        """別名 → chapter_title"""
+        return self.chapter_title(title, size)
+
+    def set_title_text(self, title, size=16):
+        """別名 → chapter_title"""
+        return self.chapter_title(title, size)
+
+    def add_subheading(self, subtitle, size=13):
+        """別名 → chapter_subtitle"""
+        return self.chapter_subtitle(subtitle, size)
+
+    def add_subtitle(self, subtitle, size=13):
+        """別名 → chapter_subtitle"""
+        return self.chapter_subtitle(subtitle, size)
+
+    def add_text(self, body, size=11):
+        """別名 → chapter_body"""
+        return self.chapter_body(body, size)
+
+    def add_paragraph(self, body, size=11):
+        """別名 → chapter_body"""
+        return self.chapter_body(body, size)
+
+    def write_text(self, body, size=11):
+        """別名 → chapter_body"""
+        return self.chapter_body(body, size)
+
+    def add_content(self, body, size=11):
+        """別名 → chapter_body"""
+        return self.chapter_body(body, size)
+
+    def add_section(self, title, body=None, title_size=14, body_size=11):
+        """便利方法：同時寫入小標題 + 內文"""
+        self.chapter_subtitle(title, size=title_size)
+        if body:
+            self.chapter_body(body, size=body_size)
+
+    # ── 頁首頁尾 ──────────────────────────────────────────────
 
     def header(self):
         """頁首（可覆寫）"""
