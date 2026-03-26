@@ -30,8 +30,23 @@ def _parse_simple_cron(cron_str: str) -> dict:
     Parse simple cron: '08:30' or '每天 08:30' → {"hour": 8, "minute": 30}
     Also supports: 'weekday 09:00' → {"day_of_week": "mon-fri", "hour": 9, "minute": 0}
     Full cron: '0 8 * * 1-5' → parsed as minute hour day month day_of_week
+    Interval: 'every +10m' or '*/10 * * * *' → {"interval_minutes": 10}
     """
+    import re as _re
     cron_str = cron_str.strip()
+
+    # Interval: 'every +10m' / 'every 10m' / 'every 10 min'
+    _iv = _re.search(r'every\s*\+?(\d+)\s*(?:m|min)', cron_str)
+    if _iv:
+        return {"interval_minutes": int(_iv.group(1))}
+
+    # Full cron with interval in minute field: '*/10 * * * *'
+    _parts = cron_str.split()
+    if len(_parts) == 5 and _parts[0].startswith("*/"):
+        try:
+            return {"interval_minutes": int(_parts[0][2:])}
+        except ValueError:
+            pass
 
     # Format: HH:MM
     if ":" in cron_str and len(cron_str.split()) <= 2:
@@ -860,38 +875,55 @@ class ScheduledPushService:
                     continue
 
                 cron = task.get("cron_parsed", {})
-                task_hour = cron.get("hour")
-                task_minute = cron.get("minute", 0)
+                interval_minutes = cron.get("interval_minutes")
 
-                # Check hour & minute match
-                if task_hour is not None and task_hour != current_hour:
-                    continue
-                if task_minute != current_minute:
-                    continue
+                if interval_minutes:
+                    # Interval task: fire when elapsed time since last_run >= interval
+                    last_run_str = task.get("last_run")
+                    if last_run_str:
+                        try:
+                            lr = datetime.fromisoformat(last_run_str)
+                            # Prevent duplicate in same minute
+                            if lr.hour == current_hour and lr.minute == current_minute:
+                                continue
+                            elapsed = (now - lr).total_seconds() / 60
+                            if elapsed < interval_minutes:
+                                continue
+                        except ValueError:
+                            pass
+                else:
+                    task_hour = cron.get("hour")
+                    task_minute = cron.get("minute", 0)
 
-                # Check day_of_week
-                dow_filter = cron.get("day_of_week")
-                if dow_filter:
-                    if dow_filter == "mon-fri":
-                        if dow_map.get(current_dow, 0) > 4:
-                            continue
-                    elif current_dow not in dow_filter:
+                    # Check hour & minute match
+                    if task_hour is not None and task_hour != current_hour:
+                        continue
+                    if task_minute != current_minute:
                         continue
 
-                # Check day of month
-                day_filter = cron.get("day")
-                if day_filter and day_filter != current_day:
-                    continue
+                    # Check day_of_week
+                    dow_filter = cron.get("day_of_week")
+                    if dow_filter:
+                        if dow_filter == "mon-fri":
+                            if dow_map.get(current_dow, 0) > 4:
+                                continue
+                        elif current_dow not in dow_filter:
+                            continue
 
-                # Prevent duplicate runs (check last_run within same minute)
-                last_run = task.get("last_run")
-                if last_run:
-                    try:
-                        lr = datetime.fromisoformat(last_run)
-                        if lr.hour == current_hour and lr.minute == current_minute and lr.date() == now.date():
-                            continue  # Already ran this minute
-                    except ValueError:
-                        pass
+                    # Check day of month
+                    day_filter = cron.get("day")
+                    if day_filter and day_filter != current_day:
+                        continue
+
+                    # Prevent duplicate runs (check last_run within same minute)
+                    last_run = task.get("last_run")
+                    if last_run:
+                        try:
+                            lr = datetime.fromisoformat(last_run)
+                            if lr.hour == current_hour and lr.minute == current_minute and lr.date() == now.date():
+                                continue  # Already ran this minute
+                        except ValueError:
+                            pass
 
                 # ── Execute ──
                 logger.info(f"[ScheduledPush] Executing task '{task['name']}' ({task['type']}) for {session_id}")
