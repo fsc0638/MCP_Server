@@ -18,8 +18,10 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 CHANNEL_SECRET = os.environ.get("LINE_CHANNEL_SECRET", "")
 if not CHANNEL_SECRET:
-    print("ERROR: LINE_CHANNEL_SECRET not found in .env")
-    sys.exit(1)
+    # Treat missing secrets as a skip (unit-test friendly). This script is an
+    # integration test that requires a local .env.
+    print("SKIP: LINE_CHANNEL_SECRET not found in .env")
+    raise SystemExit(0)
 
 # Test payload: one TextMessageEvent with LINE v3 required fields
 body = '{"destination":"Uc8c4b48b56d3da90c085b8b0e7f6e98a","events":[{"type":"message","message":{"type":"text","id":"123456789","quoteToken":"q3Plxr4AgKd9","text":"早上好"},"timestamp":1741676400000,"source":{"type":"user","userId":"U12345abcde"},"replyToken":"abcdef1234567890abcdef1234567890","mode":"active","webhookEventId":"01HQTEST12345","deliveryContext":{"isRedelivery":false}}]}'

@@ -1,11 +1,16 @@
+import pytest
 import json
 from openai import OpenAI
 from dotenv import load_dotenv
 
-load_dotenv()
-client = OpenAI()
+pytestmark = pytest.mark.integration
 
-response = client.responses.create(
+
+def test_responses_output_integration():
+    load_dotenv()
+    client = OpenAI()
+
+    response = client.responses.create(
     model='gpt-4o',
     input=[
         {'role': 'user', 'content': 'What is the weather in Tokyo?'},
@@ -34,6 +39,6 @@ response = client.responses.create(
         }
     ]
 )
-for chunk in response:
-    print(chunk.type)
-print('Done!')
+    for chunk in response:
+        print(chunk.type)
+    print('Done!')

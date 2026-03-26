@@ -1,6 +1,9 @@
+import pytest
 import requests
 import json
 import sys
+
+pytestmark = pytest.mark.integration
 
 # Ensure UTF-8 output for Windows terminal
 if sys.platform == "win32":
@@ -19,6 +22,7 @@ def test_get_models():
         print(f"Error: {e}")
 
 def test_chat(provider, model, message):
+    pytest.skip("integration helper script; not a real pytest test")
     print(f"\n=== Testing POST /chat (Provider: {provider}, Model: {model}) ===")
     payload = {
         "user_input": message,
