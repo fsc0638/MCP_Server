@@ -75,8 +75,9 @@ class OpenAIAdapter:
 
     def get_tools(self, user_query: str = "", max_tools: int = 10) -> List[Dict[str, Any]]:
         """
-        Fetches tools from UMA and formats them for OpenAI.
-        D-06 Filtered/Dynamic injection.
+        Fetches tools from UMA (name + description only) and converts to Responses API format.
+        Full SKILL.md + references are injected on-demand via execute_tool_call().
+        D-06: Filtered/Dynamic injection — always filters when user_query is provided.
         """
         if not self.is_available:
             return []
@@ -85,27 +86,19 @@ class OpenAIAdapter:
 
         all_tools = self.uma.get_tools_for_model("openai")
 
-        if user_query and len(all_tools) > max_tools:
+        if user_query:
             all_tools = select_relevant_tools(user_query, all_tools, max_tools)
-            
-        # P-03: Flatten the tool schema for Responses API compatibility
-        # D-07: V2 Optimization - Minimize schemas for knowledge-type tools to save tokens
+
+        # P-03: Convert Chat Completions format → Responses API format (flatten function wrapper)
         responses_api_tools = []
-        core_execution_tools = ["mcp-python-executor", "mcp-builder", "mcp-skill-builder"]
-        
         for t in all_tools:
             if t.get("type") == "function" and "function" in t:
                 fn = t["function"]
-                fn_name = fn.get("name")
-                
-                # Keep parameters if they exist, otherwise use empty object
-                params = fn.get("parameters", {"type": "object", "properties": {}})
-                
                 responses_api_tools.append({
                     "type": "function",
-                    "name": fn_name,
+                    "name": fn.get("name"),
                     "description": fn.get("description", ""),
-                    "parameters": params
+                    "parameters": fn.get("parameters", {"type": "object", "properties": {}})
                 })
         return responses_api_tools
 

@@ -25,33 +25,41 @@ class UMA:
 
     def get_tools_for_model(self, model_type: str) -> List[Dict[str, Any]]:
         """
-        Returns executable skills (those with defined parameters) as model-specific tool definitions.
-        Knowledge-type skills (no parameters/scripts) are NOT registered as tools.
-        They are injected as context via get_skill_knowledge() instead.
+        Returns only name + description per skill for LLM tool selection.
+        Full SKILL.md + references layer are injected on-demand via execute_tool_call()
+        when the LLM actually decides to invoke a specific skill.
+        This applies to all platforms (LINE Bot, Web UI, etc.).
         """
         tools = []
+        # Open schema — LLM passes args based on description; full spec arrives via execute_tool_call
+        _open_params = {"type": "object", "properties": {}, "additionalProperties": True}
+
         for skill_name, data in self.registry.skills.items():
-            meta = data["metadata"].copy()
-            # D-02: Include knowledge-type skills (no parameters defined) as reference tools
-            params = meta.get("parameters")
-            if not params:
-                meta["parameters"] = {"type": "object", "properties": {}}
-            
-            # Check dependency readiness
+            meta = data["metadata"]
+            desc = meta.get("description", "")
             if not meta.get("_env_ready", False):
-                meta["description"] = meta.get("description", "") + " [UNAVAILABLE: Missing dependencies]"
+                desc += " [UNAVAILABLE: Missing dependencies]"
 
             if model_type.lower() == "openai":
-                tools.append(self.converter.to_openai(meta))
-            elif model_type.lower() == "gemini":
-                tools.append(self.converter.to_gemini(meta))
-            elif model_type.lower() == "claude":
-                tool_def = self.converter.to_openai(meta)
-                fn = tool_def.get("function", tool_def)
                 tools.append({
-                    "name": fn.get("name"),
-                    "description": fn.get("description"),
-                    "input_schema": fn.get("parameters", {"type": "object", "properties": {}})
+                    "type": "function",
+                    "function": {
+                        "name": skill_name,
+                        "description": desc,
+                        "parameters": _open_params
+                    }
+                })
+            elif model_type.lower() == "gemini":
+                tools.append({
+                    "name": skill_name,
+                    "description": desc,
+                    "parameters": {"type": "object", "properties": {}}
+                })
+            elif model_type.lower() == "claude":
+                tools.append({
+                    "name": skill_name,
+                    "description": desc,
+                    "input_schema": _open_params
                 })
         return tools
 
@@ -80,65 +88,100 @@ class UMA:
         skill_dir = self.executor.skills_home / skill_name
         scripts_dir = skill_dir / "scripts"
 
-        # Check for main.py (case-insensitive for cross-platform: scripts/ or Scripts/)
         for candidate in [scripts_dir, skill_dir / "Scripts"]:
             main_py = candidate / "main.py"
             if main_py.exists():
                 return "executable"
 
-        # Check for any .py files in scripts/
         for candidate in [scripts_dir, skill_dir / "Scripts"]:
             if candidate.exists() and any(candidate.rglob("*.py")):
                 return "code"
 
         return "semantic"
 
+    def _load_references(self, skill_name: str) -> str:
+        """
+        Loads the references/ layer content for a skill.
+        Text files (.md, .txt) are injected as full content.
+        Binary files (.docx, .xlsx, .pdf) are listed as available template paths.
+        """
+        refs_dir = self.executor.skills_home / skill_name / "references"
+        if not refs_dir.exists():
+            return ""
+        content = "\n\n---\n【REFERENCE LAYER — 必須嚴格依照以下知識文件作答，禁止自行設計格式或內容】\n"
+        for ref_file in sorted(refs_dir.iterdir()):
+            if ref_file.suffix.lower() in (".md", ".txt"):
+                content += f"\n=== {ref_file.name} ===\n"
+                content += ref_file.read_text(encoding="utf-8", errors="replace")
+            elif ref_file.suffix.lower() in (".docx", ".xlsx", ".pdf"):
+                content += (
+                    f"\n[TEMPLATE FILE]: {ref_file.name} "
+                    f"(binary — absolute path: {ref_file}; "
+                    f"use mcp-python-executor to load as template)\n"
+                )
+        return content
+
     def execute_tool_call(self, skill_name: str, arguments: str):
         """
-        Executes a skill based on its auto-detected execution mode:
-        - executable: scripts/main.py exists → run the script directly
-        - code:       scripts/ has reference .py files → return guide + instruct LLM to use python-executor
-        - semantic:   no scripts at all → return guide + instruct LLM to process directly
+        Two-phase skill execution:
+        1. LLM selects a skill based on name + description (lightweight listing).
+        2. On invocation, full SKILL.md + references/ layer are returned so LLM
+           has complete context before acting. Applies to all platforms.
+
+        Execution modes:
+        - executable (scripts/main.py exists): run script directly.
+        - code (scripts/*.py, no main.py): return SKILL.md guide + instruct LLM to use python-executor.
+        - semantic (no scripts): return SKILL.md guide + LLM processes; SKILL.md may instruct python-executor.
+
+        Phase 3: risk_level: high → requires_approval gate.
         """
-        # Parse 'arguments' string if needed, or assume it's a dict
         try:
             arg_dict = json.loads(arguments) if isinstance(arguments, str) else arguments
         except:
             arg_dict = {"raw": arguments}
 
-        mode = self._detect_execution_mode(skill_name)
+        # Phase 3: Risk-level gate
+        skill_data = self.registry.get_skill(skill_name)
+        if skill_data:
+            meta = skill_data.get("metadata", {})
+            if meta.get("risk_level", "").lower() == "high":
+                return {
+                    "status": "requires_approval",
+                    "tool_name": skill_name,
+                    "risk_description": meta.get(
+                        "risk_description",
+                        f"技能「{skill_name}」被標記為高風險操作，需要使用者授權後才可執行。"
+                    ),
+                    "pending_args": arg_dict,
+                }
 
-        # === Executable mode: run scripts/main.py directly ===
+        mode = self._detect_execution_mode(skill_name)
+        skill_dir = self.executor.skills_home / skill_name
+
+        # === Executable: run script directly ===
         if mode == "executable":
-            # Per-skill timeout: read from SKILL.md metadata, default 30s
-            skill_data = self.registry.get_skill(skill_name)
-            skill_timeout = 30
-            if skill_data:
-                skill_timeout = int(skill_data["metadata"].get("execution_timeout", 30))
+            skill_timeout = int(skill_data["metadata"].get("execution_timeout", 30)) if skill_data else 30
             return self.executor.run_script(skill_name, "main.py", arg_dict, timeout=skill_timeout)
 
-        # === Knowledge modes (code / semantic): return SKILL.md as guide ===
-        skill_md_path = self.executor.skills_home / skill_name / "SKILL.md"
+        # === Knowledge modes (code / semantic): return full SKILL.md + references ===
+        skill_md_path = skill_dir / "SKILL.md"
         if not skill_md_path.exists():
             return {"status": "error", "message": f"Skill '{skill_name}' not found."}
 
-        content = skill_md_path.read_text(encoding="utf-8", errors="replace")
+        skill_content = skill_md_path.read_text(encoding="utf-8", errors="replace")
+        reference_content = self._load_references(skill_name)
 
         if mode == "code":
-            # Has reference scripts → LLM should use mcp-python-executor
             message = (
-                f"INTERNAL REFERENCE RETRIEVED: This is a technical guide for '{skill_name}'. "
-                f"DO NOT repeat this guide to the user. Instead, use the 'mcp-python-executor' tool "
-                f"to write and run the Python code needed to process the user's file, "
-                f"following the logic described below."
+                f"SKILL ACTIVATED: '{skill_name}' (code mode). "
+                f"Follow the guide below. Use 'mcp-python-executor' to run the required Python logic. "
+                f"DO NOT repeat this guide to the user."
             )
         else:
-            # Semantic mode → LLM processes directly with language capabilities
             message = (
-                f"SKILL ACTIVATED: '{skill_name}'. "
-                f"Follow the instructions in the guide below to directly process "
-                f"the user's request using your language capabilities. "
-                f"Do NOT call mcp-python-executor unless the user explicitly asks for code execution."
+                f"SKILL ACTIVATED: '{skill_name}' (semantic mode). "
+                f"Use your language capabilities to process the user's request following the guide below. "
+                f"If a REFERENCE LAYER is present, it is the authoritative standard — follow it strictly."
             )
 
         return {
@@ -147,7 +190,7 @@ class UMA:
             "skill": skill_name,
             "execution_mode": mode,
             "message": message,
-            "guide": content
+            "guide": skill_content + reference_content
         }
 
 
