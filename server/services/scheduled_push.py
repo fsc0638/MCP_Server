@@ -15,6 +15,7 @@ Content types:
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -268,25 +269,35 @@ class ScheduledPushService:
         return "📋 工作摘要功能需要 LLM 支援。"
 
     def _generate_language(self, task: dict, llm_callable=None) -> str:
-        """Generate language vocabulary learning content."""
+        """Generate language vocabulary/grammar learning content (fallback path)."""
         config = task.get("config", {})
         language = config.get("language", "日文")
         level = config.get("level", "N3")
         count = config.get("count", 5)
-        topic = config.get("topic", "商務")
+        content_type = config.get("content_type", "vocabulary")
+        current_category = config.get("current_category", config.get("topic", ""))
+        used_items = config.get("used_items", [])
+        exclusion = (
+            f"🚫 以下批次已推送過，本次必須涵蓋完全不同的內容：\n"
+            f"{chr(10).join(used_items[-20:])}\n\n"
+        ) if used_items else ""
+        focus = f"本次聚焦主題：【{current_category}】\n" if current_category else ""
 
         if llm_callable:
-            prompt = (
-                f"你是一位{language}教師。請提供 {count} 個{level}程度的{topic}相關詞彙教學。\n"
-                f"格式要求（用繁體中文解釋）：\n"
-                f"📖 **每日{language}學習**\n\n"
-                f"每個詞彙包含：\n"
-                f"1️⃣ 詞彙（原文）\n"
-                f"   發音 / 羅馬拼音\n"
-                f"   中文意思\n"
-                f"   例句（附中文翻譯）\n\n"
-                f"最後附一個小測驗，讓使用者回覆答案。"
-            )
+            if content_type == "grammar":
+                prompt = (
+                    f"{exclusion}你是一位{language}教師。請提供「恰好 {count} 個」{level}程度的文法句型教學。\n"
+                    f"{focus}"
+                    f"每個文法格式：句型 / 意思 / 使用情況 / 例句1（附翻譯）/ 例句2（附翻譯）。\n"
+                    f"⚠️ 輸出恰好 {count} 個文法句型，不多不少。最後出一道小測驗。用繁體中文說明。"
+                )
+            else:
+                prompt = (
+                    f"{exclusion}你是一位{language}教師。請提供「恰好 {count} 個」{level}程度的詞彙教學。\n"
+                    f"{focus}"
+                    f"每個詞彙格式：原文（假名）/ 發音（羅馬拼音）/ 中文意思 / 例句（附中文翻譯）。\n"
+                    f"⚠️ 輸出恰好 {count} 個詞彙，不多不少。最後出一道小測驗。用繁體中文。"
+                )
             try:
                 return llm_callable(prompt)
             except Exception as e:
@@ -294,6 +305,55 @@ class ScheduledPushService:
                 return f"📖 今日{language}學習內容生成失敗，請稍後重試。"
 
         return f"📖 {language}學習功能需要 LLM 支援。"
+
+    def _init_language_categories(self, original_request: str, llm_callable) -> list:
+        """
+        One-time LLM call to generate a rotation category list for this task.
+        Fully generic — works for any language, content type, or level.
+        """
+        prompt = (
+            f"根據以下學習需求，列出 24 個具體且不重複的子主題或分類，"
+            f"讓每次推送都能涵蓋不同面向、避免內容重複。\n"
+            f"需求：{original_request}\n\n"
+            f"只輸出一個 JSON 陣列，例如：[\"主題1\", \"主題2\", ...]，不要任何說明或額外文字。"
+        )
+        try:
+            result = llm_callable(prompt)
+            match = re.search(r'\[.*?\]', result, re.DOTALL)
+            if match:
+                categories = json.loads(match.group())
+                if isinstance(categories, list) and len(categories) >= 3:
+                    logger.info(f"[ScheduledPush] Generated {len(categories)} rotation categories")
+                    return categories
+        except Exception as e:
+            logger.warning(f"[ScheduledPush] Category init failed: {e}")
+        return []
+
+    def _update_language_history(self, task: dict, session_id: str, current_category: str):
+        """
+        After each push, record which category was covered and advance the rotation index.
+        Format-agnostic — does not parse LLM output content.
+        """
+        config_path = self._config_path(session_id)
+        if not config_path.exists():
+            return
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            for t in cfg.get("tasks", []):
+                if t["id"] == task["id"]:
+                    tc = t.get("config", {})
+                    # Advance rotation index
+                    tc["category_index"] = tc.get("category_index", 0) + 1
+                    # Append batch summary (format-agnostic)
+                    batch_num = tc["category_index"]
+                    used_items = tc.get("used_items", [])
+                    used_items.append(f"第{batch_num}批（{current_category}）")
+                    tc["used_items"] = used_items[-40:]  # keep last 40 batches
+                    break
+            config_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info(f"[ScheduledPush] History updated for {task['id']}: category={current_category}")
+        except Exception as e:
+            logger.warning(f"[ScheduledPush] Failed to update language history: {e}")
 
     def _generate_custom(self, task: dict, llm_callable=None) -> str:
         """Generate content from custom prompt."""
@@ -481,6 +541,68 @@ class ScheduledPushService:
                 # Merge: keep original_request, overlay inferred fields
                 config = {**config, **inferred}
 
+        # ── Auto-fill missing language fields from original_request ──
+        if task_type == "language" and original_request:
+            needs_fill = (
+                not config.get("count") or not config.get("level")
+                or not config.get("language") or not config.get("content_type")
+            )
+            if needs_fill:
+                filled = {}
+                if not config.get("count"):
+                    _cm = re.search(r'(\d+)\s*[個條]', original_request)
+                    filled["count"] = int(_cm.group(1)) if _cm else 5
+                if not config.get("level"):
+                    _lm = re.search(r'N([1-5])', original_request)
+                    filled["level"] = f"N{_lm.group(1)}" if _lm else "N3"
+                if not config.get("language"):
+                    for _lang, _kws in [
+                        ("日文", ["日文", "日語", "日本語"]),
+                        ("英文", ["英文", "英語"]),
+                        ("韓文", ["韓文", "韓語"]),
+                        ("義大利文", ["義大利"]),
+                        ("法文", ["法文", "法語"]),
+                        ("西班牙文", ["西班牙"]),
+                    ]:
+                        if any(kw in original_request for kw in _kws):
+                            filled["language"] = _lang
+                            break
+                if not config.get("content_type"):
+                    _grammar_kws = ["文法", "語法", "句型", "表達方式", "grammar"]
+                    filled["content_type"] = "grammar" if any(kw in original_request for kw in _grammar_kws) else "vocabulary"
+                if filled:
+                    config = {**config, **filled}
+                    logger.info(f"[ScheduledPush] Auto-filled language fields: {filled}")
+
+        # ── Language: category rotation init + inject ──
+        current_category = None
+        if task_type == "language":
+            # Step 1: Initialize category list on first push (one-time LLM call)
+            if not config.get("categories") and llm_callable:
+                categories = self._init_language_categories(original_request or str(config), llm_callable)
+                if categories:
+                    config = {**config, "categories": categories, "category_index": 0}
+                    # Persist immediately so other ticks don't re-init
+                    config_path = self._config_path(session_id)
+                    if config_path.exists():
+                        try:
+                            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                            for t in cfg.get("tasks", []):
+                                if t["id"] == task["id"]:
+                                    t["config"]["categories"] = categories
+                                    t["config"]["category_index"] = 0
+                                    break
+                            config_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+                        except Exception:
+                            pass
+
+            # Step 2: Pick current category from rotation
+            categories = config.get("categories", [])
+            if categories:
+                idx = config.get("category_index", 0)
+                current_category = categories[idx % len(categories)]
+                config = {**config, "current_category": current_category}
+
         # Build task-specific prompt for the full adapter pipeline
         prompt = self._build_task_prompt(task_type, config, today)
 
@@ -505,6 +627,8 @@ class ScheduledPushService:
         try:
             result = self._run_via_adapter(prompt, session_id, needs_file=needs_file)
             if result:
+                if task_type == "language":
+                    self._update_language_history(task, session_id, current_category or "通用")
                 return result
         except Exception as e:
             logger.warning(f"[ScheduledPush] Adapter pipeline failed, falling back: {e}")
@@ -606,12 +730,37 @@ class ScheduledPushService:
             lang = config.get("language", "日文")
             level = config.get("level", "N3")
             count = config.get("count", 5)
-            topic = config.get("topic", "商務")
-            return (
-                f"你是一位{lang}教師。請提供 {count} 個{level}程度的{topic}相關詞彙教學。\n"
-                f"每個詞彙含：原文、發音、中文意思、例句（附翻譯）。\n"
-                f"最後出一道小測驗。用繁體中文。"
-            )
+            topic = config.get("topic", "")
+            content_type = config.get("content_type", "vocabulary")
+            current_category = config.get("current_category", "")
+            used_items = config.get("used_items", [])
+            # A: used_items exclusion (format-agnostic batch history)
+            exclusion = (
+                f"🚫 以下批次已推送過，本次必須涵蓋完全不同的內容，嚴禁重複：\n"
+                f"{chr(10).join(used_items[-20:])}\n\n"
+            ) if used_items else ""
+            # B: category rotation — current focus topic
+            focus = f"本次聚焦主題：【{current_category}】\n" if current_category else (f"本次主題：「{topic}」\n" if topic else "")
+            if content_type == "grammar":
+                return (
+                    f"{exclusion}"
+                    f"你是一位{lang}教師。請提供「恰好 {count} 個」{level}程度的文法句型教學。\n"
+                    f"{focus}"
+                    f"每個文法格式：\n"
+                    f"句型：〜（文法型）\n意思：（中文說明）\n使用情況：（何時使用）\n"
+                    f"例句1：（{lang}例句）\n翻譯：（中文翻譯）\n"
+                    f"例句2：（{lang}例句）\n翻譯：（中文翻譯）\n\n"
+                    f"⚠️ 輸出恰好 {count} 個文法句型，不多不少。最後出一道小測驗。用繁體中文說明。"
+                )
+            else:
+                return (
+                    f"{exclusion}"
+                    f"你是一位{lang}教師。請提供「恰好 {count} 個」{level}程度的詞彙教學。\n"
+                    f"{focus}"
+                    f"每個詞彙格式：\n"
+                    f"原文（假名）\n發音（羅馬拼音）\n中文意思\n例句（附中文翻譯）\n\n"
+                    f"⚠️ 輸出恰好 {count} 個詞彙，不多不少。最後出一道小測驗。用繁體中文。"
+                )
         elif task_type == "reminder":
             # Pure reminder — just return the message, no LLM needed
             message = config.get("message", "")
