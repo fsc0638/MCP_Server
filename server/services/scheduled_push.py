@@ -30,8 +30,23 @@ def _parse_simple_cron(cron_str: str) -> dict:
     Parse simple cron: '08:30' or '每天 08:30' → {"hour": 8, "minute": 30}
     Also supports: 'weekday 09:00' → {"day_of_week": "mon-fri", "hour": 9, "minute": 0}
     Full cron: '0 8 * * 1-5' → parsed as minute hour day month day_of_week
+    Interval: 'every +10m' or '*/10 * * * *' → {"interval_minutes": 10}
     """
+    import re as _re
     cron_str = cron_str.strip()
+
+    # Interval: 'every +10m' / 'every 10m' / 'every 10 min'
+    _iv = _re.search(r'every\s*\+?(\d+)\s*(?:m|min)', cron_str)
+    if _iv:
+        return {"interval_minutes": int(_iv.group(1))}
+
+    # Full cron with interval in minute field: '*/10 * * * *'
+    _parts = cron_str.split()
+    if len(_parts) == 5 and _parts[0].startswith("*/"):
+        try:
+            return {"interval_minutes": int(_parts[0][2:])}
+        except ValueError:
+            pass
 
     # Format: HH:MM
     if ":" in cron_str and len(cron_str.split()) <= 2:
@@ -149,14 +164,17 @@ class ScheduledPushService:
         config = task.get("config", {})
         topic = config.get("topic", "科技與AI")
         count = config.get("count", 5)
+        detail = config.get("detail", "normal")
 
         # Step 1: Web search
         search_results = ""
         if tool_executor:
             try:
+                search_depth = "advanced" if detail == "detailed" else "basic"
                 result = tool_executor("mcp-web-search", {
-                    "query": f"{topic} 最新新聞 today",
+                    "query": f"{topic} 最新新聞 today 台灣 日本",
                     "max_results": count * 2,
+                    "search_depth": search_depth,
                 })
                 if isinstance(result, dict):
                     search_results = result.get("content", result.get("result", str(result)))
@@ -169,18 +187,27 @@ class ScheduledPushService:
         # Step 2: LLM summarize
         if llm_callable and search_results:
             today = datetime.now().strftime("%Y-%m-%d")
+            
+            detail_instruction = "摘要（2-3 句）"
+            if detail == "detailed":
+                detail_instruction = "詳細報導（至少 25 句，包含事件背景、發展經過與各方觀點）"
+            elif detail == "brief":
+                detail_instruction = "簡短一兩句話總結"
+
             prompt = (
-                f"你是一位專業新聞編輯。根據以下搜尋結果，用繁體中文整理出 {count} 則「{topic}」領域的重點新聞摘要。\n"
+                f"你是一位專業新聞編輯。根據以下搜尋結果，用繁體中文整理出 {count} 則「{topic}」領域的重點新聞。\n"
+                f"搜尋範圍請預設以台灣為主、日本為輔。\n"
                 f"今天日期：{today}\n"
                 f"格式要求：\n"
                 f"📰 **標題**\n"
-                f"摘要（2-3 句）\n"
-                f"🔗 來源\n\n"
+                f"{detail_instruction}\n"
+                f"🔗 來源標記\n\n"
                 f"搜尋結果：\n{search_results}"
             )
             try:
                 summary = llm_callable(prompt)
-                return summary
+                fallback_warning = "\n\n⚠️ *(System Note: 因達到系統流量上限，本次採純文字回覆模式，未能完整產生 PDF 檔案)*"
+                return summary + fallback_warning
             except Exception as e:
                 logger.error(f"[ScheduledPush] LLM news summary failed: {e}")
                 return f"📰 今日{topic}新聞摘要生成失敗，請稍後重試。"
@@ -301,9 +328,11 @@ class ScheduledPushService:
         "雲端", "資安", "晶片", "軟體",
         # Industry / Sector
         "產業", "能源", "航運", "零售", "製造", "農業", "觀光", "旅遊",
-        # Society
-        "政治", "國際", "軍事", "外交", "社會", "教育", "體育", "娛樂",
-        "醫療", "健康", "環境", "氣候", "法律",
+        # Society / Crime / Law
+        "政治", "國際", "軍事", "外交", "社會", "社會案件", "社會事件",
+        "犯罪", "警政", "刑事", "詐騙", "治安",
+        "教育", "體育", "娛樂",
+        "醫療", "健康", "環境", "氣候", "法律", "法規",
     ]
 
     # Stopwords: time, actions, format, quantity, modifiers — NOT topic content
@@ -521,18 +550,29 @@ class ScheduledPushService:
     def _build_task_prompt(self, task_type: str, config: dict, today: str) -> str:
         """Build a detailed prompt for the adapter pipeline based on task type."""
         if task_type == "news":
-            topic = config.get("topic", "經濟")
+            topic = config.get("topic", "綜合")
             count = config.get("count", 10)
             detail = config.get("detail", "normal")  # brief / normal / detailed
             extra = config.get("extra_instructions", "")
             needs_pdf = any(kw in extra.lower() for kw in ["pdf", "PDF", "下載", "檔案"])
+
+            # ── Auto-infer missing fields from original_request ──
+            original_request = config.get("original_request", "")
+            if original_request and topic == "綜合":
+                inferred_topic = self._extract_topic_keywords(original_request)
+                if inferred_topic and inferred_topic != "綜合":
+                    topic = inferred_topic
+                    logger.info(f"[ScheduledPush] Auto-inferred topic from original_request: {topic}")
 
             level = self._NEWS_DETAIL_LEVELS.get(detail, self._NEWS_DETAIL_LEVELS["normal"])
 
             prompt = (
                 f"⚠️ 以下是任務指令。絕對禁止在回覆中輸出任何步驟說明、流程說明、進度預告或「請稍候」訊息。直接執行，只回覆最終結果。\n\n"
                 f"今天是 {today}。\n"
+                f"🔒 主題約束：搜尋與整理內容必須完全符合主題「{topic}」，嚴禁產生無關主題的內容。\n"
+                f"🌏 地區偏好：預設以台灣為主、日本為輔，除非使用者另有指定。\n\n"
                 f"使用 mcp-web-search 搜尋今日「{topic}」最新新聞，至少搜尋 {level['search_rounds']} 次（不同關鍵字），直到蒐集滿 {count} 則不重複新聞為止（最多搜尋 6 次）。\n"
+                f"搜尋關鍵字規則：query 必須包含「{topic}」核心詞彙（例如 query=\"台灣 {topic} 最新\"），嚴禁用其他無關主題搜尋。\n"
                 f"蒐集完後，直接整理為 {count} 則新聞摘要，每則格式如下：\n\n"
                 f"📰 新聞標題\n"
                 f"摘要內容（{level['sentences']}，{level['instruction']}）\n"
@@ -835,38 +875,55 @@ class ScheduledPushService:
                     continue
 
                 cron = task.get("cron_parsed", {})
-                task_hour = cron.get("hour")
-                task_minute = cron.get("minute", 0)
+                interval_minutes = cron.get("interval_minutes")
 
-                # Check hour & minute match
-                if task_hour is not None and task_hour != current_hour:
-                    continue
-                if task_minute != current_minute:
-                    continue
+                if interval_minutes:
+                    # Interval task: fire when elapsed time since last_run >= interval
+                    last_run_str = task.get("last_run")
+                    if last_run_str:
+                        try:
+                            lr = datetime.fromisoformat(last_run_str)
+                            # Prevent duplicate in same minute
+                            if lr.hour == current_hour and lr.minute == current_minute:
+                                continue
+                            elapsed = (now - lr).total_seconds() / 60
+                            if elapsed < interval_minutes:
+                                continue
+                        except ValueError:
+                            pass
+                else:
+                    task_hour = cron.get("hour")
+                    task_minute = cron.get("minute", 0)
 
-                # Check day_of_week
-                dow_filter = cron.get("day_of_week")
-                if dow_filter:
-                    if dow_filter == "mon-fri":
-                        if dow_map.get(current_dow, 0) > 4:
-                            continue
-                    elif current_dow not in dow_filter:
+                    # Check hour & minute match
+                    if task_hour is not None and task_hour != current_hour:
+                        continue
+                    if task_minute != current_minute:
                         continue
 
-                # Check day of month
-                day_filter = cron.get("day")
-                if day_filter and day_filter != current_day:
-                    continue
+                    # Check day_of_week
+                    dow_filter = cron.get("day_of_week")
+                    if dow_filter:
+                        if dow_filter == "mon-fri":
+                            if dow_map.get(current_dow, 0) > 4:
+                                continue
+                        elif current_dow not in dow_filter:
+                            continue
 
-                # Prevent duplicate runs (check last_run within same minute)
-                last_run = task.get("last_run")
-                if last_run:
-                    try:
-                        lr = datetime.fromisoformat(last_run)
-                        if lr.hour == current_hour and lr.minute == current_minute and lr.date() == now.date():
-                            continue  # Already ran this minute
-                    except ValueError:
-                        pass
+                    # Check day of month
+                    day_filter = cron.get("day")
+                    if day_filter and day_filter != current_day:
+                        continue
+
+                    # Prevent duplicate runs (check last_run within same minute)
+                    last_run = task.get("last_run")
+                    if last_run:
+                        try:
+                            lr = datetime.fromisoformat(last_run)
+                            if lr.hour == current_hour and lr.minute == current_minute and lr.date() == now.date():
+                                continue  # Already ran this minute
+                        except ValueError:
+                            pass
 
                 # ── Execute ──
                 logger.info(f"[ScheduledPush] Executing task '{task['name']}' ({task['type']}) for {session_id}")
