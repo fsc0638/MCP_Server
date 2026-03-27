@@ -24,7 +24,8 @@ def update_memory_store(project_root: str | Path) -> Dict[str, Any]:
     br_path = root / "memory" / "behavior_rules.json"
     if br_path.exists():
         br = json.loads(br_path.read_text(encoding="utf-8"))
-        ms.upsert_long_term_behavior_rules(br)
+        # disable_missing=True so removed rules stop being injected
+        ms.upsert_long_term_behavior_rules(br, disable_missing=True, history_limit=1000)
 
     # Short-term tick summary
     st_path = root / "memory" / "continuous_learner_state.json"

@@ -48,6 +48,7 @@ class MemoryStore:
                 "long_term": {"behavior_rules": {"style": [], "taboos": [], "group_rules": []}, "notes": []},
                 "short_term": {"recent_ticks": [], "recent_notes": []},
                 "change_log": [],
+                "disabled": {"style": [], "taboos": [], "group_rules": []},
             }
         return json.loads(self.store_path.read_text(encoding="utf-8"))
 
@@ -75,7 +76,7 @@ class MemoryStore:
             return 1
         return 0
 
-    def upsert_long_term_behavior_rules(self, behavior_rules: Dict[str, Any], limit_each: int = 60, history_limit: int = 1000) -> Dict[str, Any]:
+    def upsert_long_term_behavior_rules(self, behavior_rules: Dict[str, Any], limit_each: int = 60, history_limit: int = 1000, disable_missing: bool = False) -> Dict[str, Any]:
         data = self.load()
         lt = data.setdefault("long_term", {})
         br = lt.setdefault("behavior_rules", {"style": [], "taboos": [], "group_rules": []})
@@ -168,9 +169,47 @@ class MemoryStore:
                     break
             return out
 
-        br["style"] = _merge("style", br.get("style", []), behavior_rules.get("style", []))
-        br["taboos"] = _merge("taboos", br.get("taboos", []), behavior_rules.get("taboos", []))
-        br["group_rules"] = _merge("group_rules", br.get("group_rules", []), behavior_rules.get("group_rules", []))
+        incoming_style = behavior_rules.get("style", [])
+        incoming_taboos = behavior_rules.get("taboos", [])
+        incoming_groups = behavior_rules.get("group_rules", [])
+
+        br["style"] = _merge("style", br.get("style", []), incoming_style)
+        br["taboos"] = _merge("taboos", br.get("taboos", []), incoming_taboos)
+        br["group_rules"] = _merge("group_rules", br.get("group_rules", []), incoming_groups)
+
+        # Optionally disable rules that went missing from incoming set.
+        if disable_missing:
+            disabled = data.setdefault("disabled", {"style": [], "taboos": [], "group_rules": []})
+
+            def _disable(kind: str, existing: List[dict], incoming: List[dict]):
+                inc_keys = set(((it.get("text") or "").strip().lower()) for it in (incoming or []) if isinstance(it, dict))
+                keep = []
+                for it in existing or []:
+                    txt = (it.get("text") or "").strip()
+                    if not txt:
+                        continue
+                    if txt.lower() not in inc_keys:
+                        # mark disabled (avoid duplicates)
+                        if all((d.get("text") or "").strip().lower() != txt.lower() for d in disabled.get(kind, [])):
+                            disabled[kind].append({"text": txt, "from": it.get("source_type"), "source": it.get("source")})
+                        self._append_change(
+                            data,
+                            {
+                                "ts": datetime.now().isoformat(timespec="seconds"),
+                                "type": "disable",
+                                "kind": kind,
+                                "text": txt,
+                                "old": it,
+                            },
+                            limit=history_limit,
+                        )
+                    else:
+                        keep.append(it)
+                return keep
+
+            br["style"] = _disable("style", br.get("style", []), incoming_style)
+            br["taboos"] = _disable("taboos", br.get("taboos", []), incoming_taboos)
+            br["group_rules"] = _disable("group_rules", br.get("group_rules", []), incoming_groups)
 
         self.save(data)
         return data
