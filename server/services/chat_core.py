@@ -73,8 +73,11 @@ async def process_chat_native(req: ChatRequest):
     # Phase 2-C: deterministic memory retrieval injection
     try:
         from server.services.memory_retriever import MemoryRetriever, render_memory_injection
+        from server.services.behavior_rule_loader import load_behavior_rule_texts
+        br_texts = load_behavior_rule_texts(PROJECT_ROOT, max_each=8)
+
         mem_items = MemoryRetriever(PROJECT_ROOT).retrieve(req.user_input, max_items=8)
-        user_content += render_memory_injection(mem_items, max_chars=800)
+        user_content += render_memory_injection(mem_items, max_chars=800, exclude_texts=br_texts)
     except Exception:
         pass
 
