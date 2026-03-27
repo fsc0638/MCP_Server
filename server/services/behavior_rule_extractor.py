@@ -9,9 +9,8 @@ Outputs:
 - memory/behavior_rules.json
 - memory/behavior_rules.md
 
-Strategy (initial):
-- Primarily trust workspace/profiles (highest priority).
-- Supplement with simple heuristics from recent sessions (keywords).
+New (source tracking):
+- Each rule includes its source (profile file path or session snippet).
 """
 
 from __future__ import annotations
@@ -21,16 +20,17 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger("MCP_Server.BehaviorRuleExtractor")
 
 
 @dataclass
-class BehaviorRules:
-    style: List[str]
-    taboos: List[str]
-    group_rules: List[str]
+class RuleItem:
+    text: str
+    source_type: str  # profiles | sessions
+    source: str       # file path or session_id
+    evidence: str     # snippet / raw line
 
 
 class BehaviorRuleExtractor:
@@ -45,73 +45,10 @@ class BehaviorRuleExtractor:
             return {}
         return json.loads(self.snapshot_path.read_text(encoding="utf-8"))
 
-    def _extract_from_profile_previews(self, snapshot: Dict[str, Any]) -> Dict[str, List[str]]:
-        style: List[str] = []
-        taboos: List[str] = []
-        group_rules: List[str] = []
-
-        files = snapshot.get("files") or []
-        for f in files:
-            if f.get("source") != "profiles":
-                continue
-            path = f.get("path", "")
-            if "/profiles/" not in path.replace("\\", "/"):
-                continue
-            preview = f.get("preview") or ""
-            if not preview:
-                continue
-
-            # Very simple keyword extraction for now.
-            # Common Chinese labels we expect in profiles content.
-            for m in re.finditer(r"(禁忌|不要|不可|避免)[:：]?\s*(.+)", preview):
-                item = m.group(0).strip()
-                if item and item not in taboos:
-                    taboos.append(item)
-
-            for m in re.finditer(r"(風格|語氣|回覆|偏好)[:：]?\s*(.+)", preview):
-                item = m.group(0).strip()
-                if item and item not in style:
-                    style.append(item)
-
-            for m in re.finditer(r"(群組規則|群規|群組|room|group)[:：]?\s*(.+)", preview, flags=re.I):
-                item = m.group(0).strip()
-                if item and item not in group_rules:
-                    group_rules.append(item)
-
-        return {"style": style[:20], "taboos": taboos[:30], "group_rules": group_rules[:30]}
-
-    def _extract_from_sessions(self, snapshot: Dict[str, Any]) -> Dict[str, List[str]]:
-        # Heuristic: if recent user messages contain directives like "群組忽略" etc.
-        style: List[str] = []
-        taboos: List[str] = []
-        group_rules: List[str] = []
-
-        msgs = snapshot.get("messages") or []
-        for m in msgs[::-1]:
-            if m.get("role") != "user":
-                continue
-            txt = (m.get("content") or "").strip()
-            if not txt:
-                continue
-            if any(k in txt for k in ["群組", "room", "group"]):
-                if any(k in txt for k in ["忽略", "不要回", "不回覆", "ignore"]):
-                    group_rules.append(f"from_session: {txt[:160]}")
-            if any(k in txt for k in ["不要", "禁止", "避免", "不可"]):
-                taboos.append(f"from_session: {txt[:160]}")
-            if any(k in txt for k in ["語氣", "風格", "用詞", "繁體"]):
-                style.append(f"from_session: {txt[:160]}")
-            if len(style) + len(taboos) + len(group_rules) > 30:
-                break
-
-        return {"style": style[:10], "taboos": taboos[:10], "group_rules": group_rules[:10]}
-
     def _normalize_item(self, s: str) -> str:
         s = (s or "").strip()
         if not s:
             return ""
-
-        # Normalize common prefixes
-        s = re.sub(r"^from_session:\s*", "", s, flags=re.I)
 
         # Unify separators
         s = s.replace("：", ":")
@@ -124,39 +61,115 @@ class BehaviorRuleExtractor:
 
         return s.strip()
 
+    def _to_bucket(self, norm: str) -> Optional[str]:
+        if norm.startswith("風格:"):
+            return "style"
+        if norm.startswith("禁忌:"):
+            return "taboos"
+        if norm.startswith("群組規則:"):
+            return "group_rules"
+        return None
+
+    def _extract_from_profile_previews(self, snapshot: Dict[str, Any]) -> List[RuleItem]:
+        out: List[RuleItem] = []
+        files = snapshot.get("files") or []
+        for f in files:
+            if f.get("source") != "profiles":
+                continue
+            path = f.get("path", "")
+            if "/profiles/" not in path.replace("\\", "/"):
+                continue
+            preview = f.get("preview") or ""
+            if not preview:
+                continue
+
+            for line in preview.splitlines():
+                raw = line.strip()
+                if not raw:
+                    continue
+                # Only keep likely rule lines
+                if not re.search(r"(禁忌|不要|不可|避免|風格|語氣|回覆|偏好|群組規則|群規|群組)", raw, flags=re.I):
+                    continue
+
+                norm = self._normalize_item(raw)
+                if not self._to_bucket(norm):
+                    continue
+
+                out.append(
+                    RuleItem(
+                        text=norm,
+                        source_type="profiles",
+                        source=path,
+                        evidence=raw[:200],
+                    )
+                )
+        return out
+
+    def _extract_from_sessions(self, snapshot: Dict[str, Any]) -> List[RuleItem]:
+        out: List[RuleItem] = []
+        msgs = snapshot.get("messages") or []
+        # walk backwards for recency
+        for m in msgs[::-1]:
+            if m.get("role") != "user":
+                continue
+            txt = (m.get("content") or "").strip()
+            if not txt:
+                continue
+
+            session_id = m.get("session_id") or "(unknown_session)"
+            evidence = txt[:200]
+
+            # group rules
+            if any(k in txt for k in ["群組", "room", "group"]):
+                if any(k in txt for k in ["忽略", "不要回", "不回覆", "ignore"]):
+                    out.append(RuleItem(text="群組規則: 群組/room 訊息忽略或不回覆", source_type="sessions", source=session_id, evidence=evidence))
+
+            # taboos
+            if any(k in txt for k in ["不要", "禁止", "避免", "不可"]):
+                out.append(RuleItem(text=self._normalize_item("禁忌: " + txt), source_type="sessions", source=session_id, evidence=evidence))
+
+            # style
+            if any(k in txt for k in ["語氣", "風格", "用詞", "繁體"]):
+                out.append(RuleItem(text=self._normalize_item("風格: " + txt), source_type="sessions", source=session_id, evidence=evidence))
+
+            if len(out) > 30:
+                break
+
+        return out
+
     def build(self) -> Dict[str, Any]:
         snap = self.load_snapshot()
-        base = self._extract_from_profile_previews(snap)
-        sup = self._extract_from_sessions(snap)
 
-        # Merge with de-dup + normalization, profiles have priority.
-        def merge(a: List[str], b: List[str], limit: int) -> List[str]:
-            out: List[str] = []
-            seen = set()
-            for raw in a + b:
-                norm = self._normalize_item(raw)
-                if not norm:
-                    continue
-                key = norm.lower()
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append(norm)
-                if len(out) >= limit:
-                    break
-            return out
+        candidates: List[RuleItem] = []
+        # Priority A: profiles first, then sessions
+        candidates.extend(self._extract_from_profile_previews(snap))
+        candidates.extend(self._extract_from_sessions(snap))
 
-        rules = BehaviorRules(
-            style=merge(base["style"], sup["style"], 25),
-            taboos=merge(base["taboos"], sup["taboos"], 40),
-            group_rules=merge(base["group_rules"], sup["group_rules"], 40),
-        )
+        buckets = {"style": [], "taboos": [], "group_rules": []}
+        seen = set()
+
+        for item in candidates:
+            key = item.text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            b = self._to_bucket(item.text)
+            if not b:
+                continue
+            buckets[b].append(
+                {
+                    "text": item.text,
+                    "source_type": item.source_type,
+                    "source": item.source,
+                    "evidence": item.evidence,
+                }
+            )
 
         out = {
             "generated_at": None,
-            "style": rules.style,
-            "taboos": rules.taboos,
-            "group_rules": rules.group_rules,
+            "style": buckets["style"][:25],
+            "taboos": buckets["taboos"][:40],
+            "group_rules": buckets["group_rules"][:40],
         }
         return out
 
@@ -171,14 +184,14 @@ class BehaviorRuleExtractor:
             f"generated_at: {out['generated_at']}\n\n",
             "## Style\n",
         ]
-        for s in out["style"]:
-            md.append(f"- {s}\n")
+        for r in out["style"]:
+            md.append(f"- {r['text']}  (src={r['source_type']}:{r['source']})\n")
         md.append("\n## Taboos\n")
-        for s in out["taboos"]:
-            md.append(f"- {s}\n")
+        for r in out["taboos"]:
+            md.append(f"- {r['text']}  (src={r['source_type']}:{r['source']})\n")
         md.append("\n## Group Rules\n")
-        for s in out["group_rules"]:
-            md.append(f"- {s}\n")
+        for r in out["group_rules"]:
+            md.append(f"- {r['text']}  (src={r['source_type']}:{r['source']})\n")
 
         self.out_md.write_text("".join(md), encoding="utf-8")
         logger.info("[BehaviorRuleExtractor] Wrote behavior rules")

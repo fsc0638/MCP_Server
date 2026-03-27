@@ -4,7 +4,7 @@ from pathlib import Path
 from server.services.behavior_rule_extractor import BehaviorRuleExtractor
 
 
-def test_behavior_rule_extractor_writes_files(tmp_path: Path):
+def test_behavior_rule_extractor_writes_files_with_sources(tmp_path: Path):
     mem = tmp_path / "memory"
     mem.mkdir(parents=True, exist_ok=True)
 
@@ -17,7 +17,7 @@ def test_behavior_rule_extractor_writes_files(tmp_path: Path):
             }
         ],
         "messages": [
-            {"source": "sessions", "role": "user", "content": "群組訊息不要回", "created_at": 1}
+            {"source": "sessions", "session_id": "line_u1", "role": "user", "content": "群組訊息不要回", "created_at": 1}
         ],
     }
     (mem / "learning_snapshot.json").write_text(json.dumps(snap, ensure_ascii=False), encoding="utf-8")
@@ -27,6 +27,8 @@ def test_behavior_rule_extractor_writes_files(tmp_path: Path):
 
     assert (mem / "behavior_rules.json").exists()
     assert (mem / "behavior_rules.md").exists()
-    assert any("禁忌" in x or "不要" in x for x in out["taboos"])
-    assert any("風格" in x or "繁體" in x for x in out["style"])
-    assert any("群組" in x for x in out["group_rules"])
+
+    # Ensure structure contains source info
+    assert any(r.get("source_type") == "profiles" and r.get("source") == "workspace/profiles/u1.json" for r in out["taboos"])
+    assert any(r.get("source_type") == "profiles" for r in out["style"])
+    assert any(r.get("source_type") in ("profiles", "sessions") for r in out["group_rules"])
