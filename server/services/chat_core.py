@@ -120,9 +120,12 @@ async def process_chat_native(req: ChatRequest):
     # Use PromptBuilder to trim history/context to a fixed token budget
     sanitized_history = [{k: v for k, v in m.items() if k != "created_at"} for m in history]
 
+    from server.services.budget_profiles import get_budget_for_model
+    bp = get_budget_for_model(req.model)
+
     outbound_history, prompt_meta = build_prompt_messages(
         model=req.model or "gpt-4o-mini",
-        budget=Budget(max_input_tokens=8000, reserve_output_tokens=1200),
+        budget=Budget(max_input_tokens=bp.max_input_tokens, reserve_output_tokens=bp.reserve_output_tokens),
         parts=PromptParts(
             system=dynamic_prompt,
             behavior_rules_appendix="",  # already in dynamic_prompt
