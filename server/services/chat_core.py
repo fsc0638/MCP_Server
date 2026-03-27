@@ -136,7 +136,17 @@ async def process_chat_native(req: ChatRequest):
         ),
     )
 
-    logger.info(f"[PromptBuilder] meta={prompt_meta}")
+    # Phase 1b: reduce log noise; verbose meta behind env toggle
+    import os
+    if os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+        logger.info(f"[PromptBuilder] meta={prompt_meta}")
+    else:
+        slim = {
+            "final_total_tokens": prompt_meta.get("included", {}).get("final_total_tokens"),
+            "history_messages": prompt_meta.get("included", {}).get("history_messages"),
+            "trimmed": prompt_meta.get("trimmed", {}),
+        }
+        logger.info(f"[PromptBuilder] {slim}")
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         session_mgr.append_message(session_id, "user", req.user_input)
