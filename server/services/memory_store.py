@@ -64,6 +64,17 @@ class MemoryStore:
         log.append(event)
         data["change_log"] = log[-limit:]
 
+    def _source_weight(self, rule: dict) -> int:
+        # Priority: profiles > sessions > uploads
+        src_type = (rule or {}).get("source_type")
+        if src_type == "profiles":
+            return 3
+        if src_type == "sessions":
+            return 2
+        if src_type == "uploads":
+            return 1
+        return 0
+
     def upsert_long_term_behavior_rules(self, behavior_rules: Dict[str, Any], limit_each: int = 60, history_limit: int = 1000) -> Dict[str, Any]:
         data = self.load()
         lt = data.setdefault("long_term", {})
@@ -103,26 +114,48 @@ class MemoryStore:
                         limit=history_limit,
                     )
                 else:
-                    # overwrite if different metadata
+                    # overwrite if different metadata, but respect source priority
                     if prev != it:
-                        idx[key] = it
-                        self._append_change(
-                            data,
-                            {
-                                "ts": datetime.now().isoformat(timespec="seconds"),
-                                "type": "overwrite",
-                                "kind": kind,
-                                "text": txt,
-                                "old": prev,
-                                "new": it,
-                            },
-                            limit=history_limit,
-                        )
+                        w_prev = self._source_weight(prev)
+                        w_new = self._source_weight(it)
+                        if w_new >= w_prev:
+                            idx[key] = it
+                            self._append_change(
+                                data,
+                                {
+                                    "ts": datetime.now().isoformat(timespec="seconds"),
+                                    "type": "overwrite",
+                                    "kind": kind,
+                                    "text": txt,
+                                    "old": prev,
+                                    "new": it,
+                                    "old_w": w_prev,
+                                    "new_w": w_new,
+                                },
+                                limit=history_limit,
+                            )
+                        else:
+                            self._append_change(
+                                data,
+                                {
+                                    "ts": datetime.now().isoformat(timespec="seconds"),
+                                    "type": "reject",
+                                    "reason": "lower_priority",
+                                    "kind": kind,
+                                    "text": txt,
+                                    "kept": prev,
+                                    "rejected": it,
+                                    "kept_w": w_prev,
+                                    "rejected_w": w_new,
+                                },
+                                limit=history_limit,
+                            )
 
-            # Return deterministic order: incoming first, then the rest; cap to limit_each
+            # Return deterministic order: prefer the selected idx winners first.
+            # (We must not let a rejected incoming item take the first slot.)
             out: List[dict] = []
             seen = set()
-            for it in (incoming or []) + list(idx.values()):
+            for it in list(idx.values()) + (incoming or []):
                 txt = (it.get("text") if isinstance(it, dict) else str(it)).strip()
                 if not txt:
                     continue
