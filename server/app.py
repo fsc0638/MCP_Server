@@ -123,6 +123,10 @@ def _scheduled_continuous_learner_tick():
         # Step 3b: derive actionable behavior rules (deterministic)
         from server.services.behavior_rule_extractor import BehaviorRuleExtractor
         BehaviorRuleExtractor(PROJECT_ROOT).write()
+
+        # Phase 2-B: update structured memory store (short/long term)
+        from server.services.memory_store_updater import update_memory_store
+        update_memory_store(PROJECT_ROOT)
     except Exception as e:
         logger.error(f"[Scheduler] Continuous learner tick failed: {e}")
 
