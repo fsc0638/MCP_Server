@@ -140,6 +140,11 @@ async def process_chat_native(req: ChatRequest):
     import os
     if os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
         logger.info(f"[PromptBuilder] meta={prompt_meta}")
+        try:
+            from server.services.prompt_meta_logger import append_prompt_meta
+            append_prompt_meta(PROJECT_ROOT, session_id, prompt_meta)
+        except Exception:
+            pass
     else:
         slim = {
             "final_total_tokens": prompt_meta.get("included", {}).get("final_total_tokens"),
