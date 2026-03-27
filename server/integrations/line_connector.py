@@ -1376,9 +1376,9 @@ def _process_line_message(
                 system_msgs = [m for m in history if m.get("role") == "system"]
                 non_system = [m for m in history if m.get("role") != "system"]
 
-                # Token-aware history trimming: accumulate from newest until budget is full.
-                # Budget = 4000 tokens ≈ 12000 chars (leaving room for tools + output).
-                _MAX_HISTORY_CHARS = 12000
+                # Token-aware history trimming (LINE budget): accumulate from newest until budget is full.
+                # Budget = tighter than web; keep a conservative char cap here.
+                _MAX_HISTORY_CHARS = 9000
                 _acc_chars = 0
                 trimmed_msgs = []
                 for m in reversed(non_system):
