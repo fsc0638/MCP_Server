@@ -70,6 +70,14 @@ async def process_chat_native(req: ChatRequest):
     session_mgr._update_system_prompt(session_id, dynamic_prompt)
     user_content = req.user_input
 
+    # Phase 1-3: low-cost cached session summary injection
+    try:
+        from server.services.session_summarizer import SessionSummarizer, render_session_summary_injection
+        ssum = SessionSummarizer(PROJECT_ROOT).maybe_update(session_id, min_new_messages=6)
+        user_content += render_session_summary_injection(ssum, max_chars=900)
+    except Exception:
+        pass
+
     # Phase 2-C: deterministic memory retrieval injection
     try:
         from server.services.memory_retriever import MemoryRetriever, render_memory_injection
