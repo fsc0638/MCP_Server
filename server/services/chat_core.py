@@ -74,7 +74,7 @@ async def process_chat_native(req: ChatRequest):
     try:
         from server.services.memory_retriever import MemoryRetriever, render_memory_injection
         mem_items = MemoryRetriever(PROJECT_ROOT).retrieve(req.user_input, max_items=8)
-        user_content += render_memory_injection(mem_items)
+        user_content += render_memory_injection(mem_items, max_chars=800)
     except Exception:
         pass
 

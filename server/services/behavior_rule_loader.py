@@ -17,7 +17,7 @@ def _compact_lines(items: List[Dict[str, Any]], limit: int) -> List[str]:
     return out
 
 
-def render_behavior_rules_appendix(project_root: str | Path, max_each: int = 8) -> str:
+def render_behavior_rules_appendix(project_root: str | Path, max_each: int = 8, max_chars: int = 1200) -> str:
     """Return a small text block to append to system prompt.
 
     Safe: returns empty string if file missing or invalid.
@@ -53,4 +53,7 @@ def render_behavior_rules_appendix(project_root: str | Path, max_each: int = 8) 
         for s in groups:
             lines.append(f"  - {s}\n")
 
-    return "".join(lines)
+    text = "".join(lines)
+    if len(text) > max_chars:
+        text = text[: max_chars - 20] + "\n(…已截斷)\n"
+    return text

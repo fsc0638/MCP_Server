@@ -188,7 +188,7 @@ def get_universal_system_prompt(platform: str = "web", language: str = "繁體�
     # Phase 2-A: append behavior rules (compact)
     try:
         from server.services.behavior_rule_loader import render_behavior_rules_appendix
-        behavior_rules = render_behavior_rules_appendix(os.getcwd(), max_each=8)
+        behavior_rules = render_behavior_rules_appendix(os.getcwd(), max_each=8, max_chars=1200)
     except Exception:
         behavior_rules = ""
 

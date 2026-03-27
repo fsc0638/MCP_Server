@@ -64,10 +64,13 @@ class MemoryRetriever:
         return out
 
 
-def render_memory_injection(items: List[Dict[str, Any]]) -> str:
+def render_memory_injection(items: List[Dict[str, Any]], max_chars: int = 800) -> str:
     if not items:
         return ""
     lines = ["\n【相關記憶（自動檢索）】\n"]
     for it in items:
         lines.append(f"- ({it.get('kind')}) {it.get('text')}\n")
-    return "".join(lines)
+    text = "".join(lines)
+    if len(text) > max_chars:
+        text = text[: max_chars - 20] + "\n(…已截斷)\n"
+    return text
