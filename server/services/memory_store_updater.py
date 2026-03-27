@@ -37,6 +37,6 @@ def update_memory_store(project_root: str | Path) -> Dict[str, Any]:
             "last_file_count": st.get("last_file_count"),
             "last_mode": st.get("last_mode"),
         }
-        ms.append_short_term_tick(tick)
+        ms.append_short_term_tick(tick, limit=50, max_age_days=7)
 
     return ms.load()

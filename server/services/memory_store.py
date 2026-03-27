@@ -214,11 +214,35 @@ class MemoryStore:
         self.save(data)
         return data
 
-    def append_short_term_tick(self, tick_summary: Dict[str, Any], limit: int = 50) -> Dict[str, Any]:
+    def append_short_term_tick(self, tick_summary: Dict[str, Any], limit: int = 50, max_age_days: int = 7) -> Dict[str, Any]:
         data = self.load()
         st = data.setdefault("short_term", {})
         arr = st.setdefault("recent_ticks", [])
+        # Ensure tick has timestamp for TTL
+        if "ts" not in tick_summary:
+            tick_summary = {**tick_summary, "ts": datetime.now().isoformat(timespec="seconds")}
+
         arr.append(tick_summary)
+
+        # TTL prune
+        try:
+            from datetime import timedelta
+            cutoff = datetime.now() - timedelta(days=max_age_days)
+            kept = []
+            for it in arr:
+                ts = it.get("ts")
+                if not ts:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(ts)
+                except Exception:
+                    continue
+                if dt >= cutoff:
+                    kept.append(it)
+            arr = kept
+        except Exception:
+            pass
+
         st["recent_ticks"] = arr[-limit:]
         self.save(data)
         return data
