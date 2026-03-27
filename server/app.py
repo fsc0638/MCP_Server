@@ -111,10 +111,14 @@ def _scheduled_continuous_learner_tick():
     """Phase 3 scheduled job: continuous learner tick (every 10 minutes)."""
     try:
         from server.services.continuous_learner import ContinuousLearner
+        from server.services.learning_compactor import LearningCompactor
 
         learner = ContinuousLearner(str(PROJECT_ROOT))
         llm_fn = make_llm_callable()
         learner.tick(llm_callable=llm_fn)
+
+        # Step 3: compact/mix raw learnings into a structured snapshot
+        LearningCompactor(PROJECT_ROOT).write_snapshot()
     except Exception as e:
         logger.error(f"[Scheduler] Continuous learner tick failed: {e}")
 
