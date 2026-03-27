@@ -95,6 +95,7 @@ def build_prompt_messages(
     debug: Dict[str, Any] = {
         "model": model,
         "available_input_tokens": avail,
+        "tokenization": {"engine": "tiktoken", "encoding": getattr(counter.enc, 'name', None)},
         "included": {},
         "trimmed": {},
     }
@@ -113,6 +114,7 @@ def build_prompt_messages(
 
     debug["included"]["system_tokens"] = counter.count_text(system_full)
     debug["included"]["behavior_rules_tokens"] = counter.count_text(br_text_final)
+    debug["included"]["system_text_tokens"] = counter.count_text(sys_text)
 
     # 2) Soft keep: session summary + retrieved memory (only if budget remains)
     remaining = avail - counter.count_messages(messages)
@@ -129,6 +131,7 @@ def build_prompt_messages(
             used = counter.count_text(final) + 8
             remaining -= used
             debug["included"][f"{label}_tokens"] = counter.count_text(final)
+            debug["included"][f"{label}_cap_tokens"] = cap
             if final.endswith("(…已截斷)\n"):
                 debug["trimmed"][label] = True
 
@@ -152,6 +155,7 @@ def build_prompt_messages(
         tail.reverse()
         messages.extend(tail)
         debug["included"]["history_messages"] = len(tail)
+        debug["included"]["history_tokens"] = counter.count_messages(tail)
     else:
         debug["included"]["history_messages"] = 0
 
@@ -163,6 +167,7 @@ def build_prompt_messages(
         user_text = _truncate_text_to_tokens(counter, user_text, max(64, avail // 10))
         debug["trimmed"]["user"] = True
     messages.append({"role": "user", "content": user_text})
+    debug["included"]["user_tokens"] = counter.count_text(user_text)
 
     # Final safety trim: if still over budget, drop oldest history until within.
     max_allowed = avail
