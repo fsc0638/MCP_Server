@@ -1278,7 +1278,7 @@ def _process_line_message(
                             # Keep in session for conversational continuity
                             _session_mgr.append_message(session_id, "assistant", summary)
                             # Also keep in local accumulator — unaffected by token trimming
-                            all_summaries.append(f"【第 {part} 段摘要】\n{summary}")
+                            all_summaries.append(summary)
                             logger.info(f"[LINE BG] Chunk {part}/{total} summarized ({len(summary)} chars)")
                             _send_loading_animation(line_api, chat_id, 60)
                         else:
@@ -1292,25 +1292,25 @@ def _process_line_message(
                             # was trimmed by the token-aware budget below.
                             warning = ""
                             if total > 6:
-                                warning = "\n⚠️ 文件過長，分析基於分段摘要，細節可能有遺漏。"
+                                warning = "\n（注意：文件較長，部分內容為重點摘錄，細節可能有遺漏。）"
 
                             if all_summaries:
                                 # Multi-chunk file: inject every summary explicitly
-                                prior_context = "\n\n".join(all_summaries)
+                                # NOTE: Hide chunking internals — LLM must treat this as ONE complete file.
+                                prior_context = "\n\n---\n\n".join(all_summaries)
                                 user_input = (
-                                    f"以下是《{fname}》各段的摘要（共 {total} 段，最後一段的原文附於摘要之後）：\n\n"
-                                    f"{prior_context}\n\n"
-                                    f"【第 {part} 段（最終段）原文】\n{chunk}\n\n"
-                                    f"[指令：根據以上所有段落摘要與最終段原文，"
-                                    f"產出一份完整、深度的分析報告。{warning}]"
+                                    f"[系統通知：使用者上傳了文件《{fname}》。以下是系統預處理後的完整內容。"
+                                    f"對使用者而言這就是一個檔案，禁止提及「分段」「段落數」「第N段」「摘要」等內部處理細節。]\n\n"
+                                    f"【文件內容】\n{prior_context}\n\n"
+                                    f"【文件末段原文】\n{chunk}\n\n"
+                                    f"[指令：根據以上文件完整內容，詢問使用者想要如何處理這份文件。{warning}]"
                                 )
                             else:
                                 # Single-chunk fallback (total == 1)
                                 user_input = (
-                                    f"[文件分段 {part}/{total} - 最終段] 以下是 {fname} 的最後一段內容：\n\n"
+                                    f"[系統通知：使用者上傳了文件《{fname}》。以下是完整內容。]\n\n"
                                     f"{chunk}\n\n"
-                                    f"[指令：這是文件的最後一段。請結合你先前記住的所有段落摘要，"
-                                    f"產出一份完整、深度的分析報告。{warning}]"
+                                    f"[指令：根據以上文件內容，詢問使用者想要如何處理這份文件。{warning}]"
                                 )
 
                     # ── Store original file path for downstream skills ────────
@@ -1332,7 +1332,8 @@ def _process_line_message(
                     # explicitly, so session no longer needs them.
                     _session_mgr.remove_chunk_entries(session_id, fname)
 
-                    # Mark as chunked final → tools disabled for synthesis
+                    # After chunk processing: always ask user what to do.
+                    # Tools disabled — synthesis only, user will state intent in follow-up.
                     _routed_tier = "chunk_final"
 
                 # ── Normal Processing ─────────────────────────────────────

@@ -187,18 +187,19 @@ class SessionManager:
         if len(history) <= 4:
             return
 
-        system_msgs = [m for m in history if m["role"] == "system"]
+        # Separate: original system prompt (first msg only) vs old compression markers vs chat
+        original_system = [history[0]] if history and history[0]["role"] == "system" else []
         chat_msgs = [m for m in history if m["role"] != "system"]
 
-        # 50% division
+        # 50% division — keep recent half
         midpoint = max(1, len(chat_msgs) // 2)
         old_msgs = chat_msgs[:midpoint]
         new_msgs = chat_msgs[midpoint:]
 
-        # FUTURE(LLM Summarization): Pass `old_msgs` to an adapter for dense summarization.
+        # Single compression marker (replaces ALL previous markers)
         summary_content = f"[System Memory: Previously discussed {len(old_msgs)} messages. Context compressed to preserve token head room.]"
-        
-        compressed_history = system_msgs + [{"role": "system", "content": summary_content}] + new_msgs
+
+        compressed_history = original_system + [{"role": "system", "content": summary_content}] + new_msgs
         self._conversations[session_id] = compressed_history
         
         # Flush the summary node to persistent MEMORY.md

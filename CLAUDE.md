@@ -44,9 +44,9 @@ NOTION_DATABASE_ID=...
 
 ### Core Concept: UMA (Unified Model Adapter)
 
-UMA is the central intelligence layer. It:
-1. **Scans** `Agent_skills/skills/` and parses each `SKILL.md` on startup
-2. **Converts** skill metadata to model-specific tool schemas (OpenAI functions, Gemini FunctionDeclaration, Claude tools)
+UMA is the central intelligence layer with **two-phase tool loading**:
+1. **Phase 1 — Lightweight listing**: `get_tools_for_model()` returns only name + description (open schema with `additionalProperties: true`). This keeps the tool list small for the LLM context.
+2. **Phase 2 — On-demand injection**: When the LLM invokes a tool, `execute_tool_call()` loads the full SKILL.md body + reference layer content and injects it into the conversation before execution.
 3. **Executes** skills safely as subprocesses with path sanitization
 4. **Routes** tool calls from LLMs → `ExecutionEngine` → skill scripts → back to LLM
 
@@ -94,6 +94,11 @@ Three execution modes determined by directory contents:
 
 Skills with `risk_level: high` are intercepted in `UMA.execute_tool_call()` — the adapter yields `requires_approval` and pauses; the frontend shows an Auth Modal.
 
+**Reference Layer**: Skills can include a `references/` directory. On tool invocation (Phase 2), `_load_references()` injects:
+- `.md` / `.txt` files → full text content with header `【REFERENCE LAYER — 必須嚴格依照以下知識文件作答】`
+- `.docx` / `.xlsx` / `.pdf` files → listed as absolute template paths for python-executor to load
+- Applies to **Code** and **Semantic** modes only (Executable mode uses subprocess I/O)
+
 **Per-Skill Timeout**: `execution_timeout` in SKILL.md frontmatter overrides the default 30s. Read in `uma_core.py`, passed to `executor.run_script(timeout=...)`. Use for any skill making external API calls (e.g. `mcp-meeting-to-notion` uses 120s for 3 sequential LLM calls + Notion upload).
 
 ### Session & Memory
@@ -115,10 +120,12 @@ Four-phase system in `server/services/`:
 
 **Phase B — Profile System**
 - **B1** (`profile_updater.py` → `trigger_if_needed()`): Auto-creates profile after 4+ messages (2 rounds), updates with 2-hour cooldown. Runs in background thread after each LINE reply. Profiles stored at `workspace/profiles/{session_id}.profile.md`
-- **B2** (`app.py`): APScheduler (BackgroundScheduler, tz=Asia/Taipei) runs 3 cron jobs:
+- **B2** (`app.py`): APScheduler (BackgroundScheduler, tz=Asia/Taipei) runs 5 jobs:
   - Profile update: 09:00 / 12:00 / 17:00
   - Token summary rebuild: 17:05
   - Message cache cleanup: 00:00
+  - LINE uploads cleanup: 00:05 (168h TTL auto-delete)
+  - Scheduled push tick: every 1 minute (checks & executes due push tasks)
 - **B3** (`profile_updater.py` → `_PROFILE_PROMPT_TEMPLATE`): Deep reasoning prompt with 6 analysis dimensions. Profile injected into system prompt (~50-100 tokens)
 
 **Phase C — Signal Collection**
@@ -128,12 +135,40 @@ Four-phase system in `server/services/`:
 - **D1** (`openai_adapter.py`): Captures `response.completed` event for real token usage. Records per-tool-call AND pure-chat to `workspace/analytics/token_usage.jsonl`
 - **D2** (`token_tracker.py` → `rebuild_summary()`): Scheduled aggregation to `workspace/analytics/token_summary.json` with by_user/by_skill/by_group/daily structure. 90-day retention
 
+### Scheduled Push System
+
+`server/services/scheduled_push.py` (`ScheduledPushService`) — executes timed push tasks to LINE users/groups.
+
+**Task types**:
+| Type | Description | LLM | Tools |
+|------|-------------|-----|-------|
+| `language` | Vocabulary/grammar learning push | Yes | No |
+| `news` | News digest via web search | Yes | Yes (mcp-web-search) |
+| `work_summary` | Weekly work summary from session history | Yes | No |
+| `custom` | Free-form LLM prompt | Yes | No |
+| `reminder` | One-shot reminder message | No | No |
+| `pipeline` | Multi-skill composite task (passes `original_request` to adapter with full tool access) | Yes | Yes |
+
+**Storage**: `workspace/schedules/{session_id}.json` — one file per user/group, contains array of task objects.
+
+**Cron formats**: Simple (`08:30`, `weekday 09:00`), full cron, interval (`every +10m`), one-time (`once +2m`).
+
+**Key behaviors**:
+- Duplicate detection: same cron + same type → auto-updates existing task (loosened for news: no topic comparison)
+- Language task A+B anti-repeat: 24-category rotation with batch history exclusion
+- Content type isolation: grammar/vocab tasks get mutual-exclusion warnings in prompts
+- Adapter cache: lazy-init, reused across ticks within same service instance
+- Excluded tools in push context: mcp-schedule-manager, mcp-pdf/docx/txt-llm-analyzer
+
+**Managed by**: `mcp-schedule-manager` skill (LLM-facing tool with actions: add, list, remove, pause, resume, trigger). Server-side auto-split detects "grammar+vocab" requests and creates 2 separate tasks.
+
 ### Workspace Data Paths
 
 ```
 workspace/
 ├── sessions/          # Session history JSON + message cache JSONL
 ├── profiles/          # .profile.md + _signals.jsonl per user/group
+├── schedules/         # Per-user scheduled push task JSON
 ├── analytics/         # token_usage.jsonl + token_summary.json
 ├── downloads/         # Generated files (PDF, DOCX, images) served at /downloads/
 └── temp/              # Temporary processing files
@@ -214,6 +249,7 @@ All 3 write to `Agent_skills/temp/original_{session_id}.txt` and set `session.se
 | `server/services/runtime.py` | `get_universal_system_prompt()`, `delta_index_skills()` |
 | `server/services/model_router.py` | LLM-as-a-Router; `route_model()` → `(model, tier)` |
 | `server/services/profile_updater.py` | Phase B/C: Profile CRUD, signal collection, scheduled deep reasoning |
+| `server/services/scheduled_push.py` | ScheduledPushService — timed push execution engine (language, news, pipeline, etc.) |
 | `server/services/token_tracker.py` | Phase D: Token usage JSONL recording + summary aggregation |
 | `server/adapters/openai_adapter.py` | OpenAI GPT; original file injection; D1 token capture from `response.completed` |
 | `server/routes/chat.py` | `/chat`, `/chat/approve/{id}`, `/chat/reject/{id}`, flush, session CRUD |
@@ -255,6 +291,7 @@ Push commands: `git push origin AgentK_FSC:fsc` / `git push origin AgentK_UAT`
 | `mcp-meeting-to-notion` | executable | 120s | 4-phase pipeline → Notion DB upload |
 | `mcp-groovenaust-meeting-analyst` | semantic | — | PMP/PgMP/PfMP meeting analysis |
 | `mcp-image-generator` | executable | 60s | AI image generation via gpt-image-1; returns base64 PNG saved to downloads/ |
+| `mcp-schedule-manager` | executable | 30s | Manage scheduled push tasks (add/list/remove/pause/resume/trigger) |
 | `mcp-high-risk-demo` | executable | 30s | Auth Modal flow demo |
 
 ### LINE Bot Image Delivery
