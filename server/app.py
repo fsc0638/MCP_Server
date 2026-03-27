@@ -73,6 +73,30 @@ def _scheduled_cache_cleanup():
         logger.error(f"[Scheduler] Cache cleanup failed: {e}")
 
 
+def _scheduled_line_uploads_cleanup():
+    """Scheduled job: delete LINE uploads older than 168 hours (daily 00:05)."""
+    import time
+    from pathlib import Path
+    uploads_root = PROJECT_ROOT / "Agent_workspace" / "line_uploads"
+    if not uploads_root.exists():
+        return
+    cutoff = time.time() - 168 * 3600
+    deleted_files = 0
+    try:
+        for f in uploads_root.rglob("*"):
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
+                deleted_files += 1
+        # Remove empty subdirectories (chat_id folders)
+        for d in sorted(uploads_root.iterdir(), reverse=True):
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        if deleted_files:
+            logger.info(f"[Scheduler] LINE uploads cleanup: removed {deleted_files} file(s) older than 168h")
+    except Exception as e:
+        logger.error(f"[Scheduler] LINE uploads cleanup failed: {e}")
+
+
 def _scheduled_push_tick():
     """Scheduled job: check and execute due push tasks (every minute)."""
     try:
@@ -143,6 +167,15 @@ def _setup_scheduler():
             replace_existing=True,
         )
 
+        # LINE uploads cleanup — 00:05 daily (168h TTL)
+        __scheduler.add_job(
+            _scheduled_line_uploads_cleanup,
+            CronTrigger(hour=0, minute=5),
+            id="line_uploads_cleanup",
+            name="LINE Uploads Cleanup (168h TTL)",
+            replace_existing=True,
+        )
+
         # Scheduled Push: check every minute for due tasks
         from apscheduler.triggers.interval import IntervalTrigger
         __scheduler.add_job(
@@ -154,7 +187,7 @@ def _setup_scheduler():
         )
 
         __scheduler.start()
-        logger.info("[Scheduler] APScheduler started with 4 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), push_tick(1min)")
+        logger.info("[Scheduler] APScheduler started with 5 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), line_uploads_cleanup(00:05), push_tick(1min)")
 
     except ImportError:
         logger.warning(
