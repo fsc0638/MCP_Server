@@ -117,7 +117,8 @@ class BehaviorRuleExtractor:
                 continue
 
             session_id = m.get("session_id") or "(unknown_session)"
-            evidence = txt[:200]
+            created_at = m.get("created_at")
+            evidence = f"created_at={created_at} text={txt[:200]}"
 
             # group rules
             if any(k in txt for k in ["群組", "room", "group"]):
