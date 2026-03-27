@@ -14,6 +14,7 @@ from server.core.retriever import retriever
 from server.adapters.openai_adapter import OpenAIAdapter
 from server.dependencies.session import get_session_manager
 from server.schemas.chat import ChatRequest
+from main import PROJECT_ROOT
 
 logger = logging.getLogger("MCP_Server.ChatCore")
 
@@ -70,22 +71,26 @@ async def process_chat_native(req: ChatRequest):
     session_mgr._update_system_prompt(session_id, dynamic_prompt)
     user_content = req.user_input
 
-    # Phase 1-3: low-cost cached session summary injection
+    # Phase 1(A2): Build a token-budgeted outbound prompt (PromptBuilder)
+    # - behavior rules are already appended inside dynamic_prompt (Phase 2-A)
+    # - session summary + retrieved memory are injected as optional context blocks
+    from server.services.prompt_builder import Budget, PromptParts, build_prompt_messages
+
+    session_summary = ""
     try:
         from server.services.session_summarizer import SessionSummarizer, render_session_summary_injection
         ssum = SessionSummarizer(PROJECT_ROOT).maybe_update(session_id, min_new_messages=6)
-        user_content += render_session_summary_injection(ssum, max_chars=900)
+        session_summary = render_session_summary_injection(ssum, max_chars=900)
     except Exception:
         pass
 
-    # Phase 2-C: deterministic memory retrieval injection
+    retrieved_memory = ""
     try:
         from server.services.memory_retriever import MemoryRetriever, render_memory_injection
         from server.services.behavior_rule_loader import load_behavior_rule_texts
         br_texts = load_behavior_rule_texts(PROJECT_ROOT, max_each=8)
-
         mem_items = MemoryRetriever(PROJECT_ROOT).retrieve(req.user_input, max_items=8)
-        user_content += render_memory_injection(mem_items, max_chars=800, exclude_texts=br_texts)
+        retrieved_memory = render_memory_injection(mem_items, max_chars=800, exclude_texts=br_texts)
     except Exception:
         pass
 
@@ -112,13 +117,23 @@ async def process_chat_native(req: ChatRequest):
     if req.language and req.language != "自動偵測":
         user_content += f"\n\n(System Note: Respond strictly in {req.language}. If input is in another language, translate your answer.)"
 
-    raw_outbound = history + [{"role": "user", "content": user_content}]
-    
-    # Sanitize history for API compatibility
-    outbound_history = []
-    for m in raw_outbound:
-        clean_msg = {k: v for k, v in m.items() if k != "created_at"}
-        outbound_history.append(clean_msg)
+    # Use PromptBuilder to trim history/context to a fixed token budget
+    sanitized_history = [{k: v for k, v in m.items() if k != "created_at"} for m in history]
+
+    outbound_history, prompt_meta = build_prompt_messages(
+        model=req.model or "gpt-4o-mini",
+        budget=Budget(max_input_tokens=8000, reserve_output_tokens=1200),
+        parts=PromptParts(
+            system=dynamic_prompt,
+            behavior_rules_appendix="",  # already in dynamic_prompt
+            session_summary=session_summary,
+            retrieved_memory=retrieved_memory,
+            history=sanitized_history,
+            user=user_content,
+        ),
+    )
+
+    logger.info(f"[PromptBuilder] meta={prompt_meta}")
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         session_mgr.append_message(session_id, "user", req.user_input)
