@@ -14,18 +14,26 @@ class BudgetProfile:
     reserve_output_tokens: int
 
 
-def get_budget_for_model(model: str | None) -> BudgetProfile:
+def get_budget_for_model(model: str | None, platform: str | None = None) -> BudgetProfile:
     m = (model or "").lower()
 
     # Conservative defaults (safe across providers)
     if not m:
         return BudgetProfile(max_input_tokens=8000, reserve_output_tokens=1200)
 
-    # OpenAI common
-    if "gpt-4o-mini" in m:
-        return BudgetProfile(max_input_tokens=8000, reserve_output_tokens=1200)
-    if "gpt-4o" in m:
-        return BudgetProfile(max_input_tokens=16000, reserve_output_tokens=2000)
+    plat = (platform or "").lower().strip() or "web"
 
-    # Fallback
-    return BudgetProfile(max_input_tokens=8000, reserve_output_tokens=1200)
+    # Base defaults by model
+    if "gpt-4o" in m and "mini" not in m:
+        base = BudgetProfile(max_input_tokens=16000, reserve_output_tokens=2000)
+    elif "gpt-4o-mini" in m:
+        base = BudgetProfile(max_input_tokens=8000, reserve_output_tokens=1200)
+    else:
+        base = BudgetProfile(max_input_tokens=8000, reserve_output_tokens=1200)
+
+    # Platform adjustment: LINE is tighter
+    if plat == "line":
+        # Keep response headroom but reduce input budget
+        return BudgetProfile(max_input_tokens=min(base.max_input_tokens, 6000), reserve_output_tokens=base.reserve_output_tokens)
+
+    return base
