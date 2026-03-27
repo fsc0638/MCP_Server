@@ -119,6 +119,10 @@ def _scheduled_continuous_learner_tick():
 
         # Step 3: compact/mix raw learnings into a structured snapshot
         LearningCompactor(PROJECT_ROOT).write_snapshot()
+
+        # Step 3b: derive actionable behavior rules (deterministic)
+        from server.services.behavior_rule_extractor import BehaviorRuleExtractor
+        BehaviorRuleExtractor(PROJECT_ROOT).write()
     except Exception as e:
         logger.error(f"[Scheduler] Continuous learner tick failed: {e}")
 
