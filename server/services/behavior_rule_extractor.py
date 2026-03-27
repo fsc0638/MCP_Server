@@ -105,17 +105,43 @@ class BehaviorRuleExtractor:
 
         return {"style": style[:10], "taboos": taboos[:10], "group_rules": group_rules[:10]}
 
+    def _normalize_item(self, s: str) -> str:
+        s = (s or "").strip()
+        if not s:
+            return ""
+
+        # Normalize common prefixes
+        s = re.sub(r"^from_session:\s*", "", s, flags=re.I)
+
+        # Unify separators
+        s = s.replace("：", ":")
+        s = re.sub(r"\s+", " ", s)
+
+        # Normalize label prefixes
+        s = re.sub(r"^(禁忌|不要|不可|避免)\s*:?\s*", "禁忌: ", s)
+        s = re.sub(r"^(風格|語氣|回覆|偏好)\s*:?\s*", "風格: ", s)
+        s = re.sub(r"^(群組規則|群規|群組)\s*:?\s*", "群組規則: ", s)
+
+        return s.strip()
+
     def build(self) -> Dict[str, Any]:
         snap = self.load_snapshot()
         base = self._extract_from_profile_previews(snap)
         sup = self._extract_from_sessions(snap)
 
-        # Merge with de-dup, profiles have priority.
+        # Merge with de-dup + normalization, profiles have priority.
         def merge(a: List[str], b: List[str], limit: int) -> List[str]:
-            out = []
-            for x in a + b:
-                if x and x not in out:
-                    out.append(x)
+            out: List[str] = []
+            seen = set()
+            for raw in a + b:
+                norm = self._normalize_item(raw)
+                if not norm:
+                    continue
+                key = norm.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(norm)
                 if len(out) >= limit:
                     break
             return out
