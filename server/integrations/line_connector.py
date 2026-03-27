@@ -1373,22 +1373,29 @@ def _process_line_message(
                 actual_input, execute_mode = _parse_command_prefix(user_input)
 
                 history = _session_mgr.get_or_create_conversation(session_id)
-                system_msgs = [m for m in history if m.get("role") == "system"]
-                non_system = [m for m in history if m.get("role") != "system"]
 
-                # Token-aware history trimming (LINE budget): accumulate from newest until budget is full.
-                # Budget = tighter than web; keep a conservative char cap here.
-                _MAX_HISTORY_CHARS = 9000
-                _acc_chars = 0
-                trimmed_msgs = []
-                for m in reversed(non_system):
-                    mc = len(m.get("content", ""))
-                    if _acc_chars + mc > _MAX_HISTORY_CHARS:
-                        break
-                    trimmed_msgs.insert(0, m)
-                    _acc_chars += mc
-                truncated_history = system_msgs + trimmed_msgs
-                logger.info(f"[LINE BG] History: {len(non_system)} msgs → {len(trimmed_msgs)} msgs ({_acc_chars} chars)")
+                # Use PromptBuilder with LINE platform budget to trim history/context.
+                from server.services.prompt_builder import build_prompt_messages, Budget, PromptParts
+                from server.services.budget_profiles import get_budget_for_model
+
+                sanitized_history = [{k: v for k, v in m.items() if k != "created_at"} for m in history]
+                bp = get_budget_for_model(adapter.model, platform="line")
+
+                truncated_history, prompt_meta = build_prompt_messages(
+                    model=adapter.model,
+                    budget=Budget(max_input_tokens=bp.max_input_tokens, reserve_output_tokens=bp.reserve_output_tokens),
+                    parts=PromptParts(
+                        system=system_msgs[0]["content"] if (system_msgs := [m for m in history if m.get("role") == "system"]) else "",
+                        behavior_rules_appendix="",
+                        session_summary="",
+                        retrieved_memory="",
+                        history=sanitized_history,
+                        user=actual_input,
+                    ),
+                )
+                logger.info(
+                    f"[LINE BG] PromptBuilder meta slim={{'final_total_tokens': {prompt_meta.get('included', {}).get('final_total_tokens')}, 'history_messages': {prompt_meta.get('included', {}).get('history_messages')}, 'trimmed': {prompt_meta.get('trimmed', {})}}}"
+                )
 
                 # ── Token-based Fallback ────────────────────────────────
                 # Pre-flight check: if estimated tokens exceed the current
