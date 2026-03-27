@@ -1381,18 +1381,40 @@ def _process_line_message(
                 sanitized_history = [{k: v for k, v in m.items() if k != "created_at"} for m in history]
                 bp = get_budget_for_model(adapter.model, platform="line")
 
+                # Keep in sync with web pipeline: session_summary + retrieved_memory injections
+                session_summary = ""
+                retrieved_memory = ""
+                try:
+                    from server.services.session_summarizer import SessionSummarizer
+                    from server.services.memory_retriever import MemoryRetriever, render_memory_injection
+                    from server.services.behavior_rule_loader import load_behavior_rule_texts
+
+                    session_summary = SessionSummarizer(str(Path(os.getcwd()))).get_cached_summary_text(session_id)
+                    br_texts = load_behavior_rule_texts(str(Path(os.getcwd())), max_each=8)
+                    mem_items = MemoryRetriever(str(Path(os.getcwd()))).retrieve(actual_input, max_items=8)
+                    retrieved_memory = render_memory_injection(mem_items, max_chars=800, exclude_texts=br_texts)
+                except Exception:
+                    pass
+
                 truncated_history, prompt_meta = build_prompt_messages(
                     model=adapter.model,
                     budget=Budget(max_input_tokens=bp.max_input_tokens, reserve_output_tokens=bp.reserve_output_tokens),
                     parts=PromptParts(
                         system=system_msgs[0]["content"] if (system_msgs := [m for m in history if m.get("role") == "system"]) else "",
                         behavior_rules_appendix="",
-                        session_summary="",
-                        retrieved_memory="",
+                        session_summary=session_summary,
+                        retrieved_memory=retrieved_memory,
                         history=sanitized_history,
                         user=actual_input,
                     ),
                 )
+                import os as _os
+                if _os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+                    try:
+                        from server.services.prompt_meta_logger import append_prompt_meta
+                        append_prompt_meta(str(Path(_os.getcwd())), session_id, prompt_meta)
+                    except Exception:
+                        pass
                 logger.info(
                     f"[LINE BG] PromptBuilder meta slim={{'final_total_tokens': {prompt_meta.get('included', {}).get('final_total_tokens')}, 'history_messages': {prompt_meta.get('included', {}).get('history_messages')}, 'trimmed': {prompt_meta.get('trimmed', {})}}}"
                 )
