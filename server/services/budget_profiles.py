@@ -28,6 +28,12 @@ def get_budget_for_model(model: str | None, platform: str | None = None) -> Budg
         base = BudgetProfile(max_input_tokens=16000, reserve_output_tokens=2000)
     elif "gpt-4o-mini" in m:
         base = BudgetProfile(max_input_tokens=8000, reserve_output_tokens=1200)
+    elif "gpt-4.1-nano" in m:
+        base = BudgetProfile(max_input_tokens=32000, reserve_output_tokens=1200)
+    elif "gpt-4.1-mini" in m:
+        base = BudgetProfile(max_input_tokens=32000, reserve_output_tokens=2000)
+    elif "gpt-4.1" in m:
+        base = BudgetProfile(max_input_tokens=32000, reserve_output_tokens=2000)
     else:
         base = BudgetProfile(max_input_tokens=8000, reserve_output_tokens=1200)
 

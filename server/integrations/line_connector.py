@@ -1183,7 +1183,13 @@ def _process_line_message(
                 _profile_updater = ProfileUpdater(str(Path(os.getcwd())))
                 _profile_content = _profile_updater.get_profile(session_id)
                 if _profile_content:
-                    _base_system_prompt += f"\n\n---\n# 使用者背景知識\n{_profile_content}"
+                    _base_system_prompt += (
+                        f"\n\n---\n"
+                        f"# 【當前對話使用者資料】\n"
+                        f"你現在正在與以下這位使用者對話。以下是他的身份與個人資料，"
+                        f"當使用者詢問「你認識我嗎」「知道我是誰嗎」等問題時，請直接根據此資料回答：\n\n"
+                        f"{_profile_content}"
+                    )
             except Exception as _pe:
                 logger.debug(f"[LINE B1] Profile injection skipped: {_pe}")
 
