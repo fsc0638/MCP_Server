@@ -207,6 +207,13 @@ def get_universal_system_prompt(platform: str = "web", language: str = "繁體�
             "注意：檔案格式選擇已由系統自動處理，你不需要主動提議格式。\n"
         )
 
+    # Phase 2-A: append behavior rules (compact)
+    try:
+        from server.services.behavior_rule_loader import render_behavior_rules_appendix
+        behavior_rules = render_behavior_rules_appendix(os.getcwd(), max_each=8, max_chars=1200)
+    except Exception:
+        behavior_rules = ""
+
     prompt_body = (
         f"你是 {platform_info}。\n"
         f"現在時間是：{now_str} (星期{weekday_str})\n"
@@ -270,5 +277,6 @@ def get_universal_system_prompt(platform: str = "web", language: str = "繁體�
         f"- 目前回覆風格：{detail_level}\n"
         f"{lang_instruction}\n"
         f"{style_instruction}"
+        f"{behavior_rules}"
     )
     return prompt_body

@@ -131,6 +131,30 @@ def _scheduled_push_tick():
         logger.error(f"[Scheduler] Scheduled push tick failed: {e}")
 
 
+def _scheduled_continuous_learner_tick():
+    """Phase 3 scheduled job: continuous learner tick (every 10 minutes)."""
+    try:
+        from server.services.continuous_learner import ContinuousLearner
+        from server.services.learning_compactor import LearningCompactor
+
+        learner = ContinuousLearner(str(PROJECT_ROOT))
+        llm_fn = make_llm_callable()
+        learner.tick(llm_callable=llm_fn)
+
+        # Step 3: compact/mix raw learnings into a structured snapshot
+        LearningCompactor(PROJECT_ROOT).write_snapshot()
+
+        # Step 3b: derive actionable behavior rules (deterministic)
+        from server.services.behavior_rule_extractor import BehaviorRuleExtractor
+        BehaviorRuleExtractor(PROJECT_ROOT).write()
+
+        # Phase 2-B: update structured memory store (short/long term)
+        from server.services.memory_store_updater import update_memory_store
+        update_memory_store(PROJECT_ROOT)
+    except Exception as e:
+        logger.error(f"[Scheduler] Continuous learner tick failed: {e}")
+
+
 def _setup_scheduler():
     """Initialize APScheduler with all scheduled jobs."""
     global __scheduler
@@ -186,8 +210,17 @@ def _setup_scheduler():
             replace_existing=True,
         )
 
+        # Phase 3: Continuous learner tick — every 10 minutes
+        __scheduler.add_job(
+            _scheduled_continuous_learner_tick,
+            IntervalTrigger(minutes=10),
+            id="continuous_learner_tick",
+            name="Continuous Learner Tick",
+            replace_existing=True,
+        )
+
         __scheduler.start()
-        logger.info("[Scheduler] APScheduler started with 5 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), line_uploads_cleanup(00:05), push_tick(1min)")
+        logger.info("[Scheduler] APScheduler started with 6 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), line_uploads_cleanup(00:05), push_tick(1min), continuous_learner(10min)")
 
     except ImportError:
         logger.warning(

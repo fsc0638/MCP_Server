@@ -1374,22 +1374,69 @@ def _process_line_message(
                 actual_input, execute_mode = _parse_command_prefix(user_input)
 
                 history = _session_mgr.get_or_create_conversation(session_id)
-                system_msgs = [m for m in history if m.get("role") == "system"]
-                non_system = [m for m in history if m.get("role") != "system"]
 
-                # Token-aware history trimming: accumulate from newest until budget is full.
-                # Budget = 4000 tokens ≈ 12000 chars (leaving room for tools + output).
-                _MAX_HISTORY_CHARS = 12000
-                _acc_chars = 0
-                trimmed_msgs = []
-                for m in reversed(non_system):
-                    mc = len(m.get("content", ""))
-                    if _acc_chars + mc > _MAX_HISTORY_CHARS:
-                        break
-                    trimmed_msgs.insert(0, m)
-                    _acc_chars += mc
-                truncated_history = system_msgs + trimmed_msgs
-                logger.info(f"[LINE BG] History: {len(non_system)} msgs → {len(trimmed_msgs)} msgs ({_acc_chars} chars)")
+                # Use PromptBuilder with LINE platform budget to trim history/context.
+                try:
+                    from server.services.prompt_builder import build_prompt_messages, Budget, PromptParts
+                    from server.services.budget_profiles import get_budget_for_model
+
+                    sanitized_history = [{k: v for k, v in m.items() if k != "created_at"} for m in history]
+                    bp = get_budget_for_model(adapter.model, platform="line")
+
+                    # Keep in sync with web pipeline: session_summary + retrieved_memory injections
+                    session_summary = ""
+                    retrieved_memory = ""
+                    try:
+                        from server.services.session_summarizer import SessionSummarizer
+                        from server.services.memory_retriever import MemoryRetriever, render_memory_injection
+                        from server.services.behavior_rule_loader import load_behavior_rule_texts
+
+                        session_summary = SessionSummarizer(str(Path(os.getcwd()))).get_cached_summary_text(session_id)
+                        br_texts = load_behavior_rule_texts(str(Path(os.getcwd())), max_each=8)
+                        mem_items = MemoryRetriever(str(Path(os.getcwd()))).retrieve(actual_input, max_items=8)
+                        retrieved_memory = render_memory_injection(mem_items, max_chars=800, exclude_texts=br_texts)
+                    except Exception:
+                        pass
+
+                    system_msgs = [m for m in history if m.get("role") == "system"]
+                    truncated_history, prompt_meta = build_prompt_messages(
+                        model=adapter.model,
+                        budget=Budget(max_input_tokens=bp.max_input_tokens, reserve_output_tokens=bp.reserve_output_tokens),
+                        parts=PromptParts(
+                            system=system_msgs[0]["content"] if system_msgs else "",
+                            behavior_rules_appendix="",
+                            session_summary=session_summary,
+                            retrieved_memory=retrieved_memory,
+                            history=sanitized_history,
+                            user=actual_input,
+                        ),
+                    )
+                    import os as _os
+                    if _os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+                        try:
+                            from server.services.prompt_meta_logger import append_prompt_meta
+                            append_prompt_meta(str(Path(_os.getcwd())), session_id, prompt_meta)
+                        except Exception:
+                            pass
+                    logger.info(
+                        f"[LINE BG] PromptBuilder meta slim={{'final_total_tokens': {prompt_meta.get('included', {}).get('final_total_tokens')}, 'history_messages': {prompt_meta.get('included', {}).get('history_messages')}, 'trimmed': {prompt_meta.get('trimmed', {})}}}"
+                    )
+                except Exception as _pb_err:
+                    logger.warning(f"[LINE BG] PromptBuilder fallback to char-based trimming: {_pb_err}")
+                    system_msgs = [m for m in history if m.get("role") == "system"]
+                    non_system = [m for m in history if m.get("role") != "system"]
+                    _MAX_HISTORY_CHARS = 12000
+                    _acc_chars = 0
+                    trimmed_msgs = []
+                    for m in reversed(non_system):
+                        mc = len(m.get("content", ""))
+                        if _acc_chars + mc > _MAX_HISTORY_CHARS:
+                            break
+                        trimmed_msgs.insert(0, m)
+                        _acc_chars += mc
+                    truncated_history = system_msgs + trimmed_msgs
+                    logger.info(f"[LINE BG] History: {len(non_system)} msgs → {len(trimmed_msgs)} msgs ({_acc_chars} chars)")
+
 
                 # ── Token-based Fallback ────────────────────────────────
                 # Pre-flight check: if estimated tokens exceed the current
