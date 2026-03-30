@@ -105,6 +105,34 @@ class BehaviorRuleExtractor:
                 )
         return out
 
+    # Fix 1: Future-intent keywords — only extract lasting preferences, not one-time requests
+    _INTENT_KEYWORDS = [
+        "以後", "未來", "記得", "請記得", "永遠", "都要", "每次", "每回",
+        "from now on", "always", "never", "please remember",
+    ]
+
+    # Fix 2: System-generated content prefixes — never treat as user preference
+    _SYSTEM_PREFIXES = [
+        "[系統通知", "[系統:", "[system notice", "[文件內容", "[SYSTEM",
+    ]
+
+    # Max length for a message to qualify as a rule (long texts = articles/files, not instructions)
+    _MAX_RULE_LEN = 200
+
+    def _is_rule_candidate(self, txt: str) -> bool:
+        """Return True only if the message looks like a lasting user preference instruction."""
+        # Filter 1: Skip system-generated messages
+        for prefix in self._SYSTEM_PREFIXES:
+            if txt.startswith(prefix):
+                return False
+        # Filter 2: Skip long texts (news articles, document summaries, etc.)
+        if len(txt) > self._MAX_RULE_LEN:
+            return False
+        # Filter 3: Require future-intent signal so one-time requests are excluded
+        if not any(k in txt for k in self._INTENT_KEYWORDS):
+            return False
+        return True
+
     def _extract_from_sessions(self, snapshot: Dict[str, Any]) -> List[RuleItem]:
         out: List[RuleItem] = []
         msgs = snapshot.get("messages") or []
@@ -120,18 +148,26 @@ class BehaviorRuleExtractor:
             created_at = m.get("created_at")
             evidence = f"created_at={created_at} text={txt[:200]}"
 
-            # group rules
+            # group rules (group rules don't require intent keywords — they're always structural)
             if any(k in txt for k in ["群組", "room", "group"]):
                 if any(k in txt for k in ["忽略", "不要回", "不回覆", "ignore"]):
                     out.append(RuleItem(text="群組規則: 群組/room 訊息忽略或不回覆", source_type="sessions", source=session_id, evidence=evidence))
 
-            # taboos
-            if any(k in txt for k in ["不要", "禁止", "避免", "不可"]):
-                out.append(RuleItem(text=self._normalize_item("禁忌: " + txt), source_type="sessions", source=session_id, evidence=evidence))
+            # Fix 3: Gate all style/taboo extraction behind _is_rule_candidate
+            if not self._is_rule_candidate(txt):
+                if len(out) > 30:
+                    break
+                continue
 
-            # style
-            if any(k in txt for k in ["語氣", "風格", "用詞", "繁體"]):
+            # Fix 4: Mutual exclusion — classify into ONE bucket only (style takes priority over taboos)
+            is_style = any(k in txt for k in ["語氣", "風格", "用詞", "繁體中文", "回答方式", "條列"])
+            is_taboo = any(k in txt for k in ["不要", "禁止", "避免", "不可"])
+
+            if is_style:
                 out.append(RuleItem(text=self._normalize_item("風格: " + txt), source_type="sessions", source=session_id, evidence=evidence))
+            elif is_taboo:
+                # Only add as pure taboo when it has NO style signal
+                out.append(RuleItem(text=self._normalize_item("禁忌: " + txt), source_type="sessions", source=session_id, evidence=evidence))
 
             if len(out) > 30:
                 break

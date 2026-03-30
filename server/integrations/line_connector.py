@@ -1183,7 +1183,13 @@ def _process_line_message(
                 _profile_updater = ProfileUpdater(str(Path(os.getcwd())))
                 _profile_content = _profile_updater.get_profile(session_id)
                 if _profile_content:
-                    _base_system_prompt += f"\n\n---\n# 使用者背景知識\n{_profile_content}"
+                    _base_system_prompt += (
+                        f"\n\n---\n"
+                        f"# 【當前對話使用者資料】\n"
+                        f"你現在正在與以下這位使用者對話。以下是他的身份與個人資料，"
+                        f"當使用者詢問「你認識我嗎」「知道我是誰嗎」等問題時，請直接根據此資料回答：\n\n"
+                        f"{_profile_content}"
+                    )
             except Exception as _pe:
                 logger.debug(f"[LINE B1] Profile injection skipped: {_pe}")
 
@@ -1278,7 +1284,7 @@ def _process_line_message(
                             # Keep in session for conversational continuity
                             _session_mgr.append_message(session_id, "assistant", summary)
                             # Also keep in local accumulator — unaffected by token trimming
-                            all_summaries.append(f"【第 {part} 段摘要】\n{summary}")
+                            all_summaries.append(summary)
                             logger.info(f"[LINE BG] Chunk {part}/{total} summarized ({len(summary)} chars)")
                             _send_loading_animation(line_api, chat_id, 60)
                         else:
@@ -1292,25 +1298,25 @@ def _process_line_message(
                             # was trimmed by the token-aware budget below.
                             warning = ""
                             if total > 6:
-                                warning = "\n⚠️ 文件過長，分析基於分段摘要，細節可能有遺漏。"
+                                warning = "\n（注意：文件較長，部分內容為重點摘錄，細節可能有遺漏。）"
 
                             if all_summaries:
                                 # Multi-chunk file: inject every summary explicitly
-                                prior_context = "\n\n".join(all_summaries)
+                                # NOTE: Hide chunking internals — LLM must treat this as ONE complete file.
+                                prior_context = "\n\n---\n\n".join(all_summaries)
                                 user_input = (
-                                    f"以下是《{fname}》各段的摘要（共 {total} 段，最後一段的原文附於摘要之後）：\n\n"
-                                    f"{prior_context}\n\n"
-                                    f"【第 {part} 段（最終段）原文】\n{chunk}\n\n"
-                                    f"[指令：根據以上所有段落摘要與最終段原文，"
-                                    f"產出一份完整、深度的分析報告。{warning}]"
+                                    f"[系統通知：使用者上傳了文件《{fname}》。以下是系統預處理後的完整內容。"
+                                    f"對使用者而言這就是一個檔案，禁止提及「分段」「段落數」「第N段」「摘要」等內部處理細節。]\n\n"
+                                    f"【文件內容】\n{prior_context}\n\n"
+                                    f"【文件末段原文】\n{chunk}\n\n"
+                                    f"[指令：根據以上文件完整內容，詢問使用者想要如何處理這份文件。{warning}]"
                                 )
                             else:
                                 # Single-chunk fallback (total == 1)
                                 user_input = (
-                                    f"[文件分段 {part}/{total} - 最終段] 以下是 {fname} 的最後一段內容：\n\n"
+                                    f"[系統通知：使用者上傳了文件《{fname}》。以下是完整內容。]\n\n"
                                     f"{chunk}\n\n"
-                                    f"[指令：這是文件的最後一段。請結合你先前記住的所有段落摘要，"
-                                    f"產出一份完整、深度的分析報告。{warning}]"
+                                    f"[指令：根據以上文件內容，詢問使用者想要如何處理這份文件。{warning}]"
                                 )
 
                     # ── Store original file path for downstream skills ────────
@@ -1332,7 +1338,8 @@ def _process_line_message(
                     # explicitly, so session no longer needs them.
                     _session_mgr.remove_chunk_entries(session_id, fname)
 
-                    # Mark as chunked final → tools disabled for synthesis
+                    # After chunk processing: always ask user what to do.
+                    # Tools disabled — synthesis only, user will state intent in follow-up.
                     _routed_tier = "chunk_final"
 
                 # ── Normal Processing ─────────────────────────────────────
@@ -1375,49 +1382,68 @@ def _process_line_message(
                 history = _session_mgr.get_or_create_conversation(session_id)
 
                 # Use PromptBuilder with LINE platform budget to trim history/context.
-                from server.services.prompt_builder import build_prompt_messages, Budget, PromptParts
-                from server.services.budget_profiles import get_budget_for_model
-
-                sanitized_history = [{k: v for k, v in m.items() if k != "created_at"} for m in history]
-                bp = get_budget_for_model(adapter.model, platform="line")
-
-                # Keep in sync with web pipeline: session_summary + retrieved_memory injections
-                session_summary = ""
-                retrieved_memory = ""
                 try:
-                    from server.services.session_summarizer import SessionSummarizer
-                    from server.services.memory_retriever import MemoryRetriever, render_memory_injection
-                    from server.services.behavior_rule_loader import load_behavior_rule_texts
+                    from server.services.prompt_builder import build_prompt_messages, Budget, PromptParts
+                    from server.services.budget_profiles import get_budget_for_model
 
-                    session_summary = SessionSummarizer(str(Path(os.getcwd()))).get_cached_summary_text(session_id)
-                    br_texts = load_behavior_rule_texts(str(Path(os.getcwd())), max_each=8)
-                    mem_items = MemoryRetriever(str(Path(os.getcwd()))).retrieve(actual_input, max_items=8)
-                    retrieved_memory = render_memory_injection(mem_items, max_chars=800, exclude_texts=br_texts)
-                except Exception:
-                    pass
+                    sanitized_history = [{k: v for k, v in m.items() if k != "created_at"} for m in history]
+                    bp = get_budget_for_model(adapter.model, platform="line")
 
-                truncated_history, prompt_meta = build_prompt_messages(
-                    model=adapter.model,
-                    budget=Budget(max_input_tokens=bp.max_input_tokens, reserve_output_tokens=bp.reserve_output_tokens),
-                    parts=PromptParts(
-                        system=system_msgs[0]["content"] if (system_msgs := [m for m in history if m.get("role") == "system"]) else "",
-                        behavior_rules_appendix="",
-                        session_summary=session_summary,
-                        retrieved_memory=retrieved_memory,
-                        history=sanitized_history,
-                        user=actual_input,
-                    ),
-                )
-                import os as _os
-                if _os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+                    # Keep in sync with web pipeline: session_summary + retrieved_memory injections
+                    session_summary = ""
+                    retrieved_memory = ""
                     try:
-                        from server.services.prompt_meta_logger import append_prompt_meta
-                        append_prompt_meta(str(Path(_os.getcwd())), session_id, prompt_meta)
+                        from server.services.session_summarizer import SessionSummarizer, render_session_summary_injection
+                        from server.services.memory_retriever import MemoryRetriever, render_memory_injection
+                        from server.services.behavior_rule_loader import load_behavior_rule_texts
+
+                        ssum = SessionSummarizer(str(Path(os.getcwd()))).maybe_update(session_id, min_new_messages=6)
+                        session_summary = render_session_summary_injection(ssum, max_chars=900)
+                        br_texts = load_behavior_rule_texts(str(Path(os.getcwd())), max_each=8)
+                        mem_items = MemoryRetriever(str(Path(os.getcwd()))).retrieve(actual_input, max_items=8)
+                        retrieved_memory = render_memory_injection(mem_items, max_chars=800, exclude_texts=br_texts)
                     except Exception:
                         pass
-                logger.info(
-                    f"[LINE BG] PromptBuilder meta slim={{'final_total_tokens': {prompt_meta.get('included', {}).get('final_total_tokens')}, 'history_messages': {prompt_meta.get('included', {}).get('history_messages')}, 'trimmed': {prompt_meta.get('trimmed', {})}}}"
-                )
+
+                    system_msgs = [m for m in history if m.get("role") == "system"]
+                    truncated_history, prompt_meta = build_prompt_messages(
+                        model=adapter.model,
+                        budget=Budget(max_input_tokens=bp.max_input_tokens, reserve_output_tokens=bp.reserve_output_tokens),
+                        parts=PromptParts(
+                            system=system_msgs[0]["content"] if system_msgs else "",
+                            behavior_rules_appendix="",
+                            session_summary=session_summary,
+                            retrieved_memory=retrieved_memory,
+                            history=sanitized_history,
+                            user=actual_input,
+                        ),
+                    )
+                    import os as _os
+                    if _os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+                        try:
+                            from server.services.prompt_meta_logger import append_prompt_meta
+                            append_prompt_meta(str(Path(_os.getcwd())), session_id, prompt_meta)
+                        except Exception:
+                            pass
+                    logger.info(
+                        f"[LINE BG] PromptBuilder meta slim={{'final_total_tokens': {prompt_meta.get('included', {}).get('final_total_tokens')}, 'history_messages': {prompt_meta.get('included', {}).get('history_messages')}, 'trimmed': {prompt_meta.get('trimmed', {})}}}"
+                    )
+                except Exception as _pb_err:
+                    logger.warning(f"[LINE BG] PromptBuilder fallback to char-based trimming: {_pb_err}")
+                    system_msgs = [m for m in history if m.get("role") == "system"]
+                    non_system = [m for m in history if m.get("role") != "system"]
+                    _MAX_HISTORY_CHARS = 12000
+                    _acc_chars = 0
+                    trimmed_msgs = []
+                    for m in reversed(non_system):
+                        mc = len(m.get("content", ""))
+                        if _acc_chars + mc > _MAX_HISTORY_CHARS:
+                            break
+                        trimmed_msgs.insert(0, m)
+                        _acc_chars += mc
+                    truncated_history = system_msgs + trimmed_msgs
+                    logger.info(f"[LINE BG] History: {len(non_system)} msgs → {len(trimmed_msgs)} msgs ({_acc_chars} chars)")
+
 
                 # ── Token-based Fallback ────────────────────────────────
                 # Pre-flight check: if estimated tokens exceed the current

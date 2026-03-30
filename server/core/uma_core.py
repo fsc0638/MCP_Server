@@ -101,24 +101,42 @@ class UMA:
 
     def _load_references(self, skill_name: str) -> str:
         """
-        Loads the references/ layer content for a skill.
+        Loads the references/ or assets/ layer content for a skill.
         Text files (.md, .txt) are injected as full content.
-        Binary files (.docx, .xlsx, .pdf) are listed as available template paths.
+        Binary files (.docx, .xlsx, .pdf) are listed as available system templates.
         """
-        refs_dir = self.executor.skills_home / skill_name / "references"
-        if not refs_dir.exists():
+        skill_dir = self.executor.skills_home / skill_name
+        refs_dir = None
+        for candidate in ["references", "assets"]:
+            d = skill_dir / candidate
+            if d.exists():
+                refs_dir = d
+                break
+        if not refs_dir:
             return ""
-        content = "\n\n---\n【REFERENCE LAYER — 必須嚴格依照以下知識文件作答，禁止自行設計格式或內容】\n"
+
+        text_files = []
+        template_files = []
         for ref_file in sorted(refs_dir.iterdir()):
             if ref_file.suffix.lower() in (".md", ".txt"):
-                content += f"\n=== {ref_file.name} ===\n"
-                content += ref_file.read_text(encoding="utf-8", errors="replace")
+                text_files.append(ref_file)
             elif ref_file.suffix.lower() in (".docx", ".xlsx", ".pdf"):
-                content += (
-                    f"\n[TEMPLATE FILE]: {ref_file.name} "
-                    f"(binary — absolute path: {ref_file}; "
-                    f"use mcp-python-executor to load as template)\n"
-                )
+                template_files.append(ref_file)
+
+        content = "\n\n---\n【REFERENCE LAYER — 必須嚴格依照以下知識文件作答，禁止自行設計格式或內容】\n"
+        for ref_file in text_files:
+            content += f"\n=== {ref_file.name} ===\n"
+            content += ref_file.read_text(encoding="utf-8", errors="replace")
+
+        if template_files:
+            content += "\n\n【SYSTEM TEMPLATES — 系統內建範本，非使用者上傳檔案】\n"
+            content += "以下是此技能內建的範本檔案，當使用者要求匯出時應使用這些範本：\n"
+            for i, ref_file in enumerate(template_files, 1):
+                content += f"  {i}. {ref_file.name}\n"
+            content += "範本路徑規則：SKILLS_HOME/{skill_name}/assets/{filename}\n"
+            content += "使用方式：透過 mcp-python-executor 以 python-docx 開啟範本並填入資料。\n"
+            content += "若有多個範本，請先詢問使用者要使用哪一個，列出檔案名稱供選擇。\n"
+
         return content
 
     def execute_tool_call(self, skill_name: str, arguments: str):
@@ -184,13 +202,25 @@ class UMA:
                 f"If a REFERENCE LAYER is present, it is the authoritative standard — follow it strictly."
             )
 
+        # Inject original file info if provided in arguments
+        _file_context = ""
+        _orig_file = arg_dict.get("_original_file_path", "")
+        _orig_name = arg_dict.get("_original_filename", "")
+        if _orig_file:
+            _file_context = (
+                f"\n\n---\n【UPLOADED FILE CONTEXT — 極重要】\n"
+                f"⚠️ 使用者先前已上傳檔案《{_orig_name}》，對話歷史中已包含此檔案的分析內容。\n"
+                f"你必須直接使用對話歷史中已有的內容來完成任務，嚴禁再次要求使用者提供檔案或逐字稿。\n"
+                f"如需讀取原始完整內容，可用 mcp-python-executor 開啟：{_orig_file}\n"
+            )
+
         return {
             "status": "success",
             "type": "knowledge_guide",
             "skill": skill_name,
             "execution_mode": mode,
             "message": message,
-            "guide": skill_content + reference_content
+            "guide": skill_content + reference_content + _file_context
         }
 
 

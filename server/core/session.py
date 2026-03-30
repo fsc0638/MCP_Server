@@ -41,6 +41,9 @@ class SessionManager:
         # P-03: Responses API Memory Map (session_id → response.id)
         self._latest_response_ids: Dict[str, str] = {}
 
+        # Phase 3: Pending approval store (session_id → approval payload)
+        self._pending_approvals: Dict[str, Dict[str, Any]] = {}
+
         # Ensure directories exist
         self.memory_dir.mkdir(exist_ok=True)
         self.temp_dir.mkdir(exist_ok=True)
@@ -187,18 +190,19 @@ class SessionManager:
         if len(history) <= 4:
             return
 
-        system_msgs = [m for m in history if m["role"] == "system"]
+        # Separate: original system prompt (first msg only) vs old compression markers vs chat
+        original_system = [history[0]] if history and history[0]["role"] == "system" else []
         chat_msgs = [m for m in history if m["role"] != "system"]
 
-        # 50% division
+        # 50% division — keep recent half
         midpoint = max(1, len(chat_msgs) // 2)
         old_msgs = chat_msgs[:midpoint]
         new_msgs = chat_msgs[midpoint:]
 
-        # FUTURE(LLM Summarization): Pass `old_msgs` to an adapter for dense summarization.
+        # Single compression marker (replaces ALL previous markers)
         summary_content = f"[System Memory: Previously discussed {len(old_msgs)} messages. Context compressed to preserve token head room.]"
-        
-        compressed_history = system_msgs + [{"role": "system", "content": summary_content}] + new_msgs
+
+        compressed_history = original_system + [{"role": "system", "content": summary_content}] + new_msgs
         self._conversations[session_id] = compressed_history
         
         # Flush the summary node to persistent MEMORY.md
@@ -365,6 +369,21 @@ class SessionManager:
     def get_latest_response_id(self, session_id: str) -> Optional[str]:
         """Retrieve the response ID from the latest OpenAI Responses API turn."""
         return self._latest_response_ids.get(session_id)
+
+    # ─── Phase 3: Pending Approval Store ──────────────────────────────────────
+
+    def set_pending_approval(self, session_id: str, payload: Dict[str, Any]):
+        """Store a pending high-risk tool call awaiting user approval."""
+        self._pending_approvals[session_id] = payload
+        logger.info(f"[Session] Pending approval stored for session={session_id}, tool={payload.get('tool_name')}")
+
+    def get_pending_approval(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve the pending approval payload for a session."""
+        return self._pending_approvals.get(session_id)
+
+    def clear_pending_approval(self, session_id: str):
+        """Clear the pending approval after it has been resolved."""
+        self._pending_approvals.pop(session_id, None)
 
     # ─── Per-session Metadata (Key-Value, disk-persisted) ─────────────────────
 

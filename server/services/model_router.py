@@ -236,6 +236,21 @@ def route_model(
     ]
     _needs_tools = any(kw in _input_lower for kw in _TOOL_KEYWORDS)
 
+    # Fix A: Semantic skill + file output intent → must be full (needs 3 tools: skill + python-executor + web-search)
+    # Semantic skills are knowledge-guide based and require at least 2 tool slots to complete a task
+    _SEMANTIC_SKILL_KEYWORDS = [
+        "groovenauts", "groovenaust", "會議紀錄", "會議紀綠", "會議記錄",
+        "依照模板", "照模板", "用模板",
+    ]
+    _FILE_OUTPUT_KEYWORDS = [
+        "docx", "pdf", "匯出", "產出", "輸出", "匯出", "下載",
+        "export", "generate", "produce",
+    ]
+    _needs_semantic_with_output = (
+        any(kw in _input_lower for kw in _SEMANTIC_SKILL_KEYWORDS)
+        and any(kw in _input_lower for kw in _FILE_OUTPUT_KEYWORDS)
+    )
+
     # LLM-as-a-Router
     tier = _call_router_llm(user_input, openai_client)
 
@@ -243,6 +258,11 @@ def route_model(
     if tier == "nano" and _needs_tools:
         tier = "mini"
         logger.info(f"[Router] Upgraded nano→mini (tool keywords detected in '{user_input[:30]}')")
+
+    # Upgrade mini/nano → full if semantic skill + file output detected
+    if tier in ("nano", "mini") and _needs_semantic_with_output:
+        tier = "full"
+        logger.info(f"[Router] Upgraded {tier}→full (semantic skill + file output detected)")
 
     model = _TIER_TO_MODEL.get(tier, get_model_mini)()
     logger.info(f"[Router] '{user_input[:40]}...' → tier={tier} → {model}")

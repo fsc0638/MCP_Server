@@ -193,36 +193,35 @@ def select_relevant_tools(
         tokens = _tokenize(text)
         return set(_normalize_synonym(w) for w in tokens if w.lower() not in _STOP_WORDS)
 
-    matched = []
-    unmatched = []
+    core = []
+    scored_all = []
     for tool in all_tools:
         tool_name = ""
         if "function" in tool:
             tool_name = tool["function"].get("name", "")
         elif "name" in tool:
             tool_name = tool.get("name", "")
-            
-        # Core tools are always "matched"
+
+        # Core tools are always included (at end)
         if tool_name in CORE_TOOLS:
-            matched.append(tool)
+            core.append(tool)
             continue
-            
-        tool_tokens = get_tool_tokens(tool)
-        if query_words & tool_tokens:  # Any overlap
-            matched.append(tool)
-        else:
-            unmatched.append(tool)
 
-    if len(matched) >= max_tools:
-        return matched[:max_tools]
-
-    # Phase 2: Semantic fallback (token overlap scoring)
-    scored = []
-    for tool in unmatched:
         tool_tokens = get_tool_tokens(tool)
         overlap = len(query_words & tool_tokens)
-        scored.append((overlap, tool))
+        # Bonus: exact skill name match in query gets +10 priority
+        _name_clean = tool_name.replace("mcp-", "").replace("-", " ").lower()
+        if _name_clean and any(_name_clean.split()[0] in w.lower() for w in query_tokens if len(w) > 3):
+            overlap += 10
+        scored_all.append((overlap, tool))
 
-    scored.sort(key=lambda x: x[0], reverse=True)
-    result = matched + [t for _, t in scored]
-    return result[:max_tools]
+    # Sort ALL tools by relevance score (descending)
+    scored_all.sort(key=lambda x: x[0], reverse=True)
+    matched = [t for score, t in scored_all if score > 0]
+    unmatched = [t for score, t in scored_all if score == 0]
+
+    # Fix B: core tools are appended AFTER max_tools cap — they never displace ranked tools
+    # This ensures mini tier's 1 slot goes to the most relevant skill, not eaten by python-executor
+    ranked = matched + unmatched
+    result = ranked[:max_tools] + core
+    return result

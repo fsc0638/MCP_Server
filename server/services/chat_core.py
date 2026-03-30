@@ -74,8 +74,6 @@ async def process_chat_native(req: ChatRequest):
     # Phase 1(A2): Build a token-budgeted outbound prompt (PromptBuilder)
     # - behavior rules are already appended inside dynamic_prompt (Phase 2-A)
     # - session summary + retrieved memory are injected as optional context blocks
-    from server.services.prompt_builder import Budget, PromptParts, build_prompt_messages
-
     session_summary = ""
     try:
         from server.services.session_summarizer import SessionSummarizer, render_session_summary_injection
@@ -118,40 +116,49 @@ async def process_chat_native(req: ChatRequest):
         user_content += f"\n\n(System Note: Respond strictly in {req.language}. If input is in another language, translate your answer.)"
 
     # Use PromptBuilder to trim history/context to a fixed token budget
-    sanitized_history = [{k: v for k, v in m.items() if k != "created_at"} for m in history]
+    try:
+        from server.services.prompt_builder import Budget, PromptParts, build_prompt_messages
+        from server.services.budget_profiles import get_budget_for_model
 
-    from server.services.budget_profiles import get_budget_for_model
-    bp = get_budget_for_model(req.model, platform="web")
+        sanitized_history = [{k: v for k, v in m.items() if k != "created_at"} for m in history]
+        bp = get_budget_for_model(req.model, platform="web")
 
-    outbound_history, prompt_meta = build_prompt_messages(
-        model=req.model or "gpt-4o-mini",
-        budget=Budget(max_input_tokens=bp.max_input_tokens, reserve_output_tokens=bp.reserve_output_tokens),
-        parts=PromptParts(
-            system=dynamic_prompt,
-            behavior_rules_appendix="",  # already in dynamic_prompt
-            session_summary=session_summary,
-            retrieved_memory=retrieved_memory,
-            history=sanitized_history,
-            user=user_content,
-        ),
-    )
+        outbound_history, prompt_meta = build_prompt_messages(
+            model=req.model or "gpt-4o-mini",
+            budget=Budget(max_input_tokens=bp.max_input_tokens, reserve_output_tokens=bp.reserve_output_tokens),
+            parts=PromptParts(
+                system=dynamic_prompt,
+                behavior_rules_appendix="",  # already in dynamic_prompt
+                session_summary=session_summary,
+                retrieved_memory=retrieved_memory,
+                history=sanitized_history,
+                user=user_content,
+            ),
+        )
 
-    # Phase 1b: reduce log noise; verbose meta behind env toggle
-    import os
-    if os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
-        logger.info(f"[PromptBuilder] meta={prompt_meta}")
-        try:
-            from server.services.prompt_meta_logger import append_prompt_meta
-            append_prompt_meta(PROJECT_ROOT, session_id, prompt_meta)
-        except Exception:
-            pass
-    else:
-        slim = {
-            "final_total_tokens": prompt_meta.get("included", {}).get("final_total_tokens"),
-            "history_messages": prompt_meta.get("included", {}).get("history_messages"),
-            "trimmed": prompt_meta.get("trimmed", {}),
-        }
-        logger.info(f"[PromptBuilder] {slim}")
+        # Phase 1b: reduce log noise; verbose meta behind env toggle
+        import os
+        if os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+            logger.info(f"[PromptBuilder] meta={prompt_meta}")
+            try:
+                from server.services.prompt_meta_logger import append_prompt_meta
+                append_prompt_meta(PROJECT_ROOT, session_id, prompt_meta)
+            except Exception:
+                pass
+        else:
+            slim = {
+                "final_total_tokens": prompt_meta.get("included", {}).get("final_total_tokens"),
+                "history_messages": prompt_meta.get("included", {}).get("history_messages"),
+                "trimmed": prompt_meta.get("trimmed", {}),
+            }
+            logger.info(f"[PromptBuilder] {slim}")
+    except Exception as pb_err:
+        logger.warning(f"[PromptBuilder] Fallback to raw history: {pb_err}")
+        raw_outbound = history + [{"role": "user", "content": user_content}]
+        outbound_history = []
+        for m in raw_outbound:
+            clean_msg = {k: v for k, v in m.items() if k != "created_at"}
+            outbound_history.append(clean_msg)
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         session_mgr.append_message(session_id, "user", req.user_input)

@@ -222,6 +222,131 @@ document.addEventListener('DOMContentLoaded', () => {
             if (el) el.remove();
         }
 
+        // ── Phase 3: Auth Modal + Resume Stream ──────────────────────────────
+
+        function showAuthModal(toolName, riskDesc, sid, targetMsgDiv) {
+            const existing = document.getElementById('authApprovalModal');
+            if (existing) existing.remove();
+
+            const modal = document.createElement('div');
+            modal.id = 'authApprovalModal';
+            modal.className = 'modal-overlay';
+            modal.style.zIndex = '9998';
+            modal.innerHTML = `
+                <div class="modal-card" style="max-width:480px;width:92%">
+                    <div class="modal-card-header" style="background:linear-gradient(135deg,#f05252,#d03030);border-radius:14px 14px 0 0;padding:18px 20px;">
+                        <div>
+                            <h2 class="modal-title" style="color:#fff;margin:0;font-size:1.05rem;">⚠ 高風險操作授權請求</h2>
+                            <p class="modal-subtitle" style="color:rgba(255,255,255,.8);margin:4px 0 0;font-size:.85rem;">需要您的確認才能繼續執行</p>
+                        </div>
+                        <button class="icon-btn" id="authModalCloseBtn" style="color:#fff">✕</button>
+                    </div>
+                    <div class="modal-card-body" style="padding:20px">
+                        <p style="margin:0 0 8px;font-weight:600;color:var(--text-primary)">技能名稱</p>
+                        <p style="margin:0 0 16px;font-family:monospace;background:var(--bg-base);padding:8px 12px;border-radius:8px;color:var(--kway-blue)">${toolName}</p>
+                        <p style="margin:0 0 8px;font-weight:600;color:var(--text-primary)">風險說明</p>
+                        <p style="margin:0;color:var(--text-secondary);font-size:.9rem;line-height:1.5">${riskDesc}</p>
+                    </div>
+                    <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end;padding:16px 20px;border-top:1px solid var(--border-subtle)">
+                        <button id="authRejectBtn" class="btn btn-secondary" style="min-width:96px">拒絕執行</button>
+                        <button id="authApproveBtn" class="btn btn-primary" style="min-width:96px;background:var(--accent-coral)">確認授權</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+
+            function closeModal() { modal.remove(); }
+
+            async function rejectAndClose() {
+                closeModal();
+                await fetch(`/chat/reject/${sid}`, { method: 'POST' });
+                if (targetMsgDiv) {
+                    targetMsgDiv.innerHTML += `<p style="color:var(--accent-coral);margin:8px 0 0;font-size:.9rem">⚠ 已拒絕執行高風險技能「${toolName}」。</p>`;
+                }
+                userInput.disabled = false;
+                sendBtn.disabled = false;
+                userInput.focus();
+            }
+
+            modal.querySelector('#authModalCloseBtn').onclick = rejectAndClose;
+            modal.querySelector('#authRejectBtn').onclick = rejectAndClose;
+            modal.querySelector('#authApproveBtn').onclick = async () => {
+                closeModal();
+                logModule.addLog('SYS', `使用者已授權執行技能「${toolName}」`);
+                await resumeApprovedStream(sid, toolName, targetMsgDiv);
+            };
+        }
+
+        async function resumeApprovedStream(sid, toolName, targetMsgDiv) {
+            showTypingIndicator();
+            try {
+                const res = await fetch(`/chat/approve/${sid}`, { method: 'POST' });
+                if (!res.ok) {
+                    removeTypingIndicator();
+                    const errText = await res.text();
+                    if (targetMsgDiv) targetMsgDiv.innerHTML += `<p style="color:var(--accent-coral)">⚠ 授權恢復失敗: ${errText}</p>`;
+                    return;
+                }
+
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let done = false;
+                let resumeText = '';
+                let buffer = '';
+
+                const resumeDiv = document.createElement('div');
+                resumeDiv.className = 'message assistant';
+                msgContainer.appendChild(resumeDiv);
+
+                while (!done) {
+                    const { value, done: readerDone } = await reader.read();
+                    done = readerDone;
+                    if (value) {
+                        removeTypingIndicator();
+                        buffer += decoder.decode(value, { stream: true });
+                        const parts = buffer.split('\r\n\r\n');
+                        buffer = parts.pop();
+                        for (let part of parts) {
+                            const lines = part.split(/\r?\n/);
+                            for (let line of lines) {
+                                if (line.startsWith('data: ')) {
+                                    const dataStr = line.substring(6).trim();
+                                    if (dataStr === '[DONE]') continue;
+                                    try {
+                                        const data = JSON.parse(dataStr);
+                                        if (data.status === 'streaming') {
+                                            resumeText += data.content || '';
+                                            resumeDiv.innerHTML = typeof marked !== 'undefined' ? marked.parse(resumeText) : resumeText;
+                                            chatViewport.scrollTop = chatViewport.scrollHeight;
+                                        } else if (data.status === 'success') {
+                                            const final = data.content || resumeText;
+                                            if (final && final !== resumeText) {
+                                                resumeDiv.innerHTML = typeof marked !== 'undefined' ? marked.parse(final) : final;
+                                            }
+                                            logModule.addLog('AI', `技能「${toolName}」執行完成`);
+                                        } else if (data.status === 'error') {
+                                            resumeDiv.innerHTML += `<p style="color:var(--accent-coral)">⚠ 執行錯誤: ${data.message}</p>`;
+                                            logModule.addLog('ERR', data.message, 'error');
+                                        }
+                                    } catch (e) { console.warn('Resume SSE parse error', e); }
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                removeTypingIndicator();
+                appendErrorMsg(e.message);
+                logModule.addLog('ERR', e.message, 'error');
+            } finally {
+                userInput.disabled = false;
+                sendBtn.disabled = false;
+                userInput.focus();
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+
         async function sendMessage() {
             const text = userInput.value.trim();
             if (!text && !attachedFilePath) return;
@@ -326,15 +451,27 @@ document.addEventListener('DOMContentLoaded', () => {
                                             if (attachedSkill) {
                                                 logModule.addLog('INFO', `附加技能「${attachedSkill}」的 metadata 已注入本輪對話`);
                                             }
+                                        } else if (data.status === 'tool_call') {
+                                            // Phase 3-A: Show inline tool-call indicator badge
+                                            const toolMsg = data.message || `正在執行技能：${data.tool_name}`;
+                                            const badge = document.createElement('div');
+                                            badge.className = 'tool-call-badge';
+                                            badge.innerHTML = `<span class="tool-call-spinner"></span><span>${toolMsg}</span>`;
+                                            msgDiv.appendChild(badge);
+                                            chatViewport.scrollTop = chatViewport.scrollHeight;
+                                            logModule.addLog('SYS', toolMsg);
                                         } else if (data.status === 'error') {
                                             const errText = data.message || '未知錯誤';
                                             currentText += `\n\n⚠ 錯誤: ${errText}`;
                                             msgDiv.innerText = currentText;
                                             logModule.addLog('ERR', errText, 'error');
                                         } else if (data.status === 'requires_approval') {
-                                            currentText += `\n\n⚠ 需要同意執行高風險操作: ${data.tool_name}`;
-                                            msgDiv.innerText = currentText;
-                                            logModule.addLog('WARN', `需要同意執行: ${data.tool_name}`);
+                                            // Phase 3-B: Show Auth Modal — pause stream, wait for user decision
+                                            const toolName = data.tool_name || '未知技能';
+                                            const riskDesc = data.risk_description || '此操作被標記為高風險，需要您的授權。';
+                                            logModule.addLog('WARN', `需要授權執行: ${toolName}`);
+                                            done = true;
+                                            showAuthModal(toolName, riskDesc, sessionId, msgDiv);
                                         }
                                     } catch (e) {
                                         console.warn('SSE Parse error', e, dataStr);

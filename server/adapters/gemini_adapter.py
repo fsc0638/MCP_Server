@@ -299,7 +299,8 @@ class GeminiAdapter:
                                     pending_calls.append((fn_name, fn_args))
 
                                     logger.info(f"Gemini detected tool: {fn_name}")
-                                    yield {"status": "streaming", "content": f"\n\n\u2699\ufe0f \u57f7\u884c\u6280\u80fd: `{fn_name}`\n"}
+                                    # Phase 3-A: Broadcast tool_call status BEFORE executing
+                                    yield {"status": "tool_call", "tool_name": fn_name, "message": f"正在執行技能：{fn_name}..."}
 
                     # 2. If no function calls, we are done
                     if not has_function_call:
@@ -317,11 +318,21 @@ class GeminiAdapter:
 
                         # Check for approval requirement
                         if result.get("status") == "requires_approval":
+                            # Phase 3-B: Store pending approval in session for resume endpoint
+                            from server.dependencies.session import get_session_manager
+                            _session_mgr = get_session_manager()
+                            if session_id:
+                                _session_mgr.set_pending_approval(session_id, {
+                                    "tool_name": fn_name,
+                                    "args": fn_args,
+                                    "provider": "gemini",
+                                    "model": self.model,
+                                })
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
-                                "risk_description": result.get("risk_description", "High-risk operation"),
-                                "pending_args": fn_args
+                                "risk_description": result.get("risk_description", "高風險操作，需要使用者授權"),
+                                "pending_args": fn_args,
                             }
                             return
 
