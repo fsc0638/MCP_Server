@@ -1387,11 +1387,12 @@ def _process_line_message(
                     session_summary = ""
                     retrieved_memory = ""
                     try:
-                        from server.services.session_summarizer import SessionSummarizer
+                        from server.services.session_summarizer import SessionSummarizer, render_session_summary_injection
                         from server.services.memory_retriever import MemoryRetriever, render_memory_injection
                         from server.services.behavior_rule_loader import load_behavior_rule_texts
 
-                        session_summary = SessionSummarizer(str(Path(os.getcwd()))).get_cached_summary_text(session_id)
+                        ssum = SessionSummarizer(str(Path(os.getcwd()))).maybe_update(session_id, min_new_messages=6)
+                        session_summary = render_session_summary_injection(ssum, max_chars=900)
                         br_texts = load_behavior_rule_texts(str(Path(os.getcwd())), max_each=8)
                         mem_items = MemoryRetriever(str(Path(os.getcwd()))).retrieve(actual_input, max_items=8)
                         retrieved_memory = render_memory_injection(mem_items, max_chars=800, exclude_texts=br_texts)

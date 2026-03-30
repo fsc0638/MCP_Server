@@ -34,6 +34,6 @@ def get_budget_for_model(model: str | None, platform: str | None = None) -> Budg
     # Platform adjustment: LINE is tighter
     if plat == "line":
         # Keep response headroom but reduce input budget
-        return BudgetProfile(max_input_tokens=min(base.max_input_tokens, 6000), reserve_output_tokens=base.reserve_output_tokens)
+        return BudgetProfile(max_input_tokens=min(base.max_input_tokens, 12000), reserve_output_tokens=base.reserve_output_tokens)
 
     return base

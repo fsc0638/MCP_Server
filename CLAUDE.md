@@ -261,11 +261,11 @@ All 3 write to `Agent_skills/temp/original_{session_id}.txt` and set `session.se
 
 | Local Branch | Remote Branch | Purpose |
 |---|---|---|
-| `AgentK_FSC` | `origin/fsc` | FSC — 主要開發分支，日常工作推送到這裡 |
+| `fsc` | `origin/fsc` | FSC — 主要開發分支，日常工作推送到這裡 |
 | `AgentK_UAT` | `origin/AgentK_UAT` | UAT — 測試驗收分支，測試通過後從 FSC 合併過來 |
 | `main` | `origin/main` | Production (rarely updated) |
 
-Push commands: `git push origin AgentK_FSC:fsc` / `git push origin AgentK_UAT`
+Push commands: `git push origin fsc` / `git push origin AgentK_UAT`
 
 `Agent_skills/` is a **git submodule** (separate repo `fsc0638/Agent_skills`). Always commit submodule changes first, then commit the parent repo's submodule reference update. Push both independently.
 
@@ -293,6 +293,25 @@ Push commands: `git push origin AgentK_FSC:fsc` / `git push origin AgentK_UAT`
 | `mcp-image-generator` | executable | 60s | AI image generation via gpt-image-1; returns base64 PNG saved to downloads/ |
 | `mcp-schedule-manager` | executable | 30s | Manage scheduled push tasks (add/list/remove/pause/resume/trigger) |
 | `mcp-high-risk-demo` | executable | 30s | Auth Modal flow demo |
+| `mcp-schedule-manager` | executable | 10s | Scheduled push management (add/list/remove/pause/resume/trigger) |
+
+### Scheduled Push (`server/services/scheduled_push.py`)
+
+`ScheduledPushService` manages persistent per-user task JSON files at `workspace/schedules/{session_id}.json`. `check_and_execute()` is called by APScheduler every minute.
+
+**Supported cron formats** (parsed by `_parse_simple_cron()`):
+
+| Format | Example | Result |
+|--------|---------|--------|
+| Fixed time | `"10:00"` | Daily at 10:00 |
+| Weekday | `"weekday 09:00"` | Mon–Fri at 09:00 |
+| One-time | `"once +10m"` | 10 minutes from now |
+| **Interval** | `"every +10m"` | Every 10 minutes (elapsed-time based) |
+| Standard cron | `"0 8 * * 1-5"` | Standard 5-field cron |
+
+Interval tasks use elapsed-time logic (`now - last_run >= interval_minutes`), not wall-clock modulo. Tasks with `once: true` are deleted after execution.
+
+Task types: `news`, `work_summary`, `language`, `custom`, `reminder`. See `Agent_skills/skills/mcp-schedule-manager/SKILL.md` for full field-mapping rules.
 
 ### LINE Bot Image Delivery
 
