@@ -147,6 +147,9 @@ class ClaudeAdapter:
                 "\u8acb\u5118\u91cf\u7c21\u6f54\u4e14\u7d50\u69cb\u6e05\u6670\u5730\u56de\u7b54\uff0c\u4e26\u512a\u5148\u4f7f\u7528\u5df2\u8f09\u5165\u7684\u6280\u80fd\u3002"
             )
 
+        # Phase 3: Extract session_id from kwargs for pending approval storage
+        session_id = kwargs.get("session_id")
+
         # Multimodal Vision (NotebookLM Style)
         attached_file = kwargs.get("attached_file")
         visual_docs = kwargs.get("visual_docs", [])
@@ -271,15 +274,27 @@ class ClaudeAdapter:
                         })
 
                         logger.info(f"Claude tool call: {fn_name}({fn_args})")
-                        yield {"status": "streaming", "content": f"\n\n\u2699\ufe0f \u57f7\u884c\u6280\u80fd: `{fn_name}`\n"}
+                        # Phase 3-A: Broadcast tool_call status BEFORE executing
+                        yield {"status": "tool_call", "tool_name": fn_name, "message": f"正在執行技能：{fn_name}..."}
                         result = self.uma.execute_tool_call(fn_name, fn_args)
 
                         if result.get("status") == "requires_approval":
+                            # Phase 3-B: Store pending approval in session for resume endpoint
+                            from server.dependencies.session import get_session_manager
+                            _session_mgr = get_session_manager()
+                            if session_id:
+                                _session_mgr.set_pending_approval(session_id, {
+                                    "tool_name": fn_name,
+                                    "call_id": tc["id"],
+                                    "args": fn_args,
+                                    "provider": "claude",
+                                    "model": self.model,
+                                })
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
-                                "risk_description": result.get("risk_description", "High-risk operation detected"),
-                                "pending_args": fn_args
+                                "risk_description": result.get("risk_description", "高風險操作，需要使用者授權"),
+                                "pending_args": fn_args,
                             }
                             return
 

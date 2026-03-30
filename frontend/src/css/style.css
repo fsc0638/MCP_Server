@@ -1257,3 +1257,45 @@ input:checked + .slider::before { transform: translateX(16px); }
 
 /* Accordion section-header title */
 .accordion-section-header .page-chat-sidebar-title { margin-right: auto; }
+
+/* ── Phase 3: Tool-Call Indicator Badge ──────────────────────── */
+.tool-call-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--kway-blue-pale);
+  border: 1px solid var(--kway-blue-light);
+  border-radius: 20px;
+  padding: 5px 12px;
+  margin: 6px 0;
+  font-size: 0.82rem;
+  color: var(--kway-blue);
+  font-weight: 500;
+  animation: tool-badge-in 0.2s ease;
+}
+@keyframes tool-badge-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.tool-call-spinner {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 2px solid var(--kway-blue-light);
+  border-top-color: var(--kway-blue);
+  border-radius: 50%;
+  animation: tool-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes tool-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Phase 3: Auth Approval Modal overrides ───────────────────── */
+#authApprovalModal .modal-card {
+  border-radius: 16px;
+  overflow: hidden;
+}
+#authApprovalModal #authApproveBtn:hover {
+  background: #c0392b !important;
+}

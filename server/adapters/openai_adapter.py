@@ -415,18 +415,28 @@ class OpenAIAdapter:
                             }
                         else:
                             logger.info(f"Tool call: {fn_name}({fn_args})")
-                            yield {"status": "streaming", "content": f"\n\n⚙️ 執行技能: `{fn_name}`\n"}
+                            # Phase 3-A: Broadcast tool_call status BEFORE executing
+                            yield {"status": "tool_call", "tool_name": fn_name, "message": f"正在執行技能：{fn_name}..."}
                             result = self.uma.execute_tool_call(fn_name, fn_args)
                             # Track knowledge_guide skills to prevent re-invocation
                             if isinstance(result, dict) and result.get("type") == "knowledge_guide":
                                 _knowledge_guide_skills_called.add(fn_name)
 
                         if result.get("status") == "requires_approval":
+                            # Phase 3-B: Store pending approval in session for resume endpoint
+                            if session_id:
+                                _session_mgr.set_pending_approval(session_id, {
+                                    "tool_name": fn_name,
+                                    "call_id": call_id,
+                                    "args": fn_args,
+                                    "current_response_id": current_response_id,
+                                    "model": self.model,
+                                })
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
                                 "risk_description": result.get("risk_description", "High-risk operation"),
-                                "pending_args": fn_args
+                                "pending_args": fn_args,
                             }
                             return
 
