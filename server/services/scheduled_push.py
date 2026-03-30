@@ -299,11 +299,29 @@ class ScheduledPushService:
 
         return "📋 工作摘要功能需要 LLM 支援。"
 
+    # Languages that use JLPT-style N-level grading
+    _JLPT_LEVEL_LANGS = {"日文"}
+
+    def _language_vocab_format(self, language: str) -> str:
+        """Return appropriate vocabulary display format for the given language."""
+        if language in self._JLPT_LEVEL_LANGS:
+            return "原文（假名）\n發音（羅馬拼音）\n中文意思\n例句（附中文翻譯）"
+        return "原文\n發音（音標）\n中文意思\n例句（附中文翻譯）"
+
+    def _language_level_phrase(self, language: str, level: str) -> str:
+        """Return level phrase for prompt, or empty string if not applicable."""
+        if language in self._JLPT_LEVEL_LANGS and level:
+            return f"{level}程度的"
+        if level:
+            return f"{level}程度的"
+        return ""
+
     def _generate_language(self, task: dict, llm_callable=None) -> str:
         """Generate language vocabulary/grammar learning content (fallback path)."""
         config = task.get("config", {})
         language = config.get("language", "日文")
-        level = config.get("level", "N3")
+        _default_level = "N3" if language in self._JLPT_LEVEL_LANGS else ""
+        level = config.get("level", _default_level)
         count = config.get("count", 5)
         content_type = config.get("content_type", "vocabulary")
         current_category = config.get("current_category", config.get("topic", ""))
@@ -313,11 +331,12 @@ class ScheduledPushService:
             f"{chr(10).join(used_items[-20:])}\n\n"
         ) if used_items else ""
         focus = f"本次聚焦主題：【{current_category}】\n" if current_category else ""
+        level_phrase = self._language_level_phrase(language, level)
 
         if llm_callable:
             if content_type == "grammar":
                 prompt = (
-                    f"{exclusion}你是一位{language}教師。請提供「恰好 {count} 個」{level}程度的【文法句型】教學。\n"
+                    f"{exclusion}你是一位{language}教師。請提供「恰好 {count} 個」{level_phrase}【文法句型】教學。\n"
                     f"{focus}"
                     f"每個文法格式：句型 / 意思 / 使用情況 / 例句1（附翻譯）/ 例句2（附翻譯）。\n"
                     f"⚠️ 輸出恰好 {count} 個文法句型，不多不少。\n"
@@ -325,10 +344,11 @@ class ScheduledPushService:
                     f"最後出一道小測驗。用繁體中文說明。"
                 )
             else:
+                vocab_fmt = self._language_vocab_format(language)
                 prompt = (
-                    f"{exclusion}你是一位{language}教師。請提供「恰好 {count} 個」{level}程度的【詞彙/單字】教學。\n"
+                    f"{exclusion}你是一位{language}教師。請提供「恰好 {count} 個」{level_phrase}【詞彙/單字】教學。\n"
                     f"{focus}"
-                    f"每個詞彙格式：原文（假名）/ 發音（羅馬拼音）/ 中文意思 / 例句（附中文翻譯）。\n"
+                    f"每個詞彙格式：\n{vocab_fmt}\n\n"
                     f"⚠️ 輸出恰好 {count} 個詞彙，不多不少。\n"
                     f"🚫 本任務僅限詞彙/單字。嚴禁輸出文法句型。\n"
                     f"最後出一道小測驗。用繁體中文。"
@@ -589,7 +609,13 @@ class ScheduledPushService:
                     filled["count"] = int(_cm.group(1)) if _cm else 5
                 if not config.get("level"):
                     _lm = re.search(r'N([1-5])', original_request)
-                    filled["level"] = f"N{_lm.group(1)}" if _lm else "N3"
+                    _lang_for_level = config.get("language", "") or filled.get("language", "")
+                    if _lm:
+                        filled["level"] = f"N{_lm.group(1)}"
+                    elif _lang_for_level in self._JLPT_LEVEL_LANGS:
+                        filled["level"] = "N3"
+                    else:
+                        filled["level"] = ""  # Non-Japanese: no default level
                 if not config.get("language"):
                     for _lang, _kws in [
                         ("日文", ["日文", "日語", "日本語"]),
@@ -766,12 +792,14 @@ class ScheduledPushService:
             )
         elif task_type == "language":
             lang = config.get("language", "日文")
-            level = config.get("level", "N3")
+            _default_level = "N3" if lang in self._JLPT_LEVEL_LANGS else ""
+            level = config.get("level", _default_level)
             count = config.get("count", 5)
             topic = config.get("topic", "")
             content_type = config.get("content_type", "vocabulary")
             current_category = config.get("current_category", "")
             used_items = config.get("used_items", [])
+            level_phrase = self._language_level_phrase(lang, level)
             # A: used_items exclusion (format-agnostic batch history)
             exclusion = (
                 f"🚫 以下批次已推送過，本次必須涵蓋完全不同的內容，嚴禁重複：\n"
@@ -782,7 +810,7 @@ class ScheduledPushService:
             if content_type == "grammar":
                 return (
                     f"{exclusion}"
-                    f"你是一位{lang}教師。請提供「恰好 {count} 個」{level}程度的【文法句型】教學。\n"
+                    f"你是一位{lang}教師。請提供「恰好 {count} 個」{level_phrase}【文法句型】教學。\n"
                     f"{focus}"
                     f"每個文法格式：\n"
                     f"句型：〜（文法型）\n意思：（中文說明）\n使用情況：（何時使用）\n"
@@ -793,12 +821,13 @@ class ScheduledPushService:
                     f"最後出一道小測驗。用繁體中文說明。"
                 )
             else:
+                vocab_fmt = self._language_vocab_format(lang)
                 return (
                     f"{exclusion}"
-                    f"你是一位{lang}教師。請提供「恰好 {count} 個」{level}程度的【詞彙/單字】教學。\n"
+                    f"你是一位{lang}教師。請提供「恰好 {count} 個」{level_phrase}【詞彙/單字】教學。\n"
                     f"{focus}"
                     f"每個詞彙格式：\n"
-                    f"原文（假名）\n發音（羅馬拼音）\n中文意思\n例句（附中文翻譯）\n\n"
+                    f"{vocab_fmt}\n\n"
                     f"⚠️ 輸出恰好 {count} 個詞彙，不多不少。\n"
                     f"🚫 本任務僅限詞彙/單字。嚴禁輸出文法句型 — 文法由另一個獨立排程負責。\n"
                     f"最後出一道小測驗。用繁體中文。"
@@ -1166,7 +1195,7 @@ class ScheduledPushService:
         # Detect language
         elif any(kw in text for kw in ["詞彙", "單字", "學習", "語言"]):
             lang = "日文"
-            for l in ["日文", "英文", "韓文", "法文", "德文", "西班牙文"]:
+            for l in ["日文", "英文", "韓文", "法文", "德文", "西班牙文", "義大利文"]:
                 if l in text:
                     lang = l
                     break
