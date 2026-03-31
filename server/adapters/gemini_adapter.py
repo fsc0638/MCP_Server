@@ -318,12 +318,15 @@ class GeminiAdapter:
 
                     # 2. If no function calls, we are done
                     if not has_function_call:
-                        # Phase D1: Token Usage Tracking (Gemini, best-effort)
+                        # Phase D1: Token Usage Tracking (Gemini)
                         try:
                             from server.services.token_tracker import TokenTracker
                             from pathlib import Path as _Path
-                            import time
                             _tracker = TokenTracker(str(_Path(os.getcwd())))
+                            _um = getattr(response, "usage_metadata", None)
+                            _inp = int(getattr(_um, "prompt_token_count", 0) or 0) if _um else 0
+                            _out = int(getattr(_um, "candidates_token_count", 0) or 0) if _um else 0
+                            _tot = int(getattr(_um, "total_token_count", 0) or 0) if _um else 0
                             _tracker.record_usage(
                                 session_id=session_id or "",
                                 user_id=user_id,
@@ -333,6 +336,9 @@ class GeminiAdapter:
                                 response_id=response_id,
                                 skill="(chat)",
                                 model=self.model_name,
+                                input_tokens=_inp,
+                                output_tokens=_out,
+                                total_tokens=_tot,
                                 status="success",
                                 duration_ms=0,
                             )
@@ -385,7 +391,11 @@ class GeminiAdapter:
                         from server.services.token_tracker import TokenTracker
                         from pathlib import Path as _Path
                         _tracker = TokenTracker(str(_Path(os.getcwd())))
-                        # Record one line per batch of tool executions
+                        _um = getattr(response, "usage_metadata", None)
+                        _inp = int(getattr(_um, "prompt_token_count", 0) or 0) if _um else 0
+                        _out = int(getattr(_um, "candidates_token_count", 0) or 0) if _um else 0
+                        _tot = int(getattr(_um, "total_token_count", 0) or 0) if _um else 0
+                        # Record one line per tool
                         for fn_name, _fn_args in pending_calls:
                             _tracker.record_usage(
                                 session_id=session_id or "",
@@ -396,6 +406,9 @@ class GeminiAdapter:
                                 response_id=response_id,
                                 skill=fn_name,
                                 model=self.model_name,
+                                input_tokens=_inp,
+                                output_tokens=_out,
+                                total_tokens=_tot,
                                 status="success",
                                 duration_ms=0,
                             )

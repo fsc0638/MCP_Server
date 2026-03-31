@@ -291,20 +291,26 @@ class ClaudeAdapter:
                         yield {"status": "tool_call", "tool_name": fn_name, "message": f"正在執行技能：{fn_name}..."}
                         result = self.uma.execute_tool_call(fn_name, fn_args)
 
-                        # Phase D1: Token Usage Tracking (Claude tool call, best-effort)
+                        # Phase D1: Token Usage Tracking (Claude tool call)
                         try:
                             from server.services.token_tracker import TokenTracker
                             from pathlib import Path as _Path
                             _tracker = TokenTracker(str(_Path(os.getcwd())))
+                            _usage = getattr(response, "usage", None)
+                            _inp = int(getattr(_usage, "input_tokens", 0) or 0) if _usage else 0
+                            _out = int(getattr(_usage, "output_tokens", 0) or 0) if _usage else 0
                             _tracker.record_usage(
                                 session_id=session_id or "",
                                 user_id=user_id,
                                 chat_type=chat_type,
                                 chat_id=chat_id,
                                 tier=tier,
-                                response_id=response_id,
+                                response_id=response_id or getattr(response, "id", "") or "",
                                 skill=fn_name,
                                 model=self.model,
+                                input_tokens=_inp,
+                                output_tokens=_out,
+                                total_tokens=_inp + _out,
                                 status=result.get("status", "unknown") if isinstance(result, dict) else "unknown",
                                 duration_ms=0,
                             )
@@ -342,20 +348,26 @@ class ClaudeAdapter:
                     claude_messages.append({"role": "assistant", "content": content_to_append})
                     claude_messages.append({"role": "user", "content": tool_results})
                 else:
-                    # Phase D1: Token Usage Tracking (Claude chat, best-effort)
+                    # Phase D1: Token Usage Tracking (Claude)
                     try:
                         from server.services.token_tracker import TokenTracker
                         from pathlib import Path as _Path
                         _tracker = TokenTracker(str(_Path(os.getcwd())))
+                        _usage = getattr(response, "usage", None)
+                        _inp = int(getattr(_usage, "input_tokens", 0) or 0) if _usage else 0
+                        _out = int(getattr(_usage, "output_tokens", 0) or 0) if _usage else 0
                         _tracker.record_usage(
                             session_id=session_id or "",
                             user_id=user_id,
                             chat_type=chat_type,
                             chat_id=chat_id,
                             tier=tier,
-                            response_id=response_id,
+                            response_id=response_id or getattr(response, "id", "") or "",
                             skill="(chat)",
                             model=self.model,
+                            input_tokens=_inp,
+                            output_tokens=_out,
+                            total_tokens=_inp + _out,
                             status="success",
                             duration_ms=0,
                         )
