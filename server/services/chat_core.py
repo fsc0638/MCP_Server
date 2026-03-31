@@ -202,6 +202,55 @@ async def process_chat_native(req: ChatRequest):
                     if not final:
                         final = final_content
                     session_mgr.append_message(session_id, "assistant", final)
+
+                    # Bridge sync: Web → LINE push (user input + assistant reply)
+                    try:
+                        from server.services.bridge_sync import (
+                            get_bridge_state,
+                            make_bridge_tag,
+                            session_target_from_session_id,
+                            should_sync_session,
+                        )
+                        from main import PROJECT_ROOT
+                        if should_sync_session(session_id):
+                            st = get_bridge_state(PROJECT_ROOT)
+                            if st.throttle_ok(session_id, cooldown_seconds=5):
+                                kind, native_id = session_target_from_session_id(session_id)
+
+                                # Group gating: only if known and active within 10 minutes
+                                if kind == "group":
+                                    if not st.group_can_push(native_id, active_window_seconds=600):
+                                        kind = "other"
+                                if kind == "room":
+                                    if not st.group_can_push(native_id, active_window_seconds=600):
+                                        kind = "other"
+
+                                if kind in ("user", "group", "room"):
+                                    try:
+                                        from server.integrations.line_connector import _get_line_components
+                                        from linebot.v3.messaging import TextMessage, PushMessageRequest
+
+                                        _, line_api, _ = _get_line_components()
+                                        if line_api:
+                                            tag1 = make_bridge_tag(session_id, req.user_input)
+                                            tag2 = make_bridge_tag(session_id, final)
+                                            msg_user = f"【Web】你：{req.user_input}\n\n{tag1}"
+                                            msg_ai = f"【Web】AI：{final}\n\n{tag2}"
+
+                                            # Push target
+                                            to = native_id
+                                            # Best-effort push; if group/room push fails, mark incapable
+                                            try:
+                                                line_api.push_message(PushMessageRequest(to=to, messages=[TextMessage(text=msg_user[:5000])]))
+                                                line_api.push_message(PushMessageRequest(to=to, messages=[TextMessage(text=msg_ai[:5000])]))
+                                            except Exception:
+                                                if kind in ("group", "room"):
+                                                    st.set_group_push_capable(native_id, False)
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+
                     yield {"data": json.dumps({"status": "success", "content": final}, ensure_ascii=False)}
                     break
                 else:
