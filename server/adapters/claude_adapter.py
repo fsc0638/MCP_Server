@@ -101,8 +101,20 @@ class ClaudeAdapter:
             logger.error(f"Failed to read image for Claude Vision: {e}")
             return None
 
-    def chat(self, messages: Any = None, user_query: Optional[str] = None,
-             user_message: Optional[str] = None, system_prompt: str = "", **kwargs) -> Dict[str, Any]:
+    def chat(
+        self,
+        messages: Any = None,
+        user_query: Optional[str] = None,
+        user_message: Optional[str] = None,
+        system_prompt: str = "",
+        session_id: str = "",
+        user_id: str = "",
+        chat_type: str = "personal",
+        chat_id: str = "",
+        tier: str = "",
+        response_id: str = "",
+        **kwargs,
+    ) -> Dict[str, Any]:
         """
         Send a message to Claude with tool use support.
         D-10: Supports multi-turn tool calls (up to MAX_ITERATIONS).
@@ -147,8 +159,9 @@ class ClaudeAdapter:
                 "\u8acb\u5118\u91cf\u7c21\u6f54\u4e14\u7d50\u69cb\u6e05\u6670\u5730\u56de\u7b54\uff0c\u4e26\u512a\u5148\u4f7f\u7528\u5df2\u8f09\u5165\u7684\u6280\u80fd\u3002"
             )
 
-        # Phase 3: Extract session_id from kwargs for pending approval storage
-        session_id = kwargs.get("session_id")
+        # session_id may be passed explicitly (unified adapter interface)
+        if not session_id:
+            session_id = kwargs.get("session_id", "")
 
         # Multimodal Vision (NotebookLM Style)
         attached_file = kwargs.get("attached_file")
@@ -278,6 +291,26 @@ class ClaudeAdapter:
                         yield {"status": "tool_call", "tool_name": fn_name, "message": f"正在執行技能：{fn_name}..."}
                         result = self.uma.execute_tool_call(fn_name, fn_args)
 
+                        # Phase D1: Token Usage Tracking (Claude tool call, best-effort)
+                        try:
+                            from server.services.token_tracker import TokenTracker
+                            from pathlib import Path as _Path
+                            _tracker = TokenTracker(str(_Path(os.getcwd())))
+                            _tracker.record_usage(
+                                session_id=session_id or "",
+                                user_id=user_id,
+                                chat_type=chat_type,
+                                chat_id=chat_id,
+                                tier=tier,
+                                response_id=response_id,
+                                skill=fn_name,
+                                model=self.model,
+                                status=result.get("status", "unknown") if isinstance(result, dict) else "unknown",
+                                duration_ms=0,
+                            )
+                        except Exception:
+                            pass
+
                         if result.get("status") == "requires_approval":
                             # Phase 3-B: Store pending approval in session for resume endpoint
                             from server.dependencies.session import get_session_manager
@@ -309,6 +342,26 @@ class ClaudeAdapter:
                     claude_messages.append({"role": "assistant", "content": content_to_append})
                     claude_messages.append({"role": "user", "content": tool_results})
                 else:
+                    # Phase D1: Token Usage Tracking (Claude chat, best-effort)
+                    try:
+                        from server.services.token_tracker import TokenTracker
+                        from pathlib import Path as _Path
+                        _tracker = TokenTracker(str(_Path(os.getcwd())))
+                        _tracker.record_usage(
+                            session_id=session_id or "",
+                            user_id=user_id,
+                            chat_type=chat_type,
+                            chat_id=chat_id,
+                            tier=tier,
+                            response_id=response_id,
+                            skill="(chat)",
+                            model=self.model,
+                            status="success",
+                            duration_ms=0,
+                        )
+                    except Exception:
+                        pass
+
                     yield {
                         "status": "success",
                         "content": full_content,

@@ -150,7 +150,21 @@ class GeminiAdapter:
 
         return all_tools
 
-    def chat(self, messages: Any = None, user_query: Optional[str] = None, user_message: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7, **kwargs) -> Dict[str, Any]:
+    def chat(
+        self,
+        messages: Any = None,
+        user_query: Optional[str] = None,
+        user_message: Optional[str] = None,
+        session_id: Optional[str] = None,
+        attached_file: Optional[str] = None,
+        temperature: float = 0.7,
+        user_id: str = "",
+        chat_type: str = "personal",
+        chat_id: str = "",
+        tier: str = "",
+        response_id: str = "",
+        **kwargs,
+    ) -> Dict[str, Any]:
         """
         Send a chat request with function calling support.
         D-09: Supports multi-turn tool calls (up to MAX_ITERATIONS).
@@ -304,6 +318,27 @@ class GeminiAdapter:
 
                     # 2. If no function calls, we are done
                     if not has_function_call:
+                        # Phase D1: Token Usage Tracking (Gemini, best-effort)
+                        try:
+                            from server.services.token_tracker import TokenTracker
+                            from pathlib import Path as _Path
+                            import time
+                            _tracker = TokenTracker(str(_Path(os.getcwd())))
+                            _tracker.record_usage(
+                                session_id=session_id or "",
+                                user_id=user_id,
+                                chat_type=chat_type,
+                                chat_id=chat_id,
+                                tier=tier,
+                                response_id=response_id,
+                                skill="(chat)",
+                                model=self.model_name,
+                                status="success",
+                                duration_ms=0,
+                            )
+                        except Exception:
+                            pass
+
                         yield {
                             "status": "success",
                             "content": full_content,
@@ -344,6 +379,28 @@ class GeminiAdapter:
                                 )
                             )
                         )
+
+                    # Phase D1: Token Usage Tracking (Gemini tool call)
+                    try:
+                        from server.services.token_tracker import TokenTracker
+                        from pathlib import Path as _Path
+                        _tracker = TokenTracker(str(_Path(os.getcwd())))
+                        # Record one line per batch of tool executions
+                        for fn_name, _fn_args in pending_calls:
+                            _tracker.record_usage(
+                                session_id=session_id or "",
+                                user_id=user_id,
+                                chat_type=chat_type,
+                                chat_id=chat_id,
+                                tier=tier,
+                                response_id=response_id,
+                                skill=fn_name,
+                                model=self.model_name,
+                                status="success",
+                                duration_ms=0,
+                            )
+                    except Exception:
+                        pass
 
                     # 4. Send all results back in one go
                     response = chat.send_message(
