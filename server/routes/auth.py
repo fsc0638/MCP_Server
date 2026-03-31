@@ -87,11 +87,14 @@ def line_callback(code: str = "", state: str = "", error: str = "", error_descri
         user = consume_callback(code=code, state=state)
 
         # Store minimal session in cookie (same-origin flow).
-        # NOTE: Dev only. For production, consider signed cookies / server-side sessions.
+        # SECURITY: sign the cookie to prevent tampering.
         resp = RedirectResponse(url="/ui/pages/chat.html", status_code=302)
+
+        from server.services.session_cookie import sign_session_cookie
+        signed = sign_session_cookie(user["id"])
         resp.set_cookie(
             key="mcp_user_id",
-            value=user["id"],
+            value=signed,
             httponly=True,
             samesite="lax",
         )
@@ -104,9 +107,13 @@ def line_callback(code: str = "", state: str = "", error: str = "", error_descri
 
 @router.get("/me")
 def me(mcp_user_id: str = Cookie(default="", alias="mcp_user_id")):
-    """Return the current logged-in user based on cookie."""
-    # Cookie extraction: FastAPI can inject cookie via parameter name matching.
-    # But explicit is better: use Cookie dependency if you want.
+    """Return the current logged-in user based on signed cookie."""
     if not mcp_user_id:
         return {"status": "error", "message": "not_logged_in"}
-    return {"status": "success", "user": {"id": mcp_user_id, "provider": "line"}}
+
+    from server.services.session_cookie import verify_session_cookie
+    value = verify_session_cookie(mcp_user_id)
+    if not value:
+        return {"status": "error", "message": "invalid_session"}
+
+    return {"status": "success", "user": {"id": value, "provider": "line"}}

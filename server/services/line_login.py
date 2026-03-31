@@ -143,7 +143,8 @@ def consume_callback(code: str, state: str) -> dict:
         raise ValueError("No sub in verified id_token")
 
     # canonical web session id
-    session_id = f"line_{sub}"
+    from server.services.id_utils import canonical_line_session_id
+    session_id = canonical_line_session_id(sub)
 
     user = {
         "id": session_id,
