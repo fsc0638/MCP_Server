@@ -214,40 +214,46 @@ async def process_chat_native(req: ChatRequest):
                         from main import PROJECT_ROOT
                         if should_sync_session(session_id):
                             st = get_bridge_state(PROJECT_ROOT)
-                            if st.throttle_ok(session_id, cooldown_seconds=5):
+                            if not st.throttle_ok(session_id, cooldown_seconds=5):
+                                logger.info(f"[Bridge] Throttled for session={session_id}")
+                            else:
                                 kind, native_id = session_target_from_session_id(session_id)
+                                logger.info(f"[Bridge] Sync attempt kind={kind} native_id={native_id} session={session_id}")
 
                                 # Group gating: only if known and active within 10 minutes
                                 if kind == "group":
                                     if not st.group_can_push(native_id, active_window_seconds=600):
+                                        logger.info(f"[Bridge] Skip group push (not active/known): group_id={native_id}")
                                         kind = "other"
                                 if kind == "room":
                                     if not st.group_can_push(native_id, active_window_seconds=600):
+                                        logger.info(f"[Bridge] Skip room push (not active/known): room_id={native_id}")
                                         kind = "other"
 
                                 if kind in ("user", "group", "room"):
-                                    try:
-                                        from server.integrations.line_connector import _get_line_components
-                                        from linebot.v3.messaging import TextMessage, PushMessageRequest
+                                    from server.integrations.line_connector import _get_line_components
+                                    from linebot.v3.messaging import TextMessage, PushMessageRequest
 
-                                        _, line_api, _ = _get_line_components()
-                                        if line_api:
-                                            tag1 = make_bridge_tag(session_id, req.user_input)
-                                            tag2 = make_bridge_tag(session_id, final)
-                                            msg_user = f"【Web】你：{req.user_input}\n\n{tag1}"
-                                            msg_ai = f"【Web】AI：{final}\n\n{tag2}"
+                                    _, line_api, _ = _get_line_components()
+                                    if not line_api:
+                                        logger.warning("[Bridge] LINE API not available; cannot push")
+                                    else:
+                                        tag1 = make_bridge_tag(session_id, req.user_input)
+                                        tag2 = make_bridge_tag(session_id, final)
+                                        msg_user = f"【Web】你：{req.user_input}\n\n{tag1}"
+                                        msg_ai = f"【Web】AI：{final}\n\n{tag2}"
 
-                                            # Push target
-                                            to = native_id
-                                            # Best-effort push; if group/room push fails, mark incapable
-                                            try:
-                                                line_api.push_message(PushMessageRequest(to=to, messages=[TextMessage(text=msg_user[:5000])]))
-                                                line_api.push_message(PushMessageRequest(to=to, messages=[TextMessage(text=msg_ai[:5000])]))
-                                            except Exception:
-                                                if kind in ("group", "room"):
-                                                    st.set_group_push_capable(native_id, False)
-                                    except Exception:
-                                        pass
+                                        to = native_id
+                                        try:
+                                            line_api.push_message(PushMessageRequest(to=to, messages=[TextMessage(text=msg_user[:5000])]))
+                                            line_api.push_message(PushMessageRequest(to=to, messages=[TextMessage(text=msg_ai[:5000])]))
+                                            logger.info(f"[Bridge] Pushed 2 messages → kind={kind} to={to}")
+                                        except Exception as e:
+                                            logger.error(f"[Bridge] Push failed → kind={kind} to={to}: {e}")
+                                            if kind in ("group", "room"):
+                                                st.set_group_push_capable(native_id, False)
+                                else:
+                                    logger.info(f"[Bridge] Skip push (kind={kind}) for session={session_id}")
                     except Exception:
                         pass
 
