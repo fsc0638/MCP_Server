@@ -186,6 +186,9 @@
           console.error("[GoogleLogin] 疑難排解：請檢查 Chrome 網址列左方圖示 -> 網站設定 -> 允許「第三方登入行為」。");
         }
       });
+    } else if (provider === "LINE") {
+      // Start LINE Login (web) — server will handle redirect + callback.
+      window.location.href = "/api/auth/line/login";
     } else {
       showToast(provider + " sign-in is not enabled in MCP mode", "info");
     }
