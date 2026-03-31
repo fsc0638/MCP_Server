@@ -374,6 +374,8 @@ class ClaudeAdapter:
                     except Exception:
                         pass
 
+                    # Publish provider correlation id for strong prompt_meta ↔ token_usage join
+                    yield {"status": "provider_meta", "provider": "claude", "response_id": getattr(response, "id", "")}
                     yield {
                         "status": "success",
                         "content": full_content,

@@ -318,6 +318,11 @@ class GeminiAdapter:
 
                     # 2. If no function calls, we are done
                     if not has_function_call:
+                        # Ensure stable response_id for correlation
+                        if not response_id:
+                            import time
+                            response_id = f"gemini_{session_id or 'no_session'}_{int(time.time()*1000)}"
+
                         # Phase D1: Token Usage Tracking (Gemini)
                         try:
                             from server.services.token_tracker import TokenTracker
@@ -344,6 +349,9 @@ class GeminiAdapter:
                             )
                         except Exception:
                             pass
+
+                        # Publish correlation id for strong prompt_meta ↔ token_usage join
+                        yield {"status": "provider_meta", "provider": "gemini", "response_id": response_id}
 
                         yield {
                             "status": "success",
