@@ -272,7 +272,9 @@
     const minutes = String(dateObj.getMinutes()).padStart(2, "0");
     const timeStr = hours + ":" + minutes;
 
-    const initials = role === "user" ? (userData.initials || userData.name.charAt(0) || "U") : "AI";
+    const _name = (userData && typeof userData.name === "string" && userData.name.trim()) ? userData.name.trim() : "Workspace User";
+    const _initials = (userData && typeof userData.initials === "string" && userData.initials.trim()) ? userData.initials.trim() : _name.charAt(0);
+    const initials = role === "user" ? (_initials || "U") : "AI";
     const bubbleId = "bubble-" + Date.now();
 
     row.innerHTML =
