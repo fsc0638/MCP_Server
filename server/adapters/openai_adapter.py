@@ -130,7 +130,20 @@ class OpenAIAdapter:
                 return None
         return None
 
-    def chat(self, messages: Any, user_query: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7, tools_enabled: bool = True, **kwargs) -> Dict[str, Any]:
+    def chat(
+        self,
+        messages: Any,
+        user_query: Optional[str] = None,
+        session_id: Optional[str] = None,
+        attached_file: Optional[str] = None,
+        temperature: float = 0.7,
+        tools_enabled: bool = True,
+        user_id: str = "",
+        chat_type: str = "personal",
+        chat_id: str = "",
+        tier: str = "",
+        **kwargs,
+    ) -> Dict[str, Any]:
         """
         Send a chat completion request with tool calling support.
         P-03 Architecture: Uses the stateful Responses API (`client.responses.create`).
@@ -464,11 +477,13 @@ class OpenAIAdapter:
                                 _skill_internal = result["_usage"].get("skill_total_tokens", 0)
                             # Derive context from session_id
                             _sid = session_id or ""
-                            _d1_chat_type = "group" if "group" in _sid else "personal"
                             _d1_duration = int(time.time() * 1000) - _turn_start_ms
                             _tracker.record_usage(
                                 session_id=_sid,
-                                chat_type=_d1_chat_type,
+                                user_id=user_id,
+                                chat_type=chat_type,
+                                chat_id=chat_id,
+                                tier=tier,
                                 skill=fn_name,
                                 model=self.model,
                                 input_tokens=_turn_usage.get("input_tokens", 0),
@@ -500,11 +515,13 @@ class OpenAIAdapter:
                         from pathlib import Path as _Path
                         _tracker = TokenTracker(str(_Path(os.getcwd())))
                         _sid = session_id or ""
-                        _d1_chat_type = "group" if "group" in _sid else "personal"
                         _d1_duration = int(time.time() * 1000) - _turn_start_ms
                         _tracker.record_usage(
                             session_id=_sid,
-                            chat_type=_d1_chat_type,
+                            user_id=user_id,
+                            chat_type=chat_type,
+                            chat_id=chat_id,
+                            tier=tier,
                             skill="(chat)",
                             model=self.model,
                             input_tokens=_turn_usage.get("input_tokens", 0),

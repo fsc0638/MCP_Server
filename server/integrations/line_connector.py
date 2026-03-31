@@ -1475,10 +1475,15 @@ def _process_line_message(
                     _tools_enabled = execute_mode
                     _max_tools = 3
 
+                # Phase D1(P0): pass context fields for token usage attribution
                 result_gen = adapter.chat(
                     messages=truncated_history,
                     user_query=actual_input,
                     session_id=session_id,
+                    user_id=user_id,
+                    chat_type=chat_type,
+                    chat_id=chat_id,
+                    tier=_routed_tier,
                     attached_file=attached_file_path,
                     tools_enabled=_tools_enabled,
                     max_tools=_max_tools,
