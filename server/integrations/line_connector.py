@@ -136,15 +136,15 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
             is_group_or_room = False
             if hasattr(source, "group_id") and source.group_id:
                 session_id = f"line_group_{source.group_id}"
-                chat_id = source.group_id
+                chat_id = session_id  # normalized key for analytics/group attribution
                 is_group_or_room = True
             elif hasattr(source, "room_id") and source.room_id:
                 session_id = f"line_room_{source.room_id}"
-                chat_id = source.room_id
+                chat_id = session_id  # normalized key for analytics/group attribution
                 is_group_or_room = True
             else:
                 session_id = f"line_{source.user_id}"
-                chat_id = source.user_id
+                chat_id = session_id  # normalized key for analytics/user attribution
 
             # Phase 1: Group Mention Filter & Window
             if is_group_or_room:
