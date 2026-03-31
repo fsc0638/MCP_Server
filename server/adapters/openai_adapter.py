@@ -464,11 +464,13 @@ class OpenAIAdapter:
                                 _skill_internal = result["_usage"].get("skill_total_tokens", 0)
                             # Derive context from session_id
                             _sid = session_id or ""
-                            _d1_chat_type = "group" if "group" in _sid else "personal"
                             _d1_duration = int(time.time() * 1000) - _turn_start_ms
                             _tracker.record_usage(
                                 session_id=_sid,
-                                chat_type=_d1_chat_type,
+                                chat_type=kwargs.get("chat_type", "personal"),
+                                chat_id=kwargs.get("chat_id", ""),
+                                user_id=kwargs.get("user_id", ""),
+                                tier=kwargs.get("tier", ""),
                                 skill=fn_name,
                                 model=self.model,
                                 input_tokens=_turn_usage.get("input_tokens", 0),
@@ -500,11 +502,13 @@ class OpenAIAdapter:
                         from pathlib import Path as _Path
                         _tracker = TokenTracker(str(_Path(os.getcwd())))
                         _sid = session_id or ""
-                        _d1_chat_type = "group" if "group" in _sid else "personal"
                         _d1_duration = int(time.time() * 1000) - _turn_start_ms
                         _tracker.record_usage(
                             session_id=_sid,
-                            chat_type=_d1_chat_type,
+                            chat_type=kwargs.get("chat_type", "personal"),
+                            chat_id=kwargs.get("chat_id", ""),
+                            user_id=kwargs.get("user_id", ""),
+                            tier=kwargs.get("tier", ""),
                             skill="(chat)",
                             model=self.model,
                             input_tokens=_turn_usage.get("input_tokens", 0),
