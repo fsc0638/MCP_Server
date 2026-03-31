@@ -29,6 +29,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
 import httpx
@@ -682,7 +683,7 @@ def _handle_pending_state(
     chat_id: str,
     session_id: str,
     user_text: str,
-) -> str | None:
+) -> Optional[str]:
     """
     檢查聊天是否有待確認的 pending state（approval 或 choice）。
     若使用者回覆的是確認/取消/選擇指令，處理 pending 操作並回傳回覆文字。
