@@ -56,6 +56,11 @@ async def process_chat_native(req: ChatRequest):
     
     session_mgr = get_session_manager()
     session_id = req.session_id or "default"
+    try:
+        from server.services.id_utils import validate_session_id
+        session_id = validate_session_id(session_id)
+    except Exception:
+        session_id = "default"
     
     # Use dynamic universal prompt to align with LINE bot behavior (time awareness, etc.)
     logger.info(f"Chat Request: [Model: {req.model}] [Lang: {req.language}] [Detail: {req.detail_level}]")
@@ -76,9 +81,11 @@ async def process_chat_native(req: ChatRequest):
     # - session summary + retrieved memory are injected as optional context blocks
     session_summary = ""
     try:
-        from server.services.session_summarizer import SessionSummarizer, render_session_summary_injection
-        ssum = SessionSummarizer(PROJECT_ROOT).maybe_update(session_id, min_new_messages=6)
-        session_summary = render_session_summary_injection(ssum, max_chars=900)
+        from server.services.id_utils import is_anonymous_web_session_id
+        if not is_anonymous_web_session_id(session_id):
+            from server.services.session_summarizer import SessionSummarizer, render_session_summary_injection
+            ssum = SessionSummarizer(PROJECT_ROOT).maybe_update(session_id, min_new_messages=6)
+            session_summary = render_session_summary_injection(ssum, max_chars=900)
     except Exception:
         pass
 
