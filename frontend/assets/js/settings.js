@@ -18,8 +18,35 @@
   const profileName   = document.getElementById('profileName');
   const profileEmail  = document.getElementById('profileEmail');
 
-  if (topbarAvatar)  topbarAvatar.textContent  = userData.initials || userData.name[0];
-  if (profileAvatar) profileAvatar.textContent = userData.initials || userData.name[0];
+  function setAvatar(el) {
+    if (!el) return;
+
+    const safeName = (userData && typeof userData.name === 'string' && userData.name.trim()) ? userData.name.trim() : 'Workspace User';
+    const safeInitials = (userData && typeof userData.initials === 'string' && userData.initials.trim()) ? userData.initials.trim() : safeName.charAt(0);
+    const pic = (userData && typeof userData.picture === 'string' && userData.picture.trim()) ? userData.picture.trim() : '';
+
+    if (pic) {
+      el.innerHTML = '';
+      const img = document.createElement('img');
+      img.src = pic;
+      img.alt = safeName;
+      img.referrerPolicy = 'no-referrer';
+      img.style.width = '100%';
+      img.style.height = '100%';
+      img.style.borderRadius = '50%';
+      img.style.objectFit = 'cover';
+      img.onerror = function () {
+        el.innerHTML = '';
+        el.textContent = safeInitials || 'U';
+      };
+      el.appendChild(img);
+    } else {
+      el.textContent = safeInitials || 'U';
+    }
+  }
+
+  setAvatar(topbarAvatar);
+  setAvatar(profileAvatar);
   if (profileName)   profileName.textContent   = userData.name;
   if (profileEmail)  profileEmail.textContent  = userData.email || 'user@kway.com.tw';
 
