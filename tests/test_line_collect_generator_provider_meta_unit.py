@@ -20,23 +20,14 @@ def test_collect_generator_provider_meta_sets_session_metadata(monkeypatch):
 
     monkeypatch.setattr(dep_session, "get_session_manager", _fake_get_session_manager)
 
-    # Avoid importing the real LINE connector module (it uses Python 3.10+ type syntax
-    # in annotations and may import heavy SDK deps). Instead, test the core behavior
-    # by calling the same logic we implemented in _collect_generator.
-    def consume(gen, session_id: str):
-        for chunk in gen:
-            if chunk.get("status") == "provider_meta":
-                _rid = chunk.get("response_id") or ""
-                if session_id and _rid:
-                    dep_session.get_session_manager().set_metadata(session_id, "last_response_id", _rid)
-            elif chunk.get("status") == "success":
-                return chunk.get("content", "")
-        return ""
-
+    # Minimal generator that emits provider_meta then success
     def gen():
         yield {"status": "provider_meta", "provider": "openai", "response_id": "resp_123"}
         yield {"status": "success", "content": "OK"}
 
-    out = consume(gen(), session_id="line_user_x")
+    from server.integrations.line_connector import _collect_generator
+
+    out = _collect_generator(gen(), line_api=None, chat_id="line_user_x", session_id="line_user_x")
+
     assert out == "OK"
     assert fake_sm.kv[("line_user_x", "last_response_id")] == "resp_123"
