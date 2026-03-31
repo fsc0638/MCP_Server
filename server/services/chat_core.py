@@ -144,8 +144,8 @@ async def process_chat_native(req: ChatRequest):
                 from server.services.prompt_meta_logger import append_prompt_meta
                 # Strong correlation id: prefer session metadata last_response_id
                 try:
-                    from server.dependencies.session import get_session_manager
-                    _sm = get_session_manager()
+                    from server.dependencies.session import get_session_manager as _get_session_manager
+                    _sm = _get_session_manager()
                     correlation_id = _sm.get_metadata(session_id, "last_response_id") or ""
                 except Exception:
                     correlation_id = ""
