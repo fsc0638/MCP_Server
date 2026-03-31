@@ -130,20 +130,7 @@ class OpenAIAdapter:
                 return None
         return None
 
-    def chat(
-        self,
-        messages: Any,
-        user_query: Optional[str] = None,
-        session_id: Optional[str] = None,
-        attached_file: Optional[str] = None,
-        temperature: float = 0.7,
-        tools_enabled: bool = True,
-        user_id: str = "",
-        chat_type: str = "personal",
-        chat_id: str = "",
-        tier: str = "",
-        **kwargs,
-    ) -> Dict[str, Any]:
+    def chat(self, messages: Any, user_query: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7, tools_enabled: bool = True, **kwargs) -> Dict[str, Any]:
         """
         Send a chat completion request with tool calling support.
         P-03 Architecture: Uses the stateful Responses API (`client.responses.create`).
@@ -480,10 +467,10 @@ class OpenAIAdapter:
                             _d1_duration = int(time.time() * 1000) - _turn_start_ms
                             _tracker.record_usage(
                                 session_id=_sid,
-                                user_id=user_id,
-                                chat_type=chat_type,
-                                chat_id=chat_id,
-                                tier=tier,
+                                chat_type=kwargs.get("chat_type", "personal"),
+                                chat_id=kwargs.get("chat_id", ""),
+                                user_id=kwargs.get("user_id", ""),
+                                tier=kwargs.get("tier", ""),
                                 skill=fn_name,
                                 model=self.model,
                                 input_tokens=_turn_usage.get("input_tokens", 0),
@@ -518,10 +505,10 @@ class OpenAIAdapter:
                         _d1_duration = int(time.time() * 1000) - _turn_start_ms
                         _tracker.record_usage(
                             session_id=_sid,
-                            user_id=user_id,
-                            chat_type=chat_type,
-                            chat_id=chat_id,
-                            tier=tier,
+                            chat_type=kwargs.get("chat_type", "personal"),
+                            chat_id=kwargs.get("chat_id", ""),
+                            user_id=kwargs.get("user_id", ""),
+                            tier=kwargs.get("tier", ""),
                             skill="(chat)",
                             model=self.model,
                             input_tokens=_turn_usage.get("input_tokens", 0),
