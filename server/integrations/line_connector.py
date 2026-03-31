@@ -139,10 +139,26 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                 session_id = f"line_group_{source.group_id}"
                 chat_id = session_id  # normalized key for analytics/group attribution
                 is_group_or_room = True
+
+                # Bridge sync: record known group + last activity
+                try:
+                    from server.services.bridge_sync import get_bridge_state
+                    from main import PROJECT_ROOT
+                    get_bridge_state(PROJECT_ROOT).mark_group_active(source.group_id)
+                except Exception:
+                    pass
             elif hasattr(source, "room_id") and source.room_id:
                 session_id = f"line_room_{source.room_id}"
                 chat_id = session_id  # normalized key for analytics/group attribution
                 is_group_or_room = True
+
+                # Bridge sync: treat rooms similarly to groups for activity gating
+                try:
+                    from server.services.bridge_sync import get_bridge_state
+                    from main import PROJECT_ROOT
+                    get_bridge_state(PROJECT_ROOT).mark_group_active(source.room_id)
+                except Exception:
+                    pass
             else:
                 session_id = f"line_{source.user_id}"
                 chat_id = session_id  # normalized key for analytics/user attribution
@@ -150,6 +166,14 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
             # Phase 1: Group Mention Filter & Window
             if is_group_or_room:
                 if isinstance(event.message, TextMessageContent):
+                    # Bridge loop prevention: ignore messages pushed from Web.
+                    try:
+                        from server.services.bridge_sync import has_bridge_tag
+                        if has_bridge_tag(user_input):
+                            logger.info(f"[LINE Bridge] Ignored web-bridged message in group/room: chat={chat_id}")
+                            continue
+                    except Exception:
+                        pass
                     # 支援多種群組喚醒方式：[@Agent K], [@AgentK], @Agent K, @AgentK
                     mentions = ["[@Agent K]", "[@AgentK]", "@Agent K", "@AgentK"]
                     found_mention = False
@@ -199,6 +223,16 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         just_cache=just_cache
                     )
                     continue
+
+            # Bridge loop prevention: ignore messages pushed from Web.
+            if isinstance(event.message, TextMessageContent):
+                try:
+                    from server.services.bridge_sync import has_bridge_tag
+                    if has_bridge_tag(user_input):
+                        logger.info(f"[LINE Bridge] Ignored web-bridged message: chat={chat_id}")
+                        continue
+                except Exception:
+                    pass
 
             # Phase 6 + A2: Quote Recognition with Retry (引用識別 + 等待機制)
             quoted_text = ""
