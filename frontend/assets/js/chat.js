@@ -735,8 +735,35 @@
   const safeName = (userData && typeof userData.name === "string" && userData.name.trim()) ? userData.name.trim() : "Workspace User";
   const safeInitials = (userData && typeof userData.initials === "string" && userData.initials.trim()) ? userData.initials.trim() : safeName.charAt(0);
 
-  if (topbarAvatar) topbarAvatar.textContent = safeInitials || "U";
-  if (sidebarAvatar) sidebarAvatar.textContent = safeInitials || "U";
+  function setAvatar(el) {
+    if (!el) return;
+
+    const pic = (userData && typeof userData.picture === "string" && userData.picture.trim()) ? userData.picture.trim() : "";
+    const fallbackText = safeInitials || "U";
+
+    if (pic) {
+      el.innerHTML = "";
+      const img = document.createElement("img");
+      img.src = pic;
+      img.alt = safeName;
+      img.referrerPolicy = "no-referrer";
+      img.style.width = "100%";
+      img.style.height = "100%";
+      img.style.borderRadius = "50%";
+      img.style.objectFit = "cover";
+      img.onerror = function () {
+        // Fallback to initials if image fails to load
+        el.innerHTML = "";
+        el.textContent = fallbackText;
+      };
+      el.appendChild(img);
+    } else {
+      el.textContent = fallbackText;
+    }
+  }
+
+  setAvatar(topbarAvatar);
+  setAvatar(sidebarAvatar);
   if (sidebarName) sidebarName.textContent = safeName;
   if (sidebarDept) sidebarDept.textContent = (userData.dept || "MCP Workspace") + " · Connected";
 
