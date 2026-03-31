@@ -522,8 +522,13 @@ class OpenAIAdapter:
                     except Exception:
                         pass
 
+                    # Attach correlation key into prompt_meta stream (strong consistency)
+                    yield {"status": "provider_meta", "provider": "openai", "response_id": current_response_id}
+
                     if session_id and current_response_id:
                         _session_mgr.set_latest_response_id(session_id, current_response_id)
+                    # Attach correlation key into prompt_meta stream (strong consistency)
+                    yield {"status": "provider_meta", "provider": "openai", "response_id": current_response_id}
                     yield {"status": "success", "content": full_content, "tool_calls_made": tool_calls_made}
                     return
 

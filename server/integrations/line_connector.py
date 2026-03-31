@@ -1629,6 +1629,19 @@ def _collect_generator(
             # Re-trigger loading animation so user keeps seeing "..." during long tool calls
             if line_api and chat_id and "⚙️" in content:
                 _send_loading_animation(line_api, chat_id, 60)
+        elif status == "provider_meta":
+            # Strong consistency: allow adapters to publish provider response id
+            try:
+                from server.dependencies.session import get_session_manager
+                _sm = get_session_manager()
+                _sid = session_id or ""
+                _rid = chunk.get("response_id") or ""
+                if _sid and _rid:
+                    _sm.set_metadata(_sid, "last_response_id", _rid)
+            except Exception:
+                pass
+            continue
+
         elif status == "success":
             # success chunk 包含完整最終內容
             final = chunk.get("content", "") or accumulated
