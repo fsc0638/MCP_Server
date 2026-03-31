@@ -142,7 +142,16 @@ async def process_chat_native(req: ChatRequest):
             logger.info(f"[PromptBuilder] meta={prompt_meta}")
             try:
                 from server.services.prompt_meta_logger import append_prompt_meta
-                append_prompt_meta(PROJECT_ROOT, session_id, prompt_meta)
+                # Strong correlation id: prefer session metadata last_response_id
+                try:
+                    from server.dependencies.session import get_session_manager
+                    _sm = get_session_manager()
+                    correlation_id = _sm.get_metadata(session_id, "last_response_id") or ""
+                except Exception:
+                    correlation_id = ""
+                if not correlation_id:
+                    correlation_id = prompt_meta.get("provider", {}).get("response_id", "")
+                append_prompt_meta(PROJECT_ROOT, session_id, prompt_meta, correlation_id=correlation_id)
             except Exception:
                 pass
         else:
