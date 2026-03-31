@@ -474,13 +474,27 @@ def _send_loading_animation(line_api, chat_id: str, seconds: int = 20):
 
 
 def _send_status_push(line_api, chat_id: str, text: str):
-    """推送中間狀態訊息給使用者（不佔用 reply_token）。支援長訊息自動分段。"""
+    """推送中間狀態訊息給使用者（不佔用 reply_token）。支援長訊息自動分段。
+
+    NOTE: push_message 只接受 userId ("U...")。我們內部的 chat_id 可能是
+    "line_U..." / "line_group_..." / "line_room_..."，因此需要轉成 LINE 原生 ID。
+    """
     try:
+        # Normalize internal ids to LINE native ids
+        to_id = chat_id
+        if to_id.startswith("line_"):
+            to_id = to_id[len("line_"):]
+
+        # Only push to individual users
+        if not to_id.startswith("U"):
+            logger.info(f"[LINE] Skipping status push for non-user chat_id={chat_id}")
+            return
+
         from linebot.v3.messaging import TextMessage, PushMessageRequest
         _MAX = 4800  # LINE limit is 5000, leave margin
         if len(text) <= _MAX:
             line_api.push_message(
-                PushMessageRequest(to=chat_id, messages=[TextMessage(text=text)])
+                PushMessageRequest(to=to_id, messages=[TextMessage(text=text)])
             )
         else:
             # Split into chunks at line boundaries
@@ -497,7 +511,7 @@ def _send_status_push(line_api, chat_id: str, text: str):
                 chunks.append(current)
             for chunk in chunks:
                 line_api.push_message(
-                    PushMessageRequest(to=chat_id, messages=[TextMessage(text=chunk)])
+                    PushMessageRequest(to=to_id, messages=[TextMessage(text=chunk)])
                 )
     except Exception as e:
         logger.warning(f"[LINE] Status push failed: {e}")
@@ -1475,6 +1489,13 @@ def _process_line_message(
                 else:  # full, file
                     _tools_enabled = execute_mode
                     _max_tools = 3
+
+                # Determine chat type for analytics/routing (user/group/room)
+                chat_type = "user"
+                if session_id.startswith("line_group_"):
+                    chat_type = "group"
+                elif session_id.startswith("line_room_"):
+                    chat_type = "room"
 
                 result_gen = adapter.chat(
                     messages=truncated_history,
