@@ -1,10 +1,13 @@
 """Authentication routes."""
 
 import os
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Cookie
+from fastapi.responses import RedirectResponse
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from pydantic import BaseModel
+
+from server.services.line_login import build_authorize_url, consume_callback, generate_state_nonce
 
 class GoogleLoginRequest(BaseModel):
     token: str
@@ -58,3 +61,52 @@ async def google_login(req: GoogleLoginRequest):
         raise HTTPException(status_code=401, detail=f"Invalid Google Token: {str(val_err)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
+
+
+@router.get("/line/login")
+def line_login():
+    """Start LINE Login (web) by redirecting to LINE authorize endpoint."""
+    try:
+        state, nonce = generate_state_nonce(ttl_seconds=600)
+        url = build_authorize_url(state=state, nonce=nonce)
+        return RedirectResponse(url=url, status_code=302)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LINE login init failed: {str(e)}")
+
+
+@router.get("/line/callback")
+def line_callback(code: str = "", state: str = "", error: str = "", error_description: str = ""):
+    """LINE Login callback endpoint.
+
+    On success, sets a cookie and redirects to the chat UI.
+    """
+    if error:
+        raise HTTPException(status_code=401, detail=f"LINE auth error: {error} {error_description}".strip())
+
+    try:
+        user = consume_callback(code=code, state=state)
+
+        # Store minimal session in cookie (same-origin flow).
+        # NOTE: Dev only. For production, consider signed cookies / server-side sessions.
+        resp = RedirectResponse(url="/ui/pages/chat.html", status_code=302)
+        resp.set_cookie(
+            key="mcp_user_id",
+            value=user["id"],
+            httponly=True,
+            samesite="lax",
+        )
+        return resp
+    except ValueError as ve:
+        raise HTTPException(status_code=401, detail=f"LINE login failed: {str(ve)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LINE login callback error: {str(e)}")
+
+
+@router.get("/me")
+def me(mcp_user_id: str = Cookie(default="", alias="mcp_user_id")):
+    """Return the current logged-in user based on cookie."""
+    # Cookie extraction: FastAPI can inject cookie via parameter name matching.
+    # But explicit is better: use Cookie dependency if you want.
+    if not mcp_user_id:
+        return {"status": "error", "message": "not_logged_in"}
+    return {"status": "success", "user": {"id": mcp_user_id, "provider": "line"}}

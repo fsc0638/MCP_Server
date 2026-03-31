@@ -8,12 +8,32 @@
     waiting: false,
     models: [{ provider: "openai", model: "gpt-4o", display_name: "OpenAI (gpt-4o)" }],
     modelIndex: 0,
-    // Always start a fresh web session when chat page loads.
-    sessionId: "web-" + Math.random().toString(36).slice(2, 10),
+    // Use LINE web-login session id if available; otherwise start a fresh web session.
+    sessionId: localStorage.getItem("kway_chat_session") || ("web-" + Math.random().toString(36).slice(2, 10)),
     meetingText: "",
     sessions: JSON.parse(localStorage.getItem("kway_sessions") || "[]")
   };
   localStorage.setItem("kway_chat_session", state.sessionId);
+
+  async function hydrateAuthFromServer() {
+    // If user already exists, do nothing.
+    try {
+      const existing = sessionStorage.getItem("kway_user");
+      if (existing) return;
+
+      const res = await fetch("/api/auth/me", { credentials: "include" });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.status === "success" && data.user && data.user.id) {
+        sessionStorage.setItem("kway_user", JSON.stringify(data.user));
+        // Align chat session bucket to LINE id.
+        localStorage.setItem("kway_chat_session", data.user.id);
+        state.sessionId = data.user.id;
+      }
+    } catch (_e) {
+      // best-effort
+    }
+  }
 
   const userData = JSON.parse(
     sessionStorage.getItem("kway_user") ||
@@ -719,7 +739,11 @@
   updateSessionDuration();
   updateStats();
   loadModels();
-  loadSideInfo();
-  renderConversationList();
-  loadHistory();
+
+  // Hydrate LINE login user from server cookie (if present), then proceed.
+  hydrateAuthFromServer().finally(function () {
+    loadSideInfo();
+    renderConversationList();
+    loadHistory();
+  });
 })();
