@@ -730,9 +730,12 @@
   const sidebarAvatar = document.getElementById("sidebarAvatar");
   const sidebarName = document.getElementById("sidebarName");
   const sidebarDept = document.getElementById("sidebarDept");
-  if (topbarAvatar) topbarAvatar.textContent = userData.initials || userData.name.charAt(0) || "U";
-  if (sidebarAvatar) sidebarAvatar.textContent = userData.initials || userData.name.charAt(0) || "U";
-  if (sidebarName) sidebarName.textContent = userData.name || "Workspace User";
+  const safeName = (userData && typeof userData.name === "string" && userData.name.trim()) ? userData.name.trim() : "Workspace User";
+  const safeInitials = (userData && typeof userData.initials === "string" && userData.initials.trim()) ? userData.initials.trim() : safeName.charAt(0);
+
+  if (topbarAvatar) topbarAvatar.textContent = safeInitials || "U";
+  if (sidebarAvatar) sidebarAvatar.textContent = safeInitials || "U";
+  if (sidebarName) sidebarName.textContent = safeName;
   if (sidebarDept) sidebarDept.textContent = (userData.dept || "MCP Workspace") + " · Connected";
 
   setInterval(updateSessionDuration, 1000);
