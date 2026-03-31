@@ -90,13 +90,20 @@ def line_callback(code: str = "", state: str = "", error: str = "", error_descri
         # SECURITY: sign the cookie to prevent tampering.
         resp = RedirectResponse(url="/ui/pages/chat.html", status_code=302)
 
-        from server.services.session_cookie import sign_session_cookie
-        signed = sign_session_cookie(user["id"])
+        # Create server-side auth session and store only an opaque token in cookie.
+        from server.services.auth_session_store import get_auth_session_store
+        store = get_auth_session_store()
+        sess = store.create(user_id=user["id"], name=user.get("name") or "", picture=user.get("picture") or "")
+
+        from server.services.session_token_cookie import sign_token
+        signed = sign_token(sess.token)
+
         resp.set_cookie(
-            key="mcp_user_id",
+            key="mcp_session",
             value=signed,
             httponly=True,
             samesite="lax",
+            path="/",
         )
         return resp
     except ValueError as ve:
@@ -106,14 +113,27 @@ def line_callback(code: str = "", state: str = "", error: str = "", error_descri
 
 
 @router.get("/me")
-def me(mcp_user_id: str = Cookie(default="", alias="mcp_user_id")):
-    """Return the current logged-in user based on signed cookie."""
-    if not mcp_user_id:
+def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
+    """Return the current logged-in user based on server-side session token."""
+    if not mcp_session:
         return {"status": "error", "message": "not_logged_in"}
 
-    from server.services.session_cookie import verify_session_cookie
-    value = verify_session_cookie(mcp_user_id)
-    if not value:
+    from server.services.session_token_cookie import verify_token
+    token = verify_token(mcp_session)
+    if not token:
         return {"status": "error", "message": "invalid_session"}
 
-    return {"status": "success", "user": {"id": value, "provider": "line"}}
+    from server.services.auth_session_store import get_auth_session_store
+    sess = get_auth_session_store().get(token)
+    if not sess:
+        return {"status": "error", "message": "session_expired"}
+
+    # UI wants: name / picture / user id
+    user = {
+        "id": sess.user_id,
+        "name": sess.name or "LINE User",
+        "picture": sess.picture or "",
+        "initials": (sess.name or "L")[:2].upper(),
+        "provider": "line",
+    }
+    return {"status": "success", "user": user}
