@@ -307,12 +307,11 @@
     const row = document.createElement("div");
     row.className = "page-chat-typing-row";
     row.id = "typingIndicator";
+    // Use explicit "..." animation as requested.
     row.innerHTML =
       '<div class="avatar avatar-sm avatar-ai">AI</div>' +
       '<div class="page-chat-typing-bubble">' +
-      '<div class="page-chat-typing-dot"></div>' +
-      '<div class="page-chat-typing-dot"></div>' +
-      '<div class="page-chat-typing-dot"></div>' +
+      '<span class="page-chat-typing-ellipsis">...</span>' +
       "</div>";
     chatMessages.appendChild(row);
     chatMessages.scrollTop = chatMessages.scrollHeight;
