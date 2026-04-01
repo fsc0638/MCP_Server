@@ -15,10 +15,11 @@ class UMA:
     The main interface for Unified Model Adapter.
     Integrates Registry, Converter, and Executor.
     """
-    def __init__(self, skills_home: str):
+    def __init__(self, skills_home: str, project_root: str = None):
         self.registry = SkillRegistry(skills_home)
         self.executor = ExecutionEngine(skills_home)
         self.converter = SchemaConverter()
+        self.project_root = project_root or str(Path(skills_home).resolve().parents[1])
         
     def initialize(self):
         self.registry.scan_skills()
@@ -179,7 +180,12 @@ class UMA:
         # === Executable: run script directly ===
         if mode == "executable":
             skill_timeout = int(skill_data["metadata"].get("execution_timeout", 30)) if skill_data else 30
-            return self.executor.run_script(skill_name, "main.py", arg_dict, timeout=skill_timeout)
+            workspace_dir = str(Path(self.project_root) / "workspace")
+            return self.executor.run_script(
+                skill_name, "main.py", arg_dict,
+                env_vars={"WORKSPACE_DIR": workspace_dir, "PROJECT_ROOT": str(self.project_root)},
+                timeout=skill_timeout,
+            )
 
         # === Knowledge modes (code / semantic): return full SKILL.md + references ===
         skill_md_path = skill_dir / "SKILL.md"

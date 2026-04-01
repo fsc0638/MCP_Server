@@ -233,6 +233,9 @@ def route_model(
         "畫", "繪", "插圖", "圖表", "製圖", "生成圖", "做成圖",
         "搜尋", "查詢", "建立檔案", "產生報告",
         "推送", "排程", "定時", "提醒我", "每天", "每週", "每日", "固定",
+        # 明確需要 web search 的新聞/時事類
+        "新聞", "時事", "報導", "最新消息", "今日", "本日", "近期",
+        "股市", "股價", "財經", "經濟新聞", "科技新聞",
     ]
     _needs_tools = any(kw in _input_lower for kw in _TOOL_KEYWORDS)
 
@@ -251,6 +254,20 @@ def route_model(
         and any(kw in _input_lower for kw in _FILE_OUTPUT_KEYWORDS)
     )
 
+    # Fix B: 搜尋/查詢 + 檔案輸出 → must be full (web-search + python-executor = 2 tools)
+    _SEARCH_KEYWORDS = [
+        "新聞", "時事", "報導", "最新", "今日", "本日", "股市", "財經",
+        "搜尋", "查詢", "網路",
+    ]
+    _needs_search_with_output = (
+        any(kw in _input_lower for kw in _SEARCH_KEYWORDS)
+        and any(kw in _input_lower for kw in _FILE_OUTPUT_KEYWORDS)
+    )
+
+    # Fix C: Standalone DOCX/PDF export → always full (needs groovenauts guide + python-executor)
+    _STANDALONE_EXPORT_KEYWORDS = ["docx", "pdf", "word文件", "word檔"]
+    _needs_standalone_export = any(kw in _input_lower for kw in _STANDALONE_EXPORT_KEYWORDS)
+
     # LLM-as-a-Router
     tier = _call_router_llm(user_input, openai_client)
 
@@ -263,6 +280,16 @@ def route_model(
     if tier in ("nano", "mini") and _needs_semantic_with_output:
         tier = "full"
         logger.info(f"[Router] Upgraded {tier}→full (semantic skill + file output detected)")
+
+    # Upgrade mini/nano → full if search/news + file output detected (needs 2+ tools)
+    if tier in ("nano", "mini") and _needs_search_with_output:
+        tier = "full"
+        logger.info(f"[Router] Upgraded {tier}→full (search + file output detected)")
+
+    # Upgrade mini/nano → full if standalone DOCX/PDF export detected
+    if tier in ("nano", "mini") and _needs_standalone_export:
+        tier = "full"
+        logger.info(f"[Router] Upgraded {tier}→full (standalone docx/pdf export detected)")
 
     model = _TIER_TO_MODEL.get(tier, get_model_mini)()
     logger.info(f"[Router] '{user_input[:40]}...' → tier={tier} → {model}")

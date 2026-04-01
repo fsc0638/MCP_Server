@@ -279,10 +279,10 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                                 break
                             # Status notifications
                             if _attempt == 0 and not _notified_start:
-                                _send_status_push(line_api, chat_id, "⏳ 正在讀取你引用的檔案，請稍候...")
+                                _send_status_push(line_api, chat_id, "⏳ 正在讀取你引用的訊息，請稍候...")
                                 _notified_start = True
                             elif _attempt >= 15 and not _notified_mid:
-                                _send_status_push(line_api, chat_id, f"⏳ 檔案較大，仍在處理中（已等待 {_attempt}秒）...")
+                                _send_status_push(line_api, chat_id, f"⏳ 引用內容仍在處理中（已等待 {_attempt}秒）...")
                                 _notified_mid = True
                         else:
                             # All retries exhausted
@@ -290,9 +290,9 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                                 logger.warning(f"[LINE A2] Quote not found after {_retry_max}s: {quoted_msg_id}")
                                 _send_status_push(
                                     line_api, chat_id,
-                                    "⚠️ 找不到引用的檔案，可能已超過保存期限（5天）或尚未完成上傳，請重新傳送。"
+                                    "⚠️ 找不到引用的訊息內容，可能已超過保留期限（5天）或尚未完成上傳，請直接重新傳訊息。"
                                 )
-                                continue  # A2 fix: stop processing, don't fallback to LLM with stale history
+                                continue  # A2: stop processing, don't proceed without quote context
 
                     if quoted_text:
                         logger.info(f"[LINE] Quoted text found in cache: {quoted_msg_id}")
@@ -501,15 +501,32 @@ def _acquire_session_lock(session_id: str):
         if local_lock:
             local_lock.release()
 
+def _to_line_id(chat_id: str) -> str:
+    """將內部 chat_id 轉換為 LINE 原生 ID（去除前綴）。
+    "line_group_C..." → "C..."
+    "line_room_R..."  → "R..."
+    "line_U..."       → "U..."
+    其他              → 原值
+    """
+    if chat_id.startswith("line_group_"):
+        return chat_id[len("line_group_"):]
+    if chat_id.startswith("line_room_"):
+        return chat_id[len("line_room_"):]
+    if chat_id.startswith("line_"):
+        return chat_id[len("line_"):]
+    return chat_id
+
+
 def _send_loading_animation(line_api, chat_id: str, seconds: int = 20):
     """呼叫 LINE Loading Animation API (使用官方 SDK)。可多次呼叫以延長動畫。"""
     from linebot.v3.messaging import ShowLoadingAnimationRequest
 
     try:
-        # Note: LINE ShowLoadingAnimation only supports userId (Individual Chat).
-        # It returns 400 Bad Request for groupId or roomId.
-        if chat_id.startswith("U"):
-            req = ShowLoadingAnimationRequest(chatId=chat_id, loadingSeconds=min(seconds, 60))
+        # chat_id 在系統內以 "line_U..." 格式儲存；LINE API 只接受裸 userId (U...)
+        # 同時也不支援群組/房間（groupId/roomId 以 C/R 開頭）
+        _line_id = _to_line_id(chat_id)
+        if _line_id.startswith("U"):
+            req = ShowLoadingAnimationRequest(chatId=_line_id, loadingSeconds=min(seconds, 60))
             line_api.show_loading_animation(req)
             logger.info(f"[LINE] Loading animation started for chat={chat_id} ({seconds}s)")
         else:
@@ -1108,7 +1125,7 @@ def _process_line_message(
                     return
 
                 # 嘗試下載貼圖圖片，供 Vision 模型辨識表情、動作與文字
-                uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", chat_id)
+                uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", _to_line_id(chat_id))
                 os.makedirs(uploads_dir, exist_ok=True)
                 sticker_image = _download_sticker_image(sticker_id, uploads_dir, resource_type)
                 if sticker_image:
@@ -1155,7 +1172,7 @@ def _process_line_message(
                         except concurrent.futures.TimeoutError:
                             raise TimeoutError(f"File download timed out after 30s (msg_id={event_msg.id})")
 
-                    uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", chat_id)
+                    uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", _to_line_id(chat_id))
                     os.makedirs(uploads_dir, exist_ok=True)
 
                     if isinstance(event_msg, ImageMessageContent):
@@ -1277,9 +1294,13 @@ def _process_line_message(
             )
 
             adapter = OpenAIAdapter(uma=uma, model=_routed_model)
-            # LINE 訊息上限 ~5000 字，OpenAI TPM 同時計算 max_output_tokens 預留量
-            # 16384 → 2048 可節省 ~14336 tokens/request
-            adapter.max_output_tokens = 2048
+            # Tier-aware max_output_tokens:
+            # - nano/mini: 2048 節省 TPM（閒聊、單工具任務輸出短）
+            # - full/file : 8192 支援複合任務（e.g. Groovenauts 7 節分析 + python-executor）
+            if _routed_tier in ("full", "file"):
+                adapter.max_output_tokens = 8192
+            else:
+                adapter.max_output_tokens = 2048
             logger.info(f"[LINE Router] Routed to model: {_routed_model} (tier={_routed_tier})")
 
             # Inject stored original file context for skills that need full text
@@ -1516,7 +1537,7 @@ def _process_line_message(
                 )
                 if _safe_model != _current_model:
                     adapter = OpenAIAdapter(uma=uma, model=_safe_model)
-                    adapter.max_output_tokens = 2048
+                    adapter.max_output_tokens = 8192 if _routed_tier in ("full", "file") else 2048
                     logger.info(f"[LINE Fallback] Downgraded: {_current_model} → {_safe_model}")
 
                 # ── Tier-aware tool policy ─────────────────────────────
@@ -1827,12 +1848,15 @@ def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
     from linebot.v3.messaging import TextMessage, ReplyMessageRequest, PushMessageRequest
 
     try:
-        line_api.reply_message(
+        resp = line_api.reply_message(
             ReplyMessageRequest(
                 reply_token=reply_token,
                 messages=[TextMessage(text=text)],
             )
         )
+        # 快取 AgentK 發出的訊息，讓使用者可以「引用」AgentK 的回覆
+        for sent_msg in (resp.sent_messages or []):
+            _add_to_cache(chat_id, sent_msg.id, text=text)
         logger.info(f"[LINE] Reply sent via reply_token → chat={chat_id}")
     except Exception as reply_err:
         # reply_token 已過期或失效，改用 push_message 主動推送
@@ -1841,12 +1865,15 @@ def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
             f"falling back to push_message → chat={chat_id}"
         )
         try:
-            line_api.push_message(
+            push_resp = line_api.push_message(
                 PushMessageRequest(
-                    to=chat_id,
+                    to=_to_line_id(chat_id),
                     messages=[TextMessage(text=text)],
                 )
             )
+            # 快取 AgentK 發出的訊息（push fallback）
+            for sent_msg in (push_resp.sent_messages or []):
+                _add_to_cache(chat_id, sent_msg.id, text=text)
             logger.info(f"[LINE] Reply sent via push_message → chat={chat_id}")
         except Exception as push_err:
             logger.error(f"[LINE] push_message also failed: {push_err}")
@@ -1909,12 +1936,15 @@ def _send_line_reply_with_images(
         return
 
     try:
-        line_api.reply_message(
+        resp = line_api.reply_message(
             ReplyMessageRequest(
                 reply_token=reply_token,
                 messages=messages,
             )
         )
+        # 快取文字訊息（第一則），讓使用者可以引用 AgentK 的回覆
+        if text and text.strip() and resp.sent_messages:
+            _add_to_cache(chat_id, resp.sent_messages[0].id, text=text.strip()[:5000])
         logger.info(f"[LINE] Mixed reply sent (text+{len(image_urls)} images) → chat={chat_id}")
     except Exception as reply_err:
         logger.warning(
@@ -1922,12 +1952,15 @@ def _send_line_reply_with_images(
             f"falling back to push_message → chat={chat_id}"
         )
         try:
-            line_api.push_message(
+            push_resp = line_api.push_message(
                 PushMessageRequest(
-                    to=chat_id,
+                    to=_to_line_id(chat_id),
                     messages=messages,
                 )
             )
+            # 快取文字訊息（push fallback）
+            if text and text.strip() and push_resp.sent_messages:
+                _add_to_cache(chat_id, push_resp.sent_messages[0].id, text=text.strip()[:5000])
             logger.info(f"[LINE] Mixed push sent (text+{len(image_urls)} images) → chat={chat_id}")
         except Exception as push_err:
             logger.error(f"[LINE] push_message with images also failed: {push_err}")
@@ -1940,7 +1973,7 @@ def _send_error_push(line_api, chat_id: str):
 
         line_api.push_message(
             PushMessageRequest(
-                to=chat_id,
+                to=_to_line_id(chat_id),
                 messages=[
                     TextMessage(text="⚠️ 系統發生內部錯誤，請稍後再試或聯絡管理員。")
                 ],
