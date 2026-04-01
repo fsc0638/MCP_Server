@@ -19,12 +19,22 @@ from pathlib import Path
 from typing import Optional
 
 
-BRIDGE_TAG_PREFIX = "[[bridge:web:"
+BRIDGE_TAG_PREFIX = "[[bridge:"
 
 
 def make_bridge_tag(session_id: str, payload: str) -> str:
+    """Legacy alias for web-tag."""
+    return make_web_bridge_tag(session_id, payload)
+
+
+def make_web_bridge_tag(session_id: str, payload: str) -> str:
     h = hashlib.sha1(payload.encode("utf-8", errors="ignore")).hexdigest()[:10]
     return f"[[bridge:web:{session_id}:{h}]]"
+
+
+def make_line_bridge_tag(session_id: str, payload: str) -> str:
+    h = hashlib.sha1(payload.encode("utf-8", errors="ignore")).hexdigest()[:10]
+    return f"[[bridge:line:{session_id}:{h}]]"
 
 
 def has_bridge_tag(text: str) -> bool:
