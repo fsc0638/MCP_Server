@@ -204,6 +204,7 @@ async def process_chat_native(req: ChatRequest):
                     session_mgr.append_message(session_id, "assistant", final)
 
                     # Bridge sync: Web → LINE push (user input + assistant reply)
+                    logger.info(f"[Bridge] Enter success branch for session={session_id}")
                     try:
                         from server.services.bridge_sync import (
                             get_bridge_state,
@@ -212,7 +213,11 @@ async def process_chat_native(req: ChatRequest):
                             should_sync_session,
                         )
                         from main import PROJECT_ROOT
-                        if should_sync_session(session_id):
+
+                        sync_ok = should_sync_session(session_id)
+                        logger.info(f"[Bridge] should_sync_session={sync_ok} session={session_id}")
+
+                        if sync_ok:
                             st = get_bridge_state(PROJECT_ROOT)
                             if not st.throttle_ok(session_id, cooldown_seconds=5):
                                 logger.info(f"[Bridge] Throttled for session={session_id}")
@@ -254,8 +259,8 @@ async def process_chat_native(req: ChatRequest):
                                                 st.set_group_push_capable(native_id, False)
                                 else:
                                     logger.info(f"[Bridge] Skip push (kind={kind}) for session={session_id}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.exception(f"[Bridge] unexpected error: {e}")
 
                     yield {"data": json.dumps({"status": "success", "content": final}, ensure_ascii=False)}
                     break
