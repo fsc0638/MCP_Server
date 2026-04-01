@@ -268,6 +268,10 @@ async def process_chat_native(req: ChatRequest):
 
                     yield {"data": json.dumps({"status": "success", "content": final}, ensure_ascii=False)}
                     break
+                elif status == "provider_meta":
+                    # Provider-side metadata (e.g. response_id). Forward it but keep streaming.
+                    yield {"data": json.dumps(chunk, ensure_ascii=False)}
+                    continue
                 else:
                     yield {"data": json.dumps(chunk, ensure_ascii=False)}
                     break
