@@ -70,9 +70,9 @@ _MODEL_TPM_LIMITS = {
     "gpt-4.1-nano":    (200_000,  25_000),
     "gpt-4o-mini":     (200_000,  25_000),
     "o4-mini":         (200_000,  25_000),
-    "gpt-4.1":         (30_000,   8_000),
-    "gpt-4o":          (30_000,   8_000),
-    "o3":              (30_000,   8_000),
+    "gpt-4.1":         (30_000,  20_000),
+    "gpt-4o":          (30_000,  20_000),
+    "o3":              (30_000,  20_000),
 }
 
 def _get_safe_budget(model: str) -> int:
@@ -213,19 +213,19 @@ def route_model(
     if is_chunked_final:
         model = get_model_chunk_final()
         logger.info(f"[Router] Chunked final → {model}")
-        return model, "chunk_final"
+        return model, "chunk_final", False
 
     # File attachment: standard tier (needs decent comprehension)
     if has_file:
         model = get_model_mini()
         logger.info(f"[Router] File attached → {model}")
-        return model, "file"
+        return model, "file", False
 
     # Router disabled: safe default
     if not is_router_enabled():
         model = get_model_mini()
         logger.info(f"[Router] Disabled, default → {model}")
-        return model, "mini"
+        return model, "mini", False
 
     # Hard-rule override: tool-dependent intents must not be nano
     _input_lower = user_input.lower()
@@ -233,6 +233,9 @@ def route_model(
         "畫", "繪", "插圖", "圖表", "製圖", "生成圖", "做成圖",
         "搜尋", "查詢", "建立檔案", "產生報告",
         "推送", "排程", "定時", "提醒我", "每天", "每週", "每日", "固定",
+        # 明確需要 web search 的新聞/時事類
+        "新聞", "時事", "報導", "最新消息", "今日", "本日", "近期",
+        "股市", "股價", "財經", "經濟新聞", "科技新聞",
     ]
     _needs_tools = any(kw in _input_lower for kw in _TOOL_KEYWORDS)
 
@@ -251,8 +254,23 @@ def route_model(
         and any(kw in _input_lower for kw in _FILE_OUTPUT_KEYWORDS)
     )
 
+    # Fix B: 搜尋/查詢 + 檔案輸出 → must be full (web-search + python-executor = 2 tools)
+    _SEARCH_KEYWORDS = [
+        "新聞", "時事", "報導", "最新", "今日", "本日", "股市", "財經",
+        "搜尋", "查詢", "網路",
+    ]
+    _needs_search_with_output = (
+        any(kw in _input_lower for kw in _SEARCH_KEYWORDS)
+        and any(kw in _input_lower for kw in _FILE_OUTPUT_KEYWORDS)
+    )
+
+    # Fix C: Standalone DOCX/PDF export → always full (needs groovenauts guide + python-executor)
+    _STANDALONE_EXPORT_KEYWORDS = ["docx", "pdf", "word文件", "word檔"]
+    _needs_standalone_export = any(kw in _input_lower for kw in _STANDALONE_EXPORT_KEYWORDS)
+
     # LLM-as-a-Router
     tier = _call_router_llm(user_input, openai_client)
+    _force_upgraded = False
 
     # Upgrade nano → mini if tool-dependent keywords detected
     if tier == "nano" and _needs_tools:
@@ -261,12 +279,25 @@ def route_model(
 
     # Upgrade mini/nano → full if semantic skill + file output detected
     if tier in ("nano", "mini") and _needs_semantic_with_output:
-        tier = "full"
         logger.info(f"[Router] Upgraded {tier}→full (semantic skill + file output detected)")
+        tier = "full"
+        _force_upgraded = True
+
+    # Upgrade mini/nano → full if search/news + file output detected (needs 2+ tools)
+    if tier in ("nano", "mini") and _needs_search_with_output:
+        logger.info(f"[Router] Upgraded {tier}→full (search + file output detected)")
+        tier = "full"
+        _force_upgraded = True
+
+    # Upgrade mini/nano → full if standalone DOCX/PDF export detected
+    if tier in ("nano", "mini") and _needs_standalone_export:
+        logger.info(f"[Router] Upgraded {tier}→full (standalone docx/pdf export detected)")
+        tier = "full"
+        _force_upgraded = True
 
     model = _TIER_TO_MODEL.get(tier, get_model_mini)()
     logger.info(f"[Router] '{user_input[:40]}...' → tier={tier} → {model}")
-    return model, tier
+    return model, tier, _force_upgraded
 
 
 # ── Token-based Fallback ────────────────────────────────────────────────────
@@ -285,17 +316,28 @@ def apply_token_fallback(
     messages: list,
     tool_schemas: list | None = None,
     max_output_tokens: int = 2048,
+    force_tier: bool = False,
 ) -> str:
     """
     Pre-flight token estimation. If estimated tokens exceed the model's
     safe per-request budget, downgrade to a cheaper model.
     Returns the (possibly downgraded) model name.
+
+    If force_tier=True, skip fallback (router explicitly upgraded tier via
+    keyword rules and downgrading would break the workflow).
     """
     estimated = estimate_request_tokens(messages, tool_schemas, max_output_tokens)
     budget = _get_safe_budget(model)
 
     if estimated <= budget:
         logger.info(f"[Fallback] {model}: {estimated} est. tokens ≤ {budget} budget → OK")
+        return model
+
+    if force_tier:
+        logger.info(
+            f"[Fallback] {model}: {estimated} est. tokens > {budget} budget, "
+            f"but force_tier=True → keeping {model}"
+        )
         return model
 
     fallback = _FALLBACK_CHAIN.get(model)
