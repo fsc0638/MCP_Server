@@ -234,6 +234,17 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                 except Exception:
                     pass
 
+            # Bridge sync: reflect LINE → Web by persisting a tagged copy of the user message
+            # so the Web UI (which polls /chat/session/{session_id}) can display it.
+            if isinstance(event.message, TextMessageContent) and user_input:
+                try:
+                    from server.dependencies.session import get_session_manager
+                    from server.services.bridge_sync import make_line_bridge_tag
+                    sm = get_session_manager()
+                    sm.append_message(session_id, "user", f"【LINE】你：{user_input}\n\n{make_line_bridge_tag(session_id, user_input)}")
+                except Exception:
+                    pass
+
             # Phase 6 + A2: Quote Recognition with Retry (引用識別 + 等待機制)
             quoted_text = ""
             quoted_file = None

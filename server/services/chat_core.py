@@ -247,8 +247,9 @@ async def process_chat_native(req: ChatRequest):
                                     if not line_api:
                                         logger.warning("[Bridge] LINE API not available; cannot push")
                                     else:
-                                        tag1 = make_bridge_tag(session_id, req.user_input)
-                                        tag2 = make_bridge_tag(session_id, final)
+                                        from server.services.bridge_sync import make_web_bridge_tag
+                                        tag1 = make_web_bridge_tag(session_id, req.user_input)
+                                        tag2 = make_web_bridge_tag(session_id, final)
                                         msg_user = f"【Web】你：{req.user_input}\n\n{tag1}"
                                         msg_ai = f"【Web】AI：{final}\n\n{tag2}"
 
