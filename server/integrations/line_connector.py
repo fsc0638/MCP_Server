@@ -1286,7 +1286,7 @@ def _process_line_message(
 
             # Route to optimal model tier based on task complexity
             _has_file = (attached_file_path is not None) or (_chunked_data is not None)
-            _routed_model, _routed_tier = route_model(
+            _routed_model, _routed_tier, _force_upgraded = route_model(
                 user_input=user_input or "",
                 openai_client=_openai_client,
                 has_file=_has_file,
@@ -1462,6 +1462,14 @@ def _process_line_message(
 
                 history = _session_mgr.get_or_create_conversation(session_id)
 
+                # Filter out bridge-tagged LINE messages from LLM history.
+                # These are duplicates added for Web UI display (see line ~244);
+                # the actual message is already in history as a separate entry.
+                history = [
+                    m for m in history
+                    if "[[bridge:line:" not in str(m.get("content", ""))
+                ]
+
                 # Use PromptBuilder with LINE platform budget to trim history/context.
                 try:
                     from server.services.prompt_builder import build_prompt_messages, Budget, PromptParts
@@ -1534,6 +1542,7 @@ def _process_line_message(
                     model=_current_model,
                     messages=truncated_history,
                     max_output_tokens=adapter.max_output_tokens,
+                    force_tier=_force_upgraded,
                 )
                 if _safe_model != _current_model:
                     adapter = OpenAIAdapter(uma=uma, model=_safe_model)
