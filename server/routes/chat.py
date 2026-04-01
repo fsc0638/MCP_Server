@@ -18,7 +18,10 @@ router = APIRouter(tags=["Chat"])
 
 @router.post("/chat")
 async def chat(req: ChatRequest):
-    return await process_chat(req)
+    # Use the native chat pipeline (SSE streaming) so Web↔LINE bridge sync can run.
+    from server.services.chat_core import process_chat_native
+
+    return await process_chat_native(req)
 
 
 @router.post("/chat/flush/{session_id}")
