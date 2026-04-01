@@ -179,6 +179,8 @@ async def process_chat_native(req: ChatRequest):
     async def event_generator() -> AsyncGenerator[dict, None]:
         session_mgr.append_message(session_id, "user", req.user_input)
         final_content = ""
+        saw_success = False
+        last_status = None
 
         try:
             # Unify all chat paths to the robust adapter.chat which handles instructions, tools and vision
@@ -193,11 +195,13 @@ async def process_chat_native(req: ChatRequest):
 
             for chunk in chunk_iter:
                 status = chunk.get("status")
+                last_status = status
                 if status == "streaming":
                     text = chunk.get("content", "")
                     final_content += text
                     yield {"data": json.dumps({"status": "streaming", "content": text}, ensure_ascii=False)}
                 elif status == "success":
+                    saw_success = True
                     final = chunk.get("content", final_content)
                     if not final:
                         final = final_content
@@ -270,6 +274,12 @@ async def process_chat_native(req: ChatRequest):
         except Exception as e:
             logger.error(f"Chat stream error ({provider}): {e}")
             yield {"data": json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)}
+        finally:
+            if not saw_success:
+                logger.warning(
+                    f"[ChatCore] Stream ended without success: session={session_id} last_status={last_status} "
+                    f"final_len={len(final_content)} provider={provider} model={req.model}"
+                )
 
     return EventSourceResponse(event_generator())
 
