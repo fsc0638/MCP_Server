@@ -240,15 +240,54 @@ class GeminiAdapter:
 
         tools = self.get_tools(user_query=user_query)
 
+        def _normalize_json_schema_for_gemini(schema: dict) -> dict:
+            """Gemini proto expects Schema enum types (e.g. OBJECT/STRING), not JSONSchema 'object'/'string'.
+            Also expects 'properties' to be a dict.
+            """
+            if not isinstance(schema, dict):
+                return {"type": "OBJECT"}
+            s = dict(schema)
+            t = (s.get("type") or "").upper()
+            if t in ("OBJECT", "STRING", "NUMBER", "INTEGER", "BOOLEAN", "ARRAY"):
+                pass
+            else:
+                # Common JSON Schema lowercase values
+                tl = (s.get("type") or "").lower()
+                mapping = {
+                    "object": "OBJECT",
+                    "string": "STRING",
+                    "number": "NUMBER",
+                    "integer": "INTEGER",
+                    "boolean": "BOOLEAN",
+                    "array": "ARRAY",
+                }
+                t = mapping.get(tl, "OBJECT")
+            s["type"] = t
+
+            # Ensure properties is a dict when present
+            if "properties" in s and not isinstance(s.get("properties"), dict):
+                s["properties"] = {}
+
+            # Recursively normalize properties / items
+            props = s.get("properties")
+            if isinstance(props, dict):
+                s["properties"] = {k: _normalize_json_schema_for_gemini(v) for k, v in props.items()}
+            if "items" in s and isinstance(s.get("items"), dict):
+                s["items"] = _normalize_json_schema_for_gemini(s["items"])
+
+            return s
+
         try:
             # Build Gemini tool declarations
             function_declarations = []
             for tool_def in tools:
+                params = tool_def.get("parameters", {})
+                params = _normalize_json_schema_for_gemini(params)
                 function_declarations.append(
                     genai.protos.FunctionDeclaration(
                         name=tool_def["name"],
-                        description=tool_def["description"],
-                        parameters=tool_def.get("parameters", {})
+                        description=tool_def.get("description", ""),
+                        parameters=params,
                     )
                 )
 
