@@ -203,20 +203,19 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         logger.info(f"[LINE] Skipped group text (cached + persisted, no mention): chat={chat_id}")
                         continue
                 else:
-                    # For Image/File/Sticker in groups, check if bot was mentioned recently (window of 120s for better UX)
+                    # For Image/File/Sticker in groups, check if bot was mentioned recently (window of 120s)
                     import time
                     last_mention = _last_request_time.get(f"mention_{chat_id}", 0)
-
-                    # Phase 6: Proactive Cache
-                    # If mentioned within 120s, we process it as a direct command
                     just_cache = (time.time() - last_mention > 120)
                     msg_type = type(event.message).__name__
 
                     if just_cache:
-                        logger.info(f"[LINE] Group {msg_type} received without recent mention. Will only cache: chat={chat_id}")
-                    else:
-                        logger.info(f"[LINE] Group {msg_type} received with recent mention. Processing: chat={chat_id}")
-                    
+                        # No recent @mention → skip entirely (only log, no processing/push)
+                        logger.info(f"[LINE] Group {msg_type} received without recent mention. Skipping: chat={chat_id}")
+                        continue
+
+                    # Recent @mention within 120s → process as direct command
+                    logger.info(f"[LINE] Group {msg_type} received with recent mention. Processing: chat={chat_id}")
                     background_tasks.add_task(
                         _process_line_message,
                         line_api=line_api,
@@ -228,7 +227,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         event_msg=event.message,
                         extracted_text="",
                         quoted_file_path=None,
-                        just_cache=just_cache
+                        just_cache=False
                     )
                     continue
 
