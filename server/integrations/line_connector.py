@@ -203,32 +203,12 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         logger.info(f"[LINE] Skipped group text (cached + persisted, no mention): chat={chat_id}")
                         continue
                 else:
-                    # For Image/File/Sticker in groups, check if bot was mentioned recently (window of 120s)
-                    import time
-                    last_mention = _last_request_time.get(f"mention_{chat_id}", 0)
-                    just_cache = (time.time() - last_mention > 120)
+                    # Non-text messages (Image/File/Sticker) in groups:
+                    # ONLY process if this is a REPLY to a message that @mentioned Agent K,
+                    # or if the quote/reply context contains @Agent K.
+                    # Otherwise, skip entirely — no processing, no push, no loading animation.
                     msg_type = type(event.message).__name__
-
-                    if just_cache:
-                        # No recent @mention → skip entirely (only log, no processing/push)
-                        logger.info(f"[LINE] Group {msg_type} received without recent mention. Skipping: chat={chat_id}")
-                        continue
-
-                    # Recent @mention within 120s → process as direct command
-                    logger.info(f"[LINE] Group {msg_type} received with recent mention. Processing: chat={chat_id}")
-                    background_tasks.add_task(
-                        _process_line_message,
-                        line_api=line_api,
-                        line_api_blob=line_api_blob,
-                        reply_token=event.reply_token,
-                        user_id=source.user_id,
-                        chat_id=chat_id,
-                        session_id=session_id,
-                        event_msg=event.message,
-                        extracted_text="",
-                        quoted_file_path=None,
-                        just_cache=False
-                    )
+                    logger.info(f"[LINE] Group {msg_type} received without text @mention. Skipping: chat={chat_id}")
                     continue
 
             # Bridge loop prevention: ignore messages pushed from Web.
