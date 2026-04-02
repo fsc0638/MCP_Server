@@ -203,12 +203,24 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         logger.info(f"[LINE] Skipped group text (cached + persisted, no mention): chat={chat_id}")
                         continue
                 else:
-                    # Non-text messages (Image/File/Sticker) in groups:
-                    # ONLY process if this is a REPLY to a message that @mentioned Agent K,
-                    # or if the quote/reply context contains @Agent K.
-                    # Otherwise, skip entirely — no processing, no push, no loading animation.
+                    # Non-text messages (Image/File/Sticker) in groups without @mention:
+                    # Download & cache the file for future quote references, but do NOT
+                    # trigger LLM processing or send any response (just_cache=True).
                     msg_type = type(event.message).__name__
-                    logger.info(f"[LINE] Group {msg_type} received without text @mention. Skipping: chat={chat_id}")
+                    logger.info(f"[LINE] Group {msg_type} received without @mention. Download+cache only: chat={chat_id}")
+                    background_tasks.add_task(
+                        _process_line_message,
+                        line_api=line_api,
+                        line_api_blob=line_api_blob,
+                        reply_token=event.reply_token,
+                        user_id=source.user_id,
+                        chat_id=chat_id,
+                        session_id=session_id,
+                        event_msg=event.message,
+                        extracted_text="",
+                        quoted_file_path=None,
+                        just_cache=True,
+                    )
                     continue
 
             # Bridge loop prevention: ignore messages pushed from Web.
@@ -1017,7 +1029,9 @@ def _process_line_message(
 
         # 0.5 顯示 loading 動畫 (安撫使用者等待焦慮)，必須傳入 chat_id
         #     使用 60 秒以涵蓋檔案下載 + Tool Calling 耗時
-        _send_loading_animation(line_api, chat_id, 60)
+        #     just_cache 模式下不顯示（群組靜默下載快取）
+        if not just_cache:
+            _send_loading_animation(line_api, chat_id, 60)
 
         try:
             from linebot.v3.webhooks import TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
