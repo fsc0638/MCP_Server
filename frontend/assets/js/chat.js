@@ -8,12 +8,32 @@
     waiting: false,
     models: [{ provider: "openai", model: "gpt-4o", display_name: "OpenAI (gpt-4o)" }],
     modelIndex: 0,
-    // Always start a fresh web session when chat page loads.
-    sessionId: "web-" + Math.random().toString(36).slice(2, 10),
+    // Use LINE web-login session id if available; otherwise start a fresh web session.
+    sessionId: localStorage.getItem("kway_chat_session") || ("web-" + Math.random().toString(36).slice(2, 10)),
     meetingText: "",
     sessions: JSON.parse(localStorage.getItem("kway_sessions") || "[]")
   };
   localStorage.setItem("kway_chat_session", state.sessionId);
+
+  async function hydrateAuthFromServer() {
+    // If user already exists, do nothing.
+    try {
+      const existing = sessionStorage.getItem("kway_user");
+      if (existing) return;
+
+      const res = await fetch("/api/auth/me", { credentials: "include" });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.status === "success" && data.user && data.user.id) {
+        sessionStorage.setItem("kway_user", JSON.stringify(data.user));
+        // Align chat session bucket to LINE id.
+        localStorage.setItem("kway_chat_session", data.user.id);
+        state.sessionId = data.user.id;
+      }
+    } catch (_e) {
+      // best-effort
+    }
+  }
 
   const userData = JSON.parse(
     sessionStorage.getItem("kway_user") ||
@@ -252,7 +272,9 @@
     const minutes = String(dateObj.getMinutes()).padStart(2, "0");
     const timeStr = hours + ":" + minutes;
 
-    const initials = role === "user" ? (userData.initials || userData.name.charAt(0) || "U") : "AI";
+    const _name = (userData && typeof userData.name === "string" && userData.name.trim()) ? userData.name.trim() : "Workspace User";
+    const _initials = (userData && typeof userData.initials === "string" && userData.initials.trim()) ? userData.initials.trim() : _name.charAt(0);
+    const initials = role === "user" ? (_initials || "U") : "AI";
     const bubbleId = "bubble-" + Date.now();
 
     row.innerHTML =
@@ -710,16 +732,50 @@
   const sidebarAvatar = document.getElementById("sidebarAvatar");
   const sidebarName = document.getElementById("sidebarName");
   const sidebarDept = document.getElementById("sidebarDept");
-  if (topbarAvatar) topbarAvatar.textContent = userData.initials || userData.name.charAt(0) || "U";
-  if (sidebarAvatar) sidebarAvatar.textContent = userData.initials || userData.name.charAt(0) || "U";
-  if (sidebarName) sidebarName.textContent = userData.name || "Workspace User";
+  const safeName = (userData && typeof userData.name === "string" && userData.name.trim()) ? userData.name.trim() : "Workspace User";
+  const safeInitials = (userData && typeof userData.initials === "string" && userData.initials.trim()) ? userData.initials.trim() : safeName.charAt(0);
+
+  function setAvatar(el) {
+    if (!el) return;
+
+    const pic = (userData && typeof userData.picture === "string" && userData.picture.trim()) ? userData.picture.trim() : "";
+    const fallbackText = safeInitials || "U";
+
+    if (pic) {
+      el.innerHTML = "";
+      const img = document.createElement("img");
+      img.src = pic;
+      img.alt = safeName;
+      img.referrerPolicy = "no-referrer";
+      img.style.width = "100%";
+      img.style.height = "100%";
+      img.style.borderRadius = "50%";
+      img.style.objectFit = "cover";
+      img.onerror = function () {
+        // Fallback to initials if image fails to load
+        el.innerHTML = "";
+        el.textContent = fallbackText;
+      };
+      el.appendChild(img);
+    } else {
+      el.textContent = fallbackText;
+    }
+  }
+
+  setAvatar(topbarAvatar);
+  setAvatar(sidebarAvatar);
+  if (sidebarName) sidebarName.textContent = safeName;
   if (sidebarDept) sidebarDept.textContent = (userData.dept || "MCP Workspace") + " · Connected";
 
   setInterval(updateSessionDuration, 1000);
   updateSessionDuration();
   updateStats();
   loadModels();
-  loadSideInfo();
-  renderConversationList();
-  loadHistory();
+
+  // Hydrate LINE login user from server cookie (if present), then proceed.
+  hydrateAuthFromServer().finally(function () {
+    loadSideInfo();
+    renderConversationList();
+    loadHistory();
+  });
 })();

@@ -94,6 +94,7 @@ def build_prompt_messages(
 
     debug: Dict[str, Any] = {
         "model": model,
+        "provider": {},
         "available_input_tokens": avail,
         "tokenization": {"engine": "tiktoken", "encoding": getattr(counter.enc, 'name', None)},
         "included": {},

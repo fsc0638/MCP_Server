@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 
-def append_prompt_meta(project_root: str | Path, session_id: str, meta: Dict[str, Any]) -> None:
+def append_prompt_meta(project_root: str | Path, session_id: str, meta: Dict[str, Any], correlation_id: str = "") -> None:
     root = Path(project_root)
     sessions_dir = root / "workspace" / "sessions"
     sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -23,6 +23,7 @@ def append_prompt_meta(project_root: str | Path, session_id: str, meta: Dict[str
     rec = {
         "ts": datetime.now().isoformat(timespec="seconds"),
         "session_id": session_id,
+        "correlation_id": correlation_id,
         "meta": meta,
     }
     with open(p, "a", encoding="utf-8") as f:

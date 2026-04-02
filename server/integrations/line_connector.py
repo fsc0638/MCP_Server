@@ -29,6 +29,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
 import httpx
@@ -136,19 +137,43 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
             is_group_or_room = False
             if hasattr(source, "group_id") and source.group_id:
                 session_id = f"line_group_{source.group_id}"
-                chat_id = source.group_id
+                chat_id = session_id  # normalized key for analytics/group attribution
                 is_group_or_room = True
+
+                # Bridge sync: record known group + last activity
+                try:
+                    from server.services.bridge_sync import get_bridge_state
+                    from main import PROJECT_ROOT
+                    get_bridge_state(PROJECT_ROOT).mark_group_active(source.group_id)
+                except Exception:
+                    pass
             elif hasattr(source, "room_id") and source.room_id:
                 session_id = f"line_room_{source.room_id}"
-                chat_id = source.room_id
+                chat_id = session_id  # normalized key for analytics/group attribution
                 is_group_or_room = True
+
+                # Bridge sync: treat rooms similarly to groups for activity gating
+                try:
+                    from server.services.bridge_sync import get_bridge_state
+                    from main import PROJECT_ROOT
+                    get_bridge_state(PROJECT_ROOT).mark_group_active(source.room_id)
+                except Exception:
+                    pass
             else:
                 session_id = f"line_{source.user_id}"
-                chat_id = source.user_id
+                chat_id = session_id  # normalized key for analytics/user attribution
 
             # Phase 1: Group Mention Filter & Window
             if is_group_or_room:
                 if isinstance(event.message, TextMessageContent):
+                    # Bridge loop prevention: ignore messages pushed from Web.
+                    try:
+                        from server.services.bridge_sync import has_bridge_tag
+                        if has_bridge_tag(user_input):
+                            logger.info(f"[LINE Bridge] Ignored web-bridged message in group/room: chat={chat_id}")
+                            continue
+                    except Exception:
+                        pass
                     # 支援多種群組喚醒方式：[@Agent K], [@AgentK], @Agent K, @AgentK
                     mentions = ["[@Agent K]", "[@AgentK]", "@Agent K", "@AgentK"]
                     found_mention = False
@@ -166,38 +191,46 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         import time
                         _last_request_time[f"mention_{chat_id}"] = time.time()
                     else:
-                        # 不是叫它，直接忽略 (bypass processing)
-                        logger.info(f"[LINE] Skipped group text (cached but no mention): chat={chat_id}")
+                        # 沒有 @Agent K — 快取 + 寫入 session history（背景記憶），但不觸發 LLM
+                        try:
+                            from server.dependencies.session import get_session_manager
+                            from server.services.runtime import get_universal_system_prompt
+                            _sm = get_session_manager()
+                            _sm.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
+                            _sm.append_message(session_id, "user", f"[群組對話]{user_input}")
+                        except Exception as _e:
+                            logger.debug(f"[LINE] Failed to persist group bg message: {_e}")
+                        logger.info(f"[LINE] Skipped group text (cached + persisted, no mention): chat={chat_id}")
                         continue
                 else:
-                    # For Image/File/Sticker in groups, check if bot was mentioned recently (window of 120s for better UX)
-                    import time
-                    last_mention = _last_request_time.get(f"mention_{chat_id}", 0)
-
-                    # Phase 6: Proactive Cache
-                    # If mentioned within 120s, we process it as a direct command
-                    just_cache = (time.time() - last_mention > 120)
+                    # Non-text messages (Image/File/Sticker) in groups:
+                    # ONLY process if this is a REPLY to a message that @mentioned Agent K,
+                    # or if the quote/reply context contains @Agent K.
+                    # Otherwise, skip entirely — no processing, no push, no loading animation.
                     msg_type = type(event.message).__name__
-
-                    if just_cache:
-                        logger.info(f"[LINE] Group {msg_type} received without recent mention. Will only cache: chat={chat_id}")
-                    else:
-                        logger.info(f"[LINE] Group {msg_type} received with recent mention. Processing: chat={chat_id}")
-                    
-                    background_tasks.add_task(
-                        _process_line_message,
-                        line_api=line_api,
-                        line_api_blob=line_api_blob,
-                        reply_token=event.reply_token,
-                        user_id=source.user_id,
-                        chat_id=chat_id,
-                        session_id=session_id,
-                        event_msg=event.message,
-                        extracted_text="",
-                        quoted_file_path=None,
-                        just_cache=just_cache
-                    )
+                    logger.info(f"[LINE] Group {msg_type} received without text @mention. Skipping: chat={chat_id}")
                     continue
+
+            # Bridge loop prevention: ignore messages pushed from Web.
+            if isinstance(event.message, TextMessageContent):
+                try:
+                    from server.services.bridge_sync import has_bridge_tag
+                    if has_bridge_tag(user_input):
+                        logger.info(f"[LINE Bridge] Ignored web-bridged message: chat={chat_id}")
+                        continue
+                except Exception:
+                    pass
+
+            # Bridge sync: reflect LINE → Web by persisting a tagged copy of the user message
+            # so the Web UI (which polls /chat/session/{session_id}) can display it.
+            if isinstance(event.message, TextMessageContent) and user_input:
+                try:
+                    from server.dependencies.session import get_session_manager
+                    from server.services.bridge_sync import make_line_bridge_tag
+                    sm = get_session_manager()
+                    sm.append_message(session_id, "user", f"【LINE】你：{user_input}\n\n{make_line_bridge_tag(session_id, user_input)}")
+                except Exception:
+                    pass
 
             # Phase 6 + A2: Quote Recognition with Retry (引用識別 + 等待機制)
             quoted_text = ""
@@ -233,10 +266,10 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                                 break
                             # Status notifications
                             if _attempt == 0 and not _notified_start:
-                                _send_status_push(line_api, chat_id, "⏳ 正在讀取你引用的檔案，請稍候...")
+                                _send_status_push(line_api, chat_id, "⏳ 正在讀取你引用的訊息，請稍候...")
                                 _notified_start = True
                             elif _attempt >= 15 and not _notified_mid:
-                                _send_status_push(line_api, chat_id, f"⏳ 檔案較大，仍在處理中（已等待 {_attempt}秒）...")
+                                _send_status_push(line_api, chat_id, f"⏳ 引用內容仍在處理中（已等待 {_attempt}秒）...")
                                 _notified_mid = True
                         else:
                             # All retries exhausted
@@ -244,9 +277,9 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                                 logger.warning(f"[LINE A2] Quote not found after {_retry_max}s: {quoted_msg_id}")
                                 _send_status_push(
                                     line_api, chat_id,
-                                    "⚠️ 找不到引用的檔案，可能已超過保存期限（5天）或尚未完成上傳，請重新傳送。"
+                                    "⚠️ 找不到引用的訊息內容，可能已超過保留期限（5天）或尚未完成上傳，請直接重新傳訊息。"
                                 )
-                                continue  # A2 fix: stop processing, don't fallback to LLM with stale history
+                                continue  # A2: stop processing, don't proceed without quote context
 
                     if quoted_text:
                         logger.info(f"[LINE] Quoted text found in cache: {quoted_msg_id}")
@@ -340,6 +373,7 @@ async def line_broadcast(request: Request):
 _local_locks = {}
 _local_lock_mutex = threading.Lock()
 _last_request_time = {}  # 紀錄每個 session 的最後處理時間 (Debounce 用)
+_group_loading_sent = {}  # {chat_id: timestamp} — 群組文字 loading 去重 (60s cooldown)
 
 # ── Message Caching (Phase 6 + Phase A1: Disk Persistence) ────────────────────
 _message_cache = {}  # {chat_id: {msg_id: {"text": str, "file_path": str, "created_at": str}}}
@@ -455,31 +489,78 @@ def _acquire_session_lock(session_id: str):
         if local_lock:
             local_lock.release()
 
+def _to_line_id(chat_id: str) -> str:
+    """將內部 chat_id 轉換為 LINE 原生 ID（去除前綴）。
+    "line_group_C..." → "C..."
+    "line_room_R..."  → "R..."
+    "line_U..."       → "U..."
+    其他              → 原值
+    """
+    if chat_id.startswith("line_group_"):
+        return chat_id[len("line_group_"):]
+    if chat_id.startswith("line_room_"):
+        return chat_id[len("line_room_"):]
+    if chat_id.startswith("line_"):
+        return chat_id[len("line_"):]
+    return chat_id
+
+
 def _send_loading_animation(line_api, chat_id: str, seconds: int = 20):
-    """呼叫 LINE Loading Animation API (使用官方 SDK)。可多次呼叫以延長動畫。"""
+    """呼叫 LINE Loading Animation API (使用官方 SDK)。可多次呼叫以延長動畫。
+    群組/房間不支援官方 loading animation，改為推送文字提示。
+    """
     from linebot.v3.messaging import ShowLoadingAnimationRequest
 
     try:
-        # Note: LINE ShowLoadingAnimation only supports userId (Individual Chat).
-        # It returns 400 Bad Request for groupId or roomId.
-        if chat_id.startswith("U"):
-            req = ShowLoadingAnimationRequest(chatId=chat_id, loadingSeconds=min(seconds, 60))
+        _line_id = _to_line_id(chat_id)
+        if _line_id.startswith("U"):
+            req = ShowLoadingAnimationRequest(chatId=_line_id, loadingSeconds=min(seconds, 60))
             line_api.show_loading_animation(req)
             logger.info(f"[LINE] Loading animation started for chat={chat_id} ({seconds}s)")
+        elif _line_id.startswith(("C", "R")):
+            # 群組/房間：LINE API 不支援 loading animation，推送文字替代（60s 去重）
+            import time as _time
+            _now = _time.time()
+            _last_sent = _group_loading_sent.get(chat_id, 0)
+            if _now - _last_sent >= 60:
+                _send_status_push(line_api, chat_id, "⏳ 處理中...")
+                _group_loading_sent[chat_id] = _now
+                logger.info(f"[LINE] Sent text loading indicator for group/room chat={chat_id}")
+            else:
+                logger.debug(f"[LINE] Skipping duplicate loading text for group chat={chat_id} (cooldown)")
         else:
-            logger.info(f"[LINE] Skipping loading animation for non-user chat={chat_id}")
+            logger.info(f"[LINE] Skipping loading animation for unrecognized chat={chat_id}")
     except Exception as e:
         logger.warning(f"[LINE] Exception starting loading animation: {e}")
 
 
 def _send_status_push(line_api, chat_id: str, text: str):
-    """推送中間狀態訊息給使用者（不佔用 reply_token）。支援長訊息自動分段。"""
+    """推送中間狀態訊息給使用者（不佔用 reply_token）。支援長訊息自動分段。
+
+    NOTE: push_message 接受 userId ("U...")、groupId ("C...")、roomId ("R...")。
+    我們內部的 chat_id 可能是 "line_U..." / "line_group_..." / "line_room_..."，
+    因此需要轉成 LINE 原生 ID。
+    """
     try:
+        # Normalize internal ids to LINE native ids
+        to_id = chat_id
+        if to_id.startswith("line_group_"):
+            to_id = to_id[len("line_group_"):]
+        elif to_id.startswith("line_room_"):
+            to_id = to_id[len("line_room_"):]
+        elif to_id.startswith("line_"):
+            to_id = to_id[len("line_"):]
+
+        # Validate: must be a LINE native ID (U=user, C=group, R=room)
+        if not to_id or to_id[0] not in ("U", "C", "R"):
+            logger.info(f"[LINE] Skipping status push for unrecognized chat_id={chat_id}")
+            return
+
         from linebot.v3.messaging import TextMessage, PushMessageRequest
         _MAX = 4800  # LINE limit is 5000, leave margin
         if len(text) <= _MAX:
             line_api.push_message(
-                PushMessageRequest(to=chat_id, messages=[TextMessage(text=text)])
+                PushMessageRequest(to=to_id, messages=[TextMessage(text=text)])
             )
         else:
             # Split into chunks at line boundaries
@@ -496,7 +577,7 @@ def _send_status_push(line_api, chat_id: str, text: str):
                 chunks.append(current)
             for chunk in chunks:
                 line_api.push_message(
-                    PushMessageRequest(to=chat_id, messages=[TextMessage(text=chunk)])
+                    PushMessageRequest(to=to_id, messages=[TextMessage(text=chunk)])
                 )
     except Exception as e:
         logger.warning(f"[LINE] Status push failed: {e}")
@@ -682,7 +763,7 @@ def _handle_pending_state(
     chat_id: str,
     session_id: str,
     user_text: str,
-) -> str | None:
+) -> Optional[str]:
     """
     檢查聊天是否有待確認的 pending state（approval 或 choice）。
     若使用者回覆的是確認/取消/選擇指令，處理 pending 操作並回傳回覆文字。
@@ -1048,7 +1129,7 @@ def _process_line_message(
                     return
 
                 # 嘗試下載貼圖圖片，供 Vision 模型辨識表情、動作與文字
-                uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", chat_id)
+                uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", _to_line_id(chat_id))
                 os.makedirs(uploads_dir, exist_ok=True)
                 sticker_image = _download_sticker_image(sticker_id, uploads_dir, resource_type)
                 if sticker_image:
@@ -1095,7 +1176,7 @@ def _process_line_message(
                         except concurrent.futures.TimeoutError:
                             raise TimeoutError(f"File download timed out after 30s (msg_id={event_msg.id})")
 
-                    uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", chat_id)
+                    uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", _to_line_id(chat_id))
                     os.makedirs(uploads_dir, exist_ok=True)
 
                     if isinstance(event_msg, ImageMessageContent):
@@ -1183,7 +1264,13 @@ def _process_line_message(
                 _profile_updater = ProfileUpdater(str(Path(os.getcwd())))
                 _profile_content = _profile_updater.get_profile(session_id)
                 if _profile_content:
-                    _base_system_prompt += f"\n\n---\n# 使用者背景知識\n{_profile_content}"
+                    _base_system_prompt += (
+                        f"\n\n---\n"
+                        f"# 【當前對話使用者資料】\n"
+                        f"你現在正在與以下這位使用者對話。以下是他的身份與個人資料，"
+                        f"當使用者詢問「你認識我嗎」「知道我是誰嗎」等問題時，請直接根據此資料回答：\n\n"
+                        f"{_profile_content}"
+                    )
             except Exception as _pe:
                 logger.debug(f"[LINE B1] Profile injection skipped: {_pe}")
 
@@ -1203,17 +1290,33 @@ def _process_line_message(
 
             # Route to optimal model tier based on task complexity
             _has_file = (attached_file_path is not None) or (_chunked_data is not None)
-            _routed_model, _routed_tier = route_model(
+
+            # Extract recent history for context-aware routing
+            # (enables short confirmations like "好的" to re-route with conversation context)
+            _recent_history = []
+            try:
+                _history_for_ctx = _session_mgr.get_or_create_conversation(session_id)
+                # Last 5 non-system messages
+                _recent_history = [m for m in _history_for_ctx if m.get("role") != "system"][-5:]
+            except Exception:
+                pass
+
+            _routed_model, _routed_tier, _force_upgraded = route_model(
                 user_input=user_input or "",
                 openai_client=_openai_client,
                 has_file=_has_file,
                 is_chunked_final=False,
+                recent_history=_recent_history,
             )
 
             adapter = OpenAIAdapter(uma=uma, model=_routed_model)
-            # LINE 訊息上限 ~5000 字，OpenAI TPM 同時計算 max_output_tokens 預留量
-            # 16384 → 2048 可節省 ~14336 tokens/request
-            adapter.max_output_tokens = 2048
+            # Tier-aware max_output_tokens:
+            # - nano/mini: 2048 節省 TPM（閒聊、單工具任務輸出短）
+            # - full/file : 8192 支援複合任務（e.g. Groovenauts 7 節分析 + python-executor）
+            if _routed_tier in ("full", "file"):
+                adapter.max_output_tokens = 8192
+            else:
+                adapter.max_output_tokens = 2048
             logger.info(f"[LINE Router] Routed to model: {_routed_model} (tier={_routed_tier})")
 
             # Inject stored original file context for skills that need full text
@@ -1375,6 +1478,14 @@ def _process_line_message(
 
                 history = _session_mgr.get_or_create_conversation(session_id)
 
+                # Filter out bridge-tagged LINE messages from LLM history.
+                # These are duplicates added for Web UI display (see line ~244);
+                # the actual message is already in history as a separate entry.
+                history = [
+                    m for m in history
+                    if "[[bridge:line:" not in str(m.get("content", ""))
+                ]
+
                 # Use PromptBuilder with LINE platform budget to trim history/context.
                 try:
                     from server.services.prompt_builder import build_prompt_messages, Budget, PromptParts
@@ -1387,11 +1498,12 @@ def _process_line_message(
                     session_summary = ""
                     retrieved_memory = ""
                     try:
-                        from server.services.session_summarizer import SessionSummarizer
+                        from server.services.session_summarizer import SessionSummarizer, render_session_summary_injection
                         from server.services.memory_retriever import MemoryRetriever, render_memory_injection
                         from server.services.behavior_rule_loader import load_behavior_rule_texts
 
-                        session_summary = SessionSummarizer(str(Path(os.getcwd()))).get_cached_summary_text(session_id)
+                        ssum = SessionSummarizer(str(Path(os.getcwd()))).maybe_update(session_id, min_new_messages=6)
+                        session_summary = render_session_summary_injection(ssum, max_chars=900)
                         br_texts = load_behavior_rule_texts(str(Path(os.getcwd())), max_each=8)
                         mem_items = MemoryRetriever(str(Path(os.getcwd()))).retrieve(actual_input, max_items=8)
                         retrieved_memory = render_memory_injection(mem_items, max_chars=800, exclude_texts=br_texts)
@@ -1446,10 +1558,11 @@ def _process_line_message(
                     model=_current_model,
                     messages=truncated_history,
                     max_output_tokens=adapter.max_output_tokens,
+                    force_tier=_force_upgraded,
                 )
                 if _safe_model != _current_model:
                     adapter = OpenAIAdapter(uma=uma, model=_safe_model)
-                    adapter.max_output_tokens = 2048
+                    adapter.max_output_tokens = 8192 if _routed_tier in ("full", "file") else 2048
                     logger.info(f"[LINE Fallback] Downgraded: {_current_model} → {_safe_model}")
 
                 # ── Tier-aware tool policy ─────────────────────────────
@@ -1468,10 +1581,22 @@ def _process_line_message(
                     _tools_enabled = execute_mode
                     _max_tools = 3
 
+                # Determine chat type for analytics/routing (user/group/room)
+                chat_type = "user"
+                if session_id.startswith("line_group_"):
+                    chat_type = "group"
+                elif session_id.startswith("line_room_"):
+                    chat_type = "room"
+
                 result_gen = adapter.chat(
                     messages=truncated_history,
                     user_query=actual_input,
                     session_id=session_id,
+                    user_id=user_id,
+                    chat_type=chat_type,
+                    chat_id=chat_id,
+                    tier=_routed_tier,
+                    response_id="",
                     attached_file=attached_file_path,
                     tools_enabled=_tools_enabled,
                     max_tools=_max_tools,
@@ -1617,6 +1742,19 @@ def _collect_generator(
             # Re-trigger loading animation so user keeps seeing "..." during long tool calls
             if line_api and chat_id and "⚙️" in content:
                 _send_loading_animation(line_api, chat_id, 60)
+        elif status == "provider_meta":
+            # Strong consistency: allow adapters to publish provider response id
+            try:
+                from server.dependencies.session import get_session_manager
+                _sm = get_session_manager()
+                _sid = session_id or ""
+                _rid = chunk.get("response_id") or ""
+                if _sid and _rid:
+                    _sm.set_metadata(_sid, "last_response_id", _rid)
+            except Exception:
+                pass
+            continue
+
         elif status == "success":
             # success chunk 包含完整最終內容
             final = chunk.get("content", "") or accumulated
@@ -1735,12 +1873,15 @@ def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
     from linebot.v3.messaging import TextMessage, ReplyMessageRequest, PushMessageRequest
 
     try:
-        line_api.reply_message(
+        resp = line_api.reply_message(
             ReplyMessageRequest(
                 reply_token=reply_token,
                 messages=[TextMessage(text=text)],
             )
         )
+        # 快取 AgentK 發出的訊息，讓使用者可以「引用」AgentK 的回覆
+        for sent_msg in (resp.sent_messages or []):
+            _add_to_cache(chat_id, sent_msg.id, text=text)
         logger.info(f"[LINE] Reply sent via reply_token → chat={chat_id}")
     except Exception as reply_err:
         # reply_token 已過期或失效，改用 push_message 主動推送
@@ -1749,12 +1890,15 @@ def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
             f"falling back to push_message → chat={chat_id}"
         )
         try:
-            line_api.push_message(
+            push_resp = line_api.push_message(
                 PushMessageRequest(
-                    to=chat_id,
+                    to=_to_line_id(chat_id),
                     messages=[TextMessage(text=text)],
                 )
             )
+            # 快取 AgentK 發出的訊息（push fallback）
+            for sent_msg in (push_resp.sent_messages or []):
+                _add_to_cache(chat_id, sent_msg.id, text=text)
             logger.info(f"[LINE] Reply sent via push_message → chat={chat_id}")
         except Exception as push_err:
             logger.error(f"[LINE] push_message also failed: {push_err}")
@@ -1817,12 +1961,15 @@ def _send_line_reply_with_images(
         return
 
     try:
-        line_api.reply_message(
+        resp = line_api.reply_message(
             ReplyMessageRequest(
                 reply_token=reply_token,
                 messages=messages,
             )
         )
+        # 快取文字訊息（第一則），讓使用者可以引用 AgentK 的回覆
+        if text and text.strip() and resp.sent_messages:
+            _add_to_cache(chat_id, resp.sent_messages[0].id, text=text.strip()[:5000])
         logger.info(f"[LINE] Mixed reply sent (text+{len(image_urls)} images) → chat={chat_id}")
     except Exception as reply_err:
         logger.warning(
@@ -1830,12 +1977,15 @@ def _send_line_reply_with_images(
             f"falling back to push_message → chat={chat_id}"
         )
         try:
-            line_api.push_message(
+            push_resp = line_api.push_message(
                 PushMessageRequest(
-                    to=chat_id,
+                    to=_to_line_id(chat_id),
                     messages=messages,
                 )
             )
+            # 快取文字訊息（push fallback）
+            if text and text.strip() and push_resp.sent_messages:
+                _add_to_cache(chat_id, push_resp.sent_messages[0].id, text=text.strip()[:5000])
             logger.info(f"[LINE] Mixed push sent (text+{len(image_urls)} images) → chat={chat_id}")
         except Exception as push_err:
             logger.error(f"[LINE] push_message with images also failed: {push_err}")
@@ -1848,7 +1998,7 @@ def _send_error_push(line_api, chat_id: str):
 
         line_api.push_message(
             PushMessageRequest(
-                to=chat_id,
+                to=_to_line_id(chat_id),
                 messages=[
                     TextMessage(text="⚠️ 系統發生內部錯誤，請稍後再試或聯絡管理員。")
                 ],

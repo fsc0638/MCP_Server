@@ -415,24 +415,34 @@ class OpenAIAdapter:
                             }
                         else:
                             logger.info(f"Tool call: {fn_name}({fn_args})")
-                            yield {"status": "streaming", "content": f"\n\n⚙️ 執行技能: `{fn_name}`\n"}
+                            # Phase 3-A: Broadcast tool_call status BEFORE executing
+                            yield {"status": "tool_call", "tool_name": fn_name, "message": f"正在執行技能：{fn_name}..."}
                             result = self.uma.execute_tool_call(fn_name, fn_args)
                             # Track knowledge_guide skills to prevent re-invocation
                             if isinstance(result, dict) and result.get("type") == "knowledge_guide":
                                 _knowledge_guide_skills_called.add(fn_name)
 
                         if result.get("status") == "requires_approval":
+                            # Phase 3-B: Store pending approval in session for resume endpoint
+                            if session_id:
+                                _session_mgr.set_pending_approval(session_id, {
+                                    "tool_name": fn_name,
+                                    "call_id": call_id,
+                                    "args": fn_args,
+                                    "current_response_id": current_response_id,
+                                    "model": self.model,
+                                })
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
                                 "risk_description": result.get("risk_description", "High-risk operation"),
-                                "pending_args": fn_args
+                                "pending_args": fn_args,
                             }
                             return
 
                         # ── Truncate tool output to prevent token explosion ──
                         result_str = json.dumps(result, ensure_ascii=False)
-                        _MAX_TOOL_OUTPUT_CHARS = 8000  # ~2K tokens per result
+                        _MAX_TOOL_OUTPUT_CHARS = 20000  # ~5K tokens per result (semantic skills need full SKILL.md + references)
                         if len(result_str) > _MAX_TOOL_OUTPUT_CHARS:
                             result_str = result_str[:_MAX_TOOL_OUTPUT_CHARS] + '..."（結果已截斷，請根據已有資料繼續執行任務）"}'
                             logger.info(f"[Adapter] Truncated tool output from {len(json.dumps(result, ensure_ascii=False))} to {_MAX_TOOL_OUTPUT_CHARS} chars")
@@ -454,11 +464,14 @@ class OpenAIAdapter:
                                 _skill_internal = result["_usage"].get("skill_total_tokens", 0)
                             # Derive context from session_id
                             _sid = session_id or ""
-                            _d1_chat_type = "group" if "group" in _sid else "personal"
                             _d1_duration = int(time.time() * 1000) - _turn_start_ms
                             _tracker.record_usage(
                                 session_id=_sid,
-                                chat_type=_d1_chat_type,
+                                chat_type=kwargs.get("chat_type", "personal"),
+                                chat_id=kwargs.get("chat_id", ""),
+                                user_id=kwargs.get("user_id", ""),
+                                tier=kwargs.get("tier", ""),
+                                response_id=current_response_id or "",
                                 skill=fn_name,
                                 model=self.model,
                                 input_tokens=_turn_usage.get("input_tokens", 0),
@@ -490,11 +503,14 @@ class OpenAIAdapter:
                         from pathlib import Path as _Path
                         _tracker = TokenTracker(str(_Path(os.getcwd())))
                         _sid = session_id or ""
-                        _d1_chat_type = "group" if "group" in _sid else "personal"
                         _d1_duration = int(time.time() * 1000) - _turn_start_ms
                         _tracker.record_usage(
                             session_id=_sid,
-                            chat_type=_d1_chat_type,
+                            chat_type=kwargs.get("chat_type", "personal"),
+                            chat_id=kwargs.get("chat_id", ""),
+                            user_id=kwargs.get("user_id", ""),
+                            tier=kwargs.get("tier", ""),
+                            response_id=current_response_id or "",
                             skill="(chat)",
                             model=self.model,
                             input_tokens=_turn_usage.get("input_tokens", 0),
@@ -506,8 +522,13 @@ class OpenAIAdapter:
                     except Exception:
                         pass
 
+                    # Attach correlation key into prompt_meta stream (strong consistency)
+                    yield {"status": "provider_meta", "provider": "openai", "response_id": current_response_id}
+
                     if session_id and current_response_id:
                         _session_mgr.set_latest_response_id(session_id, current_response_id)
+                    # Attach correlation key into prompt_meta stream (strong consistency)
+                    yield {"status": "provider_meta", "provider": "openai", "response_id": current_response_id}
                     yield {"status": "success", "content": full_content, "tool_calls_made": tool_calls_made}
                     return
 

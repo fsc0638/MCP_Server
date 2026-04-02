@@ -37,6 +37,7 @@ class TokenTracker:
         skill: str = "",
         model: str = "",
         tier: str = "",
+        response_id: str = "",
         input_tokens: int = 0,
         output_tokens: int = 0,
         total_tokens: int = 0,
@@ -54,6 +55,7 @@ class TokenTracker:
             "skill": skill,
             "model": model,
             "tier": tier,
+            "response_id": response_id,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "total_tokens": total_tokens,
@@ -133,13 +135,18 @@ class TokenTracker:
             duration = r.get("duration_ms", 0)
             day = r.get("ts", "")[:10]
 
+            is_chat = (skill == "(chat)")
+
             # Total
             summary["total"]["input_tokens"] += inp
             summary["total"]["output_tokens"] += out
             summary["total"]["total_tokens"] += tot
             summary["total"]["skill_internal_tokens"] += si
-            if skill:
+            if skill and not is_chat:
                 summary["total"]["skill_calls"] += 1
+            if is_chat:
+                summary["total"].setdefault("chat_calls", 0)
+                summary["total"]["chat_calls"] += 1
 
             # By user
             if user:
@@ -147,7 +154,10 @@ class TokenTracker:
                     summary["by_user"][user] = {"total_tokens": 0, "skill_calls": 0, "by_skill": {}}
                 u = summary["by_user"][user]
                 u["total_tokens"] += tot + si
-                if skill:
+                if is_chat:
+                    u.setdefault("chat_calls", 0)
+                    u["chat_calls"] += 1
+                elif skill:
                     u["skill_calls"] += 1
                     if skill not in u["by_skill"]:
                         u["by_skill"][skill] = {"calls": 0, "total_tokens": 0}
@@ -172,17 +182,21 @@ class TokenTracker:
             if chat_type == "group" and chat_id:
                 gk = f"line_group_{chat_id}" if not chat_id.startswith("line_group_") else chat_id
                 if gk not in summary["by_group"]:
-                    summary["by_group"][gk] = {"total_tokens": 0, "skill_calls": 0}
+                    summary["by_group"][gk] = {"total_tokens": 0, "skill_calls": 0, "chat_calls": 0}
                 summary["by_group"][gk]["total_tokens"] += tot + si
-                if skill:
+                if is_chat:
+                    summary["by_group"][gk]["chat_calls"] += 1
+                elif skill:
                     summary["by_group"][gk]["skill_calls"] += 1
 
             # Daily
             if day:
                 if day not in summary["daily"]:
-                    summary["daily"][day] = {"total_tokens": 0, "skill_calls": 0}
+                    summary["daily"][day] = {"total_tokens": 0, "skill_calls": 0, "chat_calls": 0}
                 summary["daily"][day]["total_tokens"] += tot + si
-                if skill:
+                if is_chat:
+                    summary["daily"][day]["chat_calls"] += 1
+                elif skill:
                     summary["daily"][day]["skill_calls"] += 1
 
         # Calculate averages
