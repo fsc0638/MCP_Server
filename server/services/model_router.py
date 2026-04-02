@@ -128,14 +128,15 @@ def estimate_request_tokens(
 
 # ── LLM-as-a-Router ────────────────────────────────────────────────────────
 
-_ROUTER_SYSTEM_PROMPT = """你是一個任務分類器。根據使用者輸入，判斷任務複雜度並回傳 JSON。
+_ROUTER_SYSTEM_PROMPT = """你是一個任務分類器。你會收到「最近對話紀錄 + 使用者最新輸入」，請根據整體對話脈絡判斷任務複雜度並回傳 JSON。
 
 分類規則：
-- "nano"：閒聊、打招呼、簡單是非題、表情符號、感謝、一句話問答
+- "nano"：純閒聊、打招呼、簡單是非題、表情符號、感謝、一句話問答（且上下文中沒有待完成的任務）
 - "mini"：一般問答、翻譯、摘要、單一工具呼叫、中等長度分析、畫圖、生成圖片、製作圖表、繪製插圖、設定排程推送、設定提醒、定時推送
 - "full"：深度文件分析、多步驟推理、產出報告、跨資料比較、複雜程式碼
 
 重要：
+- 判斷時必須考慮對話上下文。若使用者的最新訊息很短（如「好的」「10分鐘」「第2個」），但前幾輪對話涉及工具操作（排程、搜尋、生成等），應根據上下文判定為 "mini" 或 "full"，而非 "nano"。
 - 任何涉及「畫」「圖」「插圖」「圖表」「生成圖片」的請求，至少歸類為 "mini"（需要工具呼叫）。
 - 任何涉及「推送」「排程」「定時」「提醒我」「每天…點」「固定推送」的請求，至少歸類為 "mini"（需要工具呼叫）。
 
@@ -143,19 +144,34 @@ _ROUTER_SYSTEM_PROMPT = """你是一個任務分類器。根據使用者輸入�
 {"tier": "nano"} 或 {"tier": "mini"} 或 {"tier": "full"}"""
 
 
-def _call_router_llm(user_input: str, openai_client) -> str:
+def _call_router_llm(user_input: str, openai_client, recent_history: list | None = None) -> str:
     """
     Use the cheapest model to classify task complexity.
+    Always includes recent conversation context (up to 10 messages) so the router
+    can reason about follow-ups, confirmations, and multi-turn intent.
     Returns: "nano", "mini", or "full".
     Falls back to "mini" on any error.
     """
     try:
+        # Build context-aware input: recent history + current message
+        if recent_history:
+            _ctx_lines = []
+            for _m in recent_history[-10:]:
+                _role = _m.get("role", "")
+                _content = _m.get("content", "")
+                if isinstance(_content, str) and _role in ("user", "assistant"):
+                    _ctx_lines.append(f"{_role}: {_content[:150]}")
+            _ctx_lines.append(f"user: {user_input}")
+            _router_input = "\n".join(_ctx_lines)
+        else:
+            _router_input = user_input
+
         t0 = time.time()
         response = openai_client.chat.completions.create(
             model=get_model_router(),
             messages=[
                 {"role": "system", "content": _ROUTER_SYSTEM_PROMPT},
-                {"role": "user", "content": user_input[:500]},  # Cap input to save tokens
+                {"role": "user", "content": _router_input[:2000]},
             ],
             temperature=0,
             max_tokens=20,  # Only need {"tier":"xxx"}
@@ -196,6 +212,7 @@ def route_model(
     openai_client,
     has_file: bool = False,
     is_chunked_final: bool = False,
+    recent_history: list | None = None,
 ) -> tuple[str, str]:
     """
     Main entry point: determine the optimal model for a LINE Bot request.
@@ -257,6 +274,9 @@ def route_model(
         "畫", "繪", "插圖", "圖表", "製圖", "生成圖", "做成圖",
         "搜尋", "查詢", "建立檔案", "產生報告",
         "推送", "排程", "定時", "提醒我", "提醒", "通知", "每天", "每週", "每日", "固定",
+        "分鐘後", "小時後", "分鐘后", "小時后",
+        "取消排程", "刪除排程", "暫停排程", "恢復排程", "查看排程", "我的排程", "移除排程",
+        "取消推送", "刪除推送", "暫停推送", "恢復推送", "停止推送",
         # 明確需要 web search 的新聞/時事類
         "新聞", "時事", "報導", "最新消息", "今日", "本日", "近期",
         "股市", "股價", "財經", "經濟新聞", "科技新聞",
@@ -273,9 +293,9 @@ def route_model(
         and any(kw in _input_lower for kw in _FILE_OUTPUT_KEYWORDS)
     )
 
-    # LLM-as-a-Router
-    tier = _call_router_llm(user_input, openai_client)
+    # LLM-as-a-Router — always with conversation context
     _force_upgraded = False
+    tier = _call_router_llm(user_input, openai_client, recent_history=recent_history)
 
     # Upgrade nano → mini if tool-dependent keywords detected
     if tier == "nano" and _needs_tools:

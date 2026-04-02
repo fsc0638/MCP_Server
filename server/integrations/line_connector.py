@@ -191,8 +191,16 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         import time
                         _last_request_time[f"mention_{chat_id}"] = time.time()
                     else:
-                        # 不是叫它，直接忽略 (bypass processing)
-                        logger.info(f"[LINE] Skipped group text (cached but no mention): chat={chat_id}")
+                        # 沒有 @Agent K — 快取 + 寫入 session history（背景記憶），但不觸發 LLM
+                        try:
+                            from server.dependencies.session import get_session_manager
+                            from server.services.runtime import get_universal_system_prompt
+                            _sm = get_session_manager()
+                            _sm.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
+                            _sm.append_message(session_id, "user", f"[群組對話]{user_input}")
+                        except Exception as _e:
+                            logger.debug(f"[LINE] Failed to persist group bg message: {_e}")
+                        logger.info(f"[LINE] Skipped group text (cached + persisted, no mention): chat={chat_id}")
                         continue
                 else:
                     # For Image/File/Sticker in groups, check if bot was mentioned recently (window of 120s for better UX)
@@ -386,6 +394,7 @@ async def line_broadcast(request: Request):
 _local_locks = {}
 _local_lock_mutex = threading.Lock()
 _last_request_time = {}  # 紀錄每個 session 的最後處理時間 (Debounce 用)
+_group_loading_sent = {}  # {chat_id: timestamp} — 群組文字 loading 去重 (60s cooldown)
 
 # ── Message Caching (Phase 6 + Phase A1: Disk Persistence) ────────────────────
 _message_cache = {}  # {chat_id: {msg_id: {"text": str, "file_path": str, "created_at": str}}}
@@ -518,19 +527,30 @@ def _to_line_id(chat_id: str) -> str:
 
 
 def _send_loading_animation(line_api, chat_id: str, seconds: int = 20):
-    """呼叫 LINE Loading Animation API (使用官方 SDK)。可多次呼叫以延長動畫。"""
+    """呼叫 LINE Loading Animation API (使用官方 SDK)。可多次呼叫以延長動畫。
+    群組/房間不支援官方 loading animation，改為推送文字提示。
+    """
     from linebot.v3.messaging import ShowLoadingAnimationRequest
 
     try:
-        # chat_id 在系統內以 "line_U..." 格式儲存；LINE API 只接受裸 userId (U...)
-        # 同時也不支援群組/房間（groupId/roomId 以 C/R 開頭）
         _line_id = _to_line_id(chat_id)
         if _line_id.startswith("U"):
             req = ShowLoadingAnimationRequest(chatId=_line_id, loadingSeconds=min(seconds, 60))
             line_api.show_loading_animation(req)
             logger.info(f"[LINE] Loading animation started for chat={chat_id} ({seconds}s)")
+        elif _line_id.startswith(("C", "R")):
+            # 群組/房間：LINE API 不支援 loading animation，推送文字替代（60s 去重）
+            import time as _time
+            _now = _time.time()
+            _last_sent = _group_loading_sent.get(chat_id, 0)
+            if _now - _last_sent >= 60:
+                _send_status_push(line_api, chat_id, "⏳ 處理中...")
+                _group_loading_sent[chat_id] = _now
+                logger.info(f"[LINE] Sent text loading indicator for group/room chat={chat_id}")
+            else:
+                logger.debug(f"[LINE] Skipping duplicate loading text for group chat={chat_id} (cooldown)")
         else:
-            logger.info(f"[LINE] Skipping loading animation for non-user chat={chat_id}")
+            logger.info(f"[LINE] Skipping loading animation for unrecognized chat={chat_id}")
     except Exception as e:
         logger.warning(f"[LINE] Exception starting loading animation: {e}")
 
@@ -538,18 +558,23 @@ def _send_loading_animation(line_api, chat_id: str, seconds: int = 20):
 def _send_status_push(line_api, chat_id: str, text: str):
     """推送中間狀態訊息給使用者（不佔用 reply_token）。支援長訊息自動分段。
 
-    NOTE: push_message 只接受 userId ("U...")。我們內部的 chat_id 可能是
-    "line_U..." / "line_group_..." / "line_room_..."，因此需要轉成 LINE 原生 ID。
+    NOTE: push_message 接受 userId ("U...")、groupId ("C...")、roomId ("R...")。
+    我們內部的 chat_id 可能是 "line_U..." / "line_group_..." / "line_room_..."，
+    因此需要轉成 LINE 原生 ID。
     """
     try:
         # Normalize internal ids to LINE native ids
         to_id = chat_id
-        if to_id.startswith("line_"):
+        if to_id.startswith("line_group_"):
+            to_id = to_id[len("line_group_"):]
+        elif to_id.startswith("line_room_"):
+            to_id = to_id[len("line_room_"):]
+        elif to_id.startswith("line_"):
             to_id = to_id[len("line_"):]
 
-        # Only push to individual users
-        if not to_id.startswith("U"):
-            logger.info(f"[LINE] Skipping status push for non-user chat_id={chat_id}")
+        # Validate: must be a LINE native ID (U=user, C=group, R=room)
+        if not to_id or to_id[0] not in ("U", "C", "R"):
+            logger.info(f"[LINE] Skipping status push for unrecognized chat_id={chat_id}")
             return
 
         from linebot.v3.messaging import TextMessage, PushMessageRequest
@@ -1286,11 +1311,23 @@ def _process_line_message(
 
             # Route to optimal model tier based on task complexity
             _has_file = (attached_file_path is not None) or (_chunked_data is not None)
+
+            # Extract recent history for context-aware routing
+            # (enables short confirmations like "好的" to re-route with conversation context)
+            _recent_history = []
+            try:
+                _history_for_ctx = _session_mgr.get_or_create_conversation(session_id)
+                # Last 5 non-system messages
+                _recent_history = [m for m in _history_for_ctx if m.get("role") != "system"][-5:]
+            except Exception:
+                pass
+
             _routed_model, _routed_tier, _force_upgraded = route_model(
                 user_input=user_input or "",
                 openai_client=_openai_client,
                 has_file=_has_file,
                 is_chunked_final=False,
+                recent_history=_recent_history,
             )
 
             adapter = OpenAIAdapter(uma=uma, model=_routed_model)
