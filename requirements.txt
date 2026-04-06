@@ -36,3 +36,9 @@ matplotlib>=3.7.0
 pandas>=2.0.0
 openpyxl>=3.1.0
 tiktoken>=0.12.0
+
+# Google Workspace Integration (Calendar, Gmail, Meet)
+google-api-python-client>=2.90.0
+google-auth-oauthlib>=1.2.0
+google-auth-httplib2>=0.2.0
+python-dateutil>=2.8.0
