@@ -418,7 +418,7 @@ class OpenAIAdapter:
                                         "message": _msg,
                                     }, ensure_ascii=False)}
                                     # Feed auth message back to LLM as tool result
-                                    messages.append({"type": "function_call_output", "call_id": call_id, "output": json.dumps(result, ensure_ascii=False)})
+                                    tool_results.append({"type": "function_call_output", "call_id": call_id, "output": json.dumps(result, ensure_ascii=False)})
                                     logger.info(f"[Adapter] Google auth required for {fn_name}, session={session_id}")
                                     continue
                             except Exception as _ge:
