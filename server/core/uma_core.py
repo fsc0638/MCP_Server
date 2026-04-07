@@ -202,6 +202,10 @@ class UMA:
                             }
                     if _google_env:
                         env_vars.update(_google_env)
+                    # Inject calendar ID for SA mode (SA sees its own empty calendar by default)
+                    _cal_id = os.environ.get("GOOGLE_CALENDAR_ID", "")
+                    if _cal_id:
+                        env_vars["GOOGLE_CALENDAR_ID"] = _cal_id
                 except Exception as _e:
                     import logging
                     logging.getLogger("MCP_Server.UMA").debug(f"Google cred injection skipped: {_e}")
