@@ -380,6 +380,30 @@ async def line_broadcast(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Dynamic Language Detection ────────────────────────────────────────────────
+
+def _detect_language(text: str):
+    """Lightweight language detection based on Unicode character ranges."""
+    if not text or len(text.strip()) < 2:
+        return None
+    # Japanese: Hiragana or Katakana present
+    if any('\u3040' <= c <= '\u309F' or '\u30A0' <= c <= '\u30FF' for c in text):
+        return "日本語"
+    # Vietnamese: unique diacritical characters
+    _vi_chars = set("ắằặẵẳấầậẩẫếềệểễốồộổỗứừựửữơưăđĂĐƠƯ")
+    if any(c in _vi_chars for c in text):
+        return "Tiếng Việt"
+    # Korean: Hangul syllables
+    if any('\uAC00' <= c <= '\uD7A3' for c in text):
+        return "한국어"
+    # English: mostly ASCII with spaces
+    ascii_count = sum(1 for c in text if c.isascii())
+    if ascii_count / max(len(text), 1) > 0.8 and ' ' in text:
+        return "English"
+    # Default: Traditional Chinese
+    return None  # None = don't inject, let system prompt default handle it
+
+
 # ── Session Locking & UX ──────────────────────────────────────────────────────
 
 _local_locks = {}
@@ -1601,6 +1625,16 @@ def _process_line_message(
                     chat_type = "group"
                 elif session_id.startswith("line_room_"):
                     chat_type = "room"
+
+                # Dynamic language detection: inject hint so LLM responds in user's language
+                _detected_lang = _detect_language(actual_input)
+                if _detected_lang:
+                    _lang_hint = {
+                        "role": "system",
+                        "content": f"【語言切換】使用者此則訊息使用{_detected_lang}，請用{_detected_lang}回覆。"
+                    }
+                    # Insert before the last user message
+                    truncated_history.insert(-1, _lang_hint)
 
                 result_gen = adapter.chat(
                     messages=truncated_history,
