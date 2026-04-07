@@ -1,13 +1,20 @@
 """
-Google OAuth 2.0 Credential Management for AgentK.
+Google OAuth 2.0 + Service Account Credential Management for AgentK.
+
+Hybrid mode:
+  - Default: Service Account (shared company calendar, no user login needed)
+  - Override: Per-user OAuth (personal calendar + Meet support)
 
 Provides:
+- Service Account credential loading (from JSON key file)
 - OAuth authorization URL generation (for LINE/Web UI)
 - Callback handler (exchange code → tokens)
-- Credential loading for skill subprocess injection
+- Credential loading for skill subprocess injection (SA or OAuth)
 - Automatic token refresh
 
-Storage: workspace/credentials/{session_id}_google.json
+Storage:
+  - Service Account: workspace/credentials/service_account.json (single file)
+  - Per-user OAuth: workspace/credentials/{session_id}_google.json
 """
 
 import json
@@ -18,13 +25,10 @@ from typing import Optional, Dict, Any
 
 logger = logging.getLogger("MCP_Server.GoogleAuth")
 
-# OAuth scopes for Google Workspace integration
+# OAuth scopes for Google Workspace integration (Calendar + Meet only, no Gmail)
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.modify",
 ]
 
 # Credential storage directory
@@ -33,11 +37,9 @@ _CREDENTIALS_DIR = "workspace/credentials"
 
 def _get_project_root() -> Path:
     """Resolve project root from environment or file location."""
-    # Try PROJECT_ROOT env var first
     pr = os.getenv("PROJECT_ROOT")
     if pr:
         return Path(pr)
-    # Fallback: 3 levels up from this file
     return Path(__file__).resolve().parents[2]
 
 
@@ -48,19 +50,46 @@ def _get_credentials_dir() -> Path:
     return cred_dir
 
 
+# ── Service Account ─────────────────────────────────────────────────────────
+
+def get_service_account_path() -> Optional[Path]:
+    """Get the Service Account JSON key path from env or default location."""
+    # Check env var first
+    sa_path_str = os.getenv("GOOGLE_SERVICE_ACCOUNT_KEY", "")
+    if sa_path_str:
+        # Resolve relative to project root
+        sa_path = Path(sa_path_str)
+        if not sa_path.is_absolute():
+            sa_path = _get_project_root() / sa_path
+        if sa_path.exists():
+            return sa_path
+    # Default location
+    default = _get_credentials_dir() / "service_account.json"
+    if default.exists():
+        return default
+    return None
+
+
+def has_service_account() -> bool:
+    """Check if a Service Account key file is available."""
+    return get_service_account_path() is not None
+
+
+# ── Per-User OAuth ──────────────────────────────────────────────────────────
+
 def get_credential_path(session_id: str) -> Path:
-    """Get the file path for a session's Google credentials."""
+    """Get the file path for a session's personal Google OAuth credentials."""
     return _get_credentials_dir() / f"{session_id}_google.json"
 
 
 def has_credentials(session_id: str) -> bool:
-    """Check if a session has stored Google credentials."""
+    """Check if a session has stored personal Google OAuth credentials."""
     return get_credential_path(session_id).exists()
 
 
 def build_authorize_url(session_id: str, redirect_uri: str = None) -> str:
     """
-    Build Google OAuth 2.0 authorization URL.
+    Build Google OAuth 2.0 authorization URL for personal account binding.
 
     Args:
         session_id: The session ID to bind the credential to.
@@ -76,7 +105,7 @@ def build_authorize_url(session_id: str, redirect_uri: str = None) -> str:
     if not redirect_uri:
         redirect_uri = os.getenv(
             "GOOGLE_OAUTH_REDIRECT_URI",
-            "http://localhost:8500/api/auth/google/callback"
+            "http://localhost:8500/api/auth/google/workspace/callback"
         )
 
     if not client_id or not client_secret:
@@ -125,7 +154,7 @@ def handle_callback(code: str, session_id: str, redirect_uri: str = None) -> Dic
     if not redirect_uri:
         redirect_uri = os.getenv(
             "GOOGLE_OAUTH_REDIRECT_URI",
-            "http://localhost:8500/api/auth/google/callback"
+            "http://localhost:8500/api/auth/google/workspace/callback"
         )
 
     client_config = {
@@ -158,7 +187,7 @@ def handle_callback(code: str, session_id: str, redirect_uri: str = None) -> Dic
     with open(cred_path, "w", encoding="utf-8") as f:
         json.dump(cred_data, f, ensure_ascii=False, indent=2)
 
-    logger.info(f"[GoogleAuth] Credentials stored for session: {session_id}")
+    logger.info(f"[GoogleAuth] Personal OAuth credentials stored for session: {session_id}")
 
     return {
         "status": "success",
@@ -167,14 +196,79 @@ def handle_callback(code: str, session_id: str, redirect_uri: str = None) -> Dic
     }
 
 
-def get_credentials_env(session_id: str) -> Optional[Dict[str, str]]:
+def refresh_if_expired(session_id: str) -> bool:
     """
-    Get environment variables to inject into skill subprocess.
-    Returns {"GOOGLE_CREDENTIALS_PATH": "/path/to/cred.json"} or None.
-
-    This is called by UMA execute_tool_call() for Google skills.
+    Check and refresh personal OAuth token if expired.
+    Returns True if credential is valid (after refresh if needed).
     """
     cred_path = get_credential_path(session_id)
     if not cred_path.exists():
-        return None
-    return {"GOOGLE_CREDENTIALS_PATH": str(cred_path)}
+        return False
+
+    try:
+        cred_data = json.loads(cred_path.read_text(encoding="utf-8"))
+        from google.oauth2.credentials import Credentials
+        creds = Credentials(
+            token=cred_data.get("token"),
+            refresh_token=cred_data.get("refresh_token"),
+            token_uri=cred_data.get("token_uri", "https://oauth2.googleapis.com/token"),
+            client_id=cred_data.get("client_id"),
+            client_secret=cred_data.get("client_secret"),
+            scopes=cred_data.get("scopes"),
+        )
+
+        if creds.expired and creds.refresh_token:
+            from google.auth.transport.requests import Request
+            creds.refresh(Request())
+            # Persist refreshed token
+            cred_data["token"] = creds.token
+            cred_path.write_text(json.dumps(cred_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info(f"[GoogleAuth] Token refreshed for session: {session_id}")
+
+        return creds.valid or creds.token is not None
+    except Exception as e:
+        logger.warning(f"[GoogleAuth] Token refresh failed for session {session_id}: {e}")
+        return False
+
+
+# ── Hybrid Credential Resolution ────────────────────────────────────────────
+
+def get_credentials_env(session_id: str) -> Optional[Dict[str, str]]:
+    """
+    Get environment variables to inject into skill subprocess.
+
+    Resolution order:
+      1. Personal OAuth credential (if user has bound their Google account)
+      2. Service Account (shared company credential)
+
+    Returns:
+      {"GOOGLE_CREDENTIALS_PATH": "...", "GOOGLE_CREDENTIAL_TYPE": "oauth|service_account"}
+      or None if no credentials available.
+    """
+    # Priority 1: Personal OAuth
+    personal_path = get_credential_path(session_id)
+    if personal_path.exists():
+        # Try refresh before returning
+        refresh_if_expired(session_id)
+        return {
+            "GOOGLE_CREDENTIALS_PATH": str(personal_path),
+            "GOOGLE_CREDENTIAL_TYPE": "oauth",
+        }
+
+    # Priority 2: Service Account
+    sa_path = get_service_account_path()
+    if sa_path:
+        return {
+            "GOOGLE_CREDENTIALS_PATH": str(sa_path),
+            "GOOGLE_CREDENTIAL_TYPE": "service_account",
+        }
+
+    return None
+
+
+def needs_personal_oauth(skill_name: str) -> bool:
+    """
+    Check if a skill requires personal OAuth (cannot use Service Account).
+    Google Meet requires personal OAuth because SA cannot create Meet links.
+    """
+    return skill_name in ("mcp-google-meet",)

@@ -181,9 +181,24 @@ class UMA:
         if mode == "executable":
             skill_timeout = int(skill_data["metadata"].get("execution_timeout", 30)) if skill_data else 30
             workspace_dir = str(Path(self.project_root) / "workspace")
+            env_vars = {"WORKSPACE_DIR": workspace_dir, "PROJECT_ROOT": str(self.project_root)}
+
+            # Inject Google credentials for Google Workspace skills
+            if skill_name.startswith("mcp-google-"):
+                try:
+                    from server.services.google_auth import get_credentials_env
+                    _session_id = os.environ.get("SESSION_ID", "")
+                    if _session_id:
+                        _google_env = get_credentials_env(_session_id)
+                        if _google_env:
+                            env_vars.update(_google_env)
+                except Exception as _e:
+                    import logging
+                    logging.getLogger("MCP_Server.UMA").debug(f"Google cred injection skipped: {_e}")
+
             return self.executor.run_script(
                 skill_name, "main.py", arg_dict,
-                env_vars={"WORKSPACE_DIR": workspace_dir, "PROJECT_ROOT": str(self.project_root)},
+                env_vars=env_vars,
                 timeout=skill_timeout,
             )
 

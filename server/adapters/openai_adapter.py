@@ -391,6 +391,39 @@ class OpenAIAdapter:
                                     except Exception as _e:
                                         logger.warning(f"[Adapter] Failed to inject original file: {_e}")
 
+                        # Google Workspace skills: check credentials before execution
+                        if fn_name.startswith("mcp-google-") and session_id:
+                            try:
+                                from server.services.google_auth import (
+                                    get_credentials_env, needs_personal_oauth,
+                                    has_credentials, has_service_account, build_authorize_url,
+                                )
+                                _google_env = get_credentials_env(session_id)
+                                _need_personal = needs_personal_oauth(fn_name)
+
+                                if not _google_env or (_need_personal and not has_credentials(session_id)):
+                                    # No credentials available → return auth URL
+                                    try:
+                                        _auth_url = build_authorize_url(session_id)
+                                        _msg = (
+                                            f"此功能需要綁定你的 Google 帳號。\n"
+                                            f"請點擊以下連結完成授權：\n{_auth_url}\n\n"
+                                            f"授權完成後，再重新告訴我你的需求即可！"
+                                        )
+                                    except Exception:
+                                        _msg = "此功能需要 Google 授權，但系統尚未設定 OAuth。請聯絡管理員。"
+
+                                    result = {"status": "success", "output": json.dumps({
+                                        "status": "auth_required",
+                                        "message": _msg,
+                                    }, ensure_ascii=False)}
+                                    # Feed auth message back to LLM as tool result
+                                    messages.append({"type": "function_call_output", "call_id": call_id, "output": json.dumps(result, ensure_ascii=False)})
+                                    logger.info(f"[Adapter] Google auth required for {fn_name}, session={session_id}")
+                                    continue
+                            except Exception as _ge:
+                                logger.debug(f"[Adapter] Google auth check skipped: {_ge}")
+
                         # Inject session context for schedule-manager skill
                         if fn_name == "mcp-schedule-manager" and session_id:
                             os.environ["SESSION_ID"] = session_id

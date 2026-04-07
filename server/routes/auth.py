@@ -63,6 +63,55 @@ async def google_login(req: GoogleLoginRequest):
         raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
 
 
+# ── Google Workspace OAuth (personal account binding) ─────────────────────
+
+@router.get("/google/workspace/login")
+def google_workspace_login(session_id: str = ""):
+    """Redirect user to Google OAuth consent screen for personal binding."""
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    try:
+        from server.services.google_auth import build_authorize_url
+        url = build_authorize_url(session_id)
+        return RedirectResponse(url=url, status_code=302)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/google/workspace/callback")
+def google_workspace_callback(code: str = "", state: str = "", error: str = ""):
+    """Google OAuth callback — exchange code for tokens, store credentials."""
+    if error:
+        raise HTTPException(status_code=401, detail=f"Google auth error: {error}")
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing code or state parameter")
+    try:
+        from server.services.google_auth import handle_callback
+        result = handle_callback(code=code, session_id=state)
+        # Return a simple success page that can be closed
+        return {
+            "status": "success",
+            "message": "Google 帳號綁定成功！你可以關閉此頁面，回到 LINE 繼續使用。",
+            "session_id": state,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Google OAuth callback failed: {str(e)}")
+
+
+@router.get("/google/workspace/status")
+def google_workspace_status(session_id: str = ""):
+    """Check if a session has Google credentials bound."""
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    from server.services.google_auth import has_credentials, has_service_account
+    return {
+        "personal_oauth": has_credentials(session_id),
+        "service_account": has_service_account(),
+    }
+
+
+# ── LINE Login ────────────────────────────────────────────────────────────
+
 @router.get("/line/login")
 def line_login():
     """Start LINE Login (web) by redirecting to LINE authorize endpoint."""
