@@ -196,7 +196,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                             from server.dependencies.session import get_session_manager
                             from server.services.runtime import get_universal_system_prompt
                             _sm = get_session_manager()
-                            _sm.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
+                            _sm.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
                             _sm.append_message(session_id, "user", f"[群組對話]{user_input}")
                         except Exception as _e:
                             logger.debug(f"[LINE] Failed to persist group bg message: {_e}")
@@ -839,8 +839,8 @@ def _handle_pending_state(
             from server.services.runtime import get_universal_system_prompt
 
             _session_mgr = get_session_manager()
-            _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
-            _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
+            _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+            _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
 
             uma = get_uma_instance()
             adapter = OpenAIAdapter(uma=uma)
@@ -947,8 +947,8 @@ def _handle_pending_state(
 
         # 2. 把工具結果餵給 LLM，讓 AI 用自然語言回覆
         _session_mgr = get_session_manager()
-        _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
-        _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
+        _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+        _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
 
         adapter = OpenAIAdapter(uma=uma)
         if not adapter.is_available:
@@ -1272,7 +1272,7 @@ def _process_line_message(
                 _session_days[session_id] = today_str
 
             # ── Phase B1: Inject Profile into system prompt ─────────────────
-            _base_system_prompt = get_universal_system_prompt(platform="line")
+            _base_system_prompt = get_universal_system_prompt(platform="line", language="自動偵測")
             try:
                 from server.services.profile_updater import ProfileUpdater
                 _profile_updater = ProfileUpdater(str(Path(os.getcwd())))
