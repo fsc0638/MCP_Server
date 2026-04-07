@@ -273,7 +273,14 @@ async def process_chat_native(req: ChatRequest):
                     # Provider-side metadata (e.g. response_id). Forward it but keep streaming.
                     yield {"data": json.dumps(chunk, ensure_ascii=False)}
                     continue
+                elif status == "tool_call":
+                    # Skill is about to execute — forward status to UI but do NOT break.
+                    # The adapter generator must keep running to execute the tool and
+                    # produce the final synthesised response.
+                    yield {"data": json.dumps(chunk, ensure_ascii=False)}
+                    # continue implicitly
                 else:
+                    # requires_approval and any other terminal status → forward and stop.
                     yield {"data": json.dumps(chunk, ensure_ascii=False)}
                     break
         except Exception as e:

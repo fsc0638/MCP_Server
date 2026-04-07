@@ -196,7 +196,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                             from server.dependencies.session import get_session_manager
                             from server.services.runtime import get_universal_system_prompt
                             _sm = get_session_manager()
-                            _sm.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
+                            _sm.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
                             _sm.append_message(session_id, "user", f"[群組對話]{user_input}")
                         except Exception as _e:
                             logger.debug(f"[LINE] Failed to persist group bg message: {_e}")
@@ -378,6 +378,30 @@ async def line_broadcast(request: Request):
     except Exception as e:
         logger.error(f"[LINE] Broadcast failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Dynamic Language Detection ────────────────────────────────────────────────
+
+def _detect_language(text: str):
+    """Lightweight language detection based on Unicode character ranges."""
+    if not text or len(text.strip()) < 2:
+        return None
+    # Japanese: Hiragana or Katakana present
+    if any('\u3040' <= c <= '\u309F' or '\u30A0' <= c <= '\u30FF' for c in text):
+        return "日本語"
+    # Vietnamese: unique diacritical characters
+    _vi_chars = set("ắằặẵẳấầậẩẫếềệểễốồộổỗứừựửữơưăđĂĐƠƯ")
+    if any(c in _vi_chars for c in text):
+        return "Tiếng Việt"
+    # Korean: Hangul syllables
+    if any('\uAC00' <= c <= '\uD7A3' for c in text):
+        return "한국어"
+    # English: mostly ASCII with spaces
+    ascii_count = sum(1 for c in text if c.isascii())
+    if ascii_count / max(len(text), 1) > 0.8 and ' ' in text:
+        return "English"
+    # Default: Traditional Chinese
+    return None  # None = don't inject, let system prompt default handle it
 
 
 # ── Session Locking & UX ──────────────────────────────────────────────────────
@@ -839,8 +863,8 @@ def _handle_pending_state(
             from server.services.runtime import get_universal_system_prompt
 
             _session_mgr = get_session_manager()
-            _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
-            _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
+            _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+            _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
 
             uma = get_uma_instance()
             adapter = OpenAIAdapter(uma=uma)
@@ -947,8 +971,8 @@ def _handle_pending_state(
 
         # 2. 把工具結果餵給 LLM，讓 AI 用自然語言回覆
         _session_mgr = get_session_manager()
-        _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
-        _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
+        _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+        _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
 
         adapter = OpenAIAdapter(uma=uma)
         if not adapter.is_available:
@@ -1272,7 +1296,7 @@ def _process_line_message(
                 _session_days[session_id] = today_str
 
             # ── Phase B1: Inject Profile into system prompt ─────────────────
-            _base_system_prompt = get_universal_system_prompt(platform="line")
+            _base_system_prompt = get_universal_system_prompt(platform="line", language="自動偵測")
             try:
                 from server.services.profile_updater import ProfileUpdater
                 _profile_updater = ProfileUpdater(str(Path(os.getcwd())))
@@ -1601,6 +1625,16 @@ def _process_line_message(
                     chat_type = "group"
                 elif session_id.startswith("line_room_"):
                     chat_type = "room"
+
+                # Dynamic language detection: inject hint so LLM responds in user's language
+                _detected_lang = _detect_language(actual_input)
+                if _detected_lang:
+                    _lang_hint = {
+                        "role": "system",
+                        "content": f"【語言切換】使用者此則訊息使用{_detected_lang}，請用{_detected_lang}回覆。"
+                    }
+                    # Insert before the last user message
+                    truncated_history.insert(-1, _lang_hint)
 
                 result_gen = adapter.chat(
                     messages=truncated_history,

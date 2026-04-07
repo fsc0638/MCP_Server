@@ -181,9 +181,38 @@ class UMA:
         if mode == "executable":
             skill_timeout = int(skill_data["metadata"].get("execution_timeout", 30)) if skill_data else 30
             workspace_dir = str(Path(self.project_root) / "workspace")
+            env_vars = {"WORKSPACE_DIR": workspace_dir, "PROJECT_ROOT": str(self.project_root)}
+
+            # Inject Google credentials for Google Workspace skills
+            if skill_name.startswith("mcp-google-"):
+                try:
+                    from server.services.google_auth import get_credentials_env, get_service_account_path
+                    _session_id = os.environ.get("SESSION_ID", "")
+                    _google_env = None
+                    # Try session-specific credentials first (personal OAuth or SA via session)
+                    if _session_id:
+                        _google_env = get_credentials_env(_session_id)
+                    # Fallback: Service Account (global, no session needed)
+                    if not _google_env:
+                        _sa_path = get_service_account_path()
+                        if _sa_path:
+                            _google_env = {
+                                "GOOGLE_CREDENTIALS_PATH": str(_sa_path),
+                                "GOOGLE_CREDENTIAL_TYPE": "service_account",
+                            }
+                    if _google_env:
+                        env_vars.update(_google_env)
+                    # Inject calendar ID for SA mode (SA sees its own empty calendar by default)
+                    _cal_id = os.environ.get("GOOGLE_CALENDAR_ID", "")
+                    if _cal_id:
+                        env_vars["GOOGLE_CALENDAR_ID"] = _cal_id
+                except Exception as _e:
+                    import logging
+                    logging.getLogger("MCP_Server.UMA").debug(f"Google cred injection skipped: {_e}")
+
             return self.executor.run_script(
                 skill_name, "main.py", arg_dict,
-                env_vars={"WORKSPACE_DIR": workspace_dir, "PROJECT_ROOT": str(self.project_root)},
+                env_vars=env_vars,
                 timeout=skill_timeout,
             )
 

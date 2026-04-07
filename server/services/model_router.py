@@ -280,8 +280,14 @@ def route_model(
         # 明確需要 web search 的新聞/時事類
         "新聞", "時事", "報導", "最新消息", "今日", "本日", "近期",
         "股市", "股價", "財經", "經濟新聞", "科技新聞",
+        # Google Workspace 相關
+        "行程", "日曆", "calendar", "會議", "meet", "空閒", "安排會議", "幾點有會",
     ]
     _needs_tools = any(kw in _input_lower for kw in _TOOL_KEYWORDS)
+
+    # Google Calendar/Meet → upgrade to full (needs calendar + possibly meet = 2 tools)
+    _CALENDAR_KEYWORDS = ["行程", "日曆", "calendar", "空閒", "安排會議", "幾點有會", "meet", "google meet", "視訊會議"]
+    _needs_calendar = any(kw in _input_lower for kw in _CALENDAR_KEYWORDS)
 
     # 搜尋/查詢 + 檔案輸出 → must be full (web-search + python-executor = 2 tools)
     _SEARCH_KEYWORDS = [
@@ -319,6 +325,11 @@ def route_model(
         logger.info(f"[Router] Upgraded {tier}→full (standalone docx/pdf export detected)")
         tier = "full"
         _force_upgraded = True
+
+    # Upgrade nano/mini → mini (at least) for Google Calendar/Meet queries
+    if tier == "nano" and _needs_calendar:
+        tier = "mini"
+        logger.info(f"[Router] Upgraded nano→mini (calendar/meet keywords detected)")
 
     model = _TIER_TO_MODEL.get(tier, get_model_mini)()
     logger.info(f"[Router] '{user_input[:40]}...' → tier={tier} → {model}")
