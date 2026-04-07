@@ -150,7 +150,21 @@ class GeminiAdapter:
 
         return all_tools
 
-    def chat(self, messages: Any = None, user_query: Optional[str] = None, user_message: Optional[str] = None, session_id: Optional[str] = None, attached_file: Optional[str] = None, temperature: float = 0.7, **kwargs) -> Dict[str, Any]:
+    def chat(
+        self,
+        messages: Any = None,
+        user_query: Optional[str] = None,
+        user_message: Optional[str] = None,
+        session_id: Optional[str] = None,
+        attached_file: Optional[str] = None,
+        temperature: float = 0.7,
+        user_id: str = "",
+        chat_type: str = "personal",
+        chat_id: str = "",
+        tier: str = "",
+        response_id: str = "",
+        **kwargs,
+    ) -> Dict[str, Any]:
         """
         Send a chat request with function calling support.
         D-09: Supports multi-turn tool calls (up to MAX_ITERATIONS).
@@ -226,15 +240,54 @@ class GeminiAdapter:
 
         tools = self.get_tools(user_query=user_query)
 
+        def _normalize_json_schema_for_gemini(schema: dict) -> dict:
+            """Gemini proto expects Schema enum types (e.g. OBJECT/STRING), not JSONSchema 'object'/'string'.
+            Also expects 'properties' to be a dict.
+            """
+            if not isinstance(schema, dict):
+                return {"type": "OBJECT"}
+            s = dict(schema)
+            t = (s.get("type") or "").upper()
+            if t in ("OBJECT", "STRING", "NUMBER", "INTEGER", "BOOLEAN", "ARRAY"):
+                pass
+            else:
+                # Common JSON Schema lowercase values
+                tl = (s.get("type") or "").lower()
+                mapping = {
+                    "object": "OBJECT",
+                    "string": "STRING",
+                    "number": "NUMBER",
+                    "integer": "INTEGER",
+                    "boolean": "BOOLEAN",
+                    "array": "ARRAY",
+                }
+                t = mapping.get(tl, "OBJECT")
+            s["type"] = t
+
+            # Ensure properties is a dict when present
+            if "properties" in s and not isinstance(s.get("properties"), dict):
+                s["properties"] = {}
+
+            # Recursively normalize properties / items
+            props = s.get("properties")
+            if isinstance(props, dict):
+                s["properties"] = {k: _normalize_json_schema_for_gemini(v) for k, v in props.items()}
+            if "items" in s and isinstance(s.get("items"), dict):
+                s["items"] = _normalize_json_schema_for_gemini(s["items"])
+
+            return s
+
         try:
             # Build Gemini tool declarations
             function_declarations = []
             for tool_def in tools:
+                params = tool_def.get("parameters", {})
+                params = _normalize_json_schema_for_gemini(params)
                 function_declarations.append(
                     genai.protos.FunctionDeclaration(
                         name=tool_def["name"],
-                        description=tool_def["description"],
-                        parameters=tool_def.get("parameters", {})
+                        description=tool_def.get("description", ""),
+                        parameters=params,
                     )
                 )
 
@@ -299,10 +352,46 @@ class GeminiAdapter:
                                     pending_calls.append((fn_name, fn_args))
 
                                     logger.info(f"Gemini detected tool: {fn_name}")
-                                    yield {"status": "streaming", "content": f"\n\n\u2699\ufe0f \u57f7\u884c\u6280\u80fd: `{fn_name}`\n"}
+                                    # Phase 3-A: Broadcast tool_call status BEFORE executing
+                                    yield {"status": "tool_call", "tool_name": fn_name, "message": f"正在執行技能：{fn_name}..."}
 
                     # 2. If no function calls, we are done
                     if not has_function_call:
+                        # Ensure stable response_id for correlation
+                        if not response_id:
+                            import time
+                            response_id = f"gemini_{session_id or 'no_session'}_{int(time.time()*1000)}"
+
+                        # Phase D1: Token Usage Tracking (Gemini)
+                        try:
+                            from server.services.token_tracker import TokenTracker
+                            from pathlib import Path as _Path
+                            _tracker = TokenTracker(str(_Path(os.getcwd())))
+                            _um = getattr(response, "usage_metadata", None)
+                            _inp = int(getattr(_um, "prompt_token_count", 0) or 0) if _um else 0
+                            _out = int(getattr(_um, "candidates_token_count", 0) or 0) if _um else 0
+                            _tot = int(getattr(_um, "total_token_count", 0) or 0) if _um else 0
+                            _tracker.record_usage(
+                                session_id=session_id or "",
+                                user_id=user_id,
+                                chat_type=chat_type,
+                                chat_id=chat_id,
+                                tier=tier,
+                                response_id=response_id,
+                                skill="(chat)",
+                                model=self.model_name,
+                                input_tokens=_inp,
+                                output_tokens=_out,
+                                total_tokens=_tot,
+                                status="success",
+                                duration_ms=0,
+                            )
+                        except Exception:
+                            pass
+
+                        # Publish correlation id for strong prompt_meta ↔ token_usage join
+                        yield {"status": "provider_meta", "provider": "gemini", "response_id": response_id}
+
                         yield {
                             "status": "success",
                             "content": full_content,
@@ -317,11 +406,21 @@ class GeminiAdapter:
 
                         # Check for approval requirement
                         if result.get("status") == "requires_approval":
+                            # Phase 3-B: Store pending approval in session for resume endpoint
+                            from server.dependencies.session import get_session_manager
+                            _session_mgr = get_session_manager()
+                            if session_id:
+                                _session_mgr.set_pending_approval(session_id, {
+                                    "tool_name": fn_name,
+                                    "args": fn_args,
+                                    "provider": "gemini",
+                                    "model": self.model,
+                                })
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
-                                "risk_description": result.get("risk_description", "High-risk operation"),
-                                "pending_args": fn_args
+                                "risk_description": result.get("risk_description", "高風險操作，需要使用者授權"),
+                                "pending_args": fn_args,
                             }
                             return
 
@@ -333,6 +432,35 @@ class GeminiAdapter:
                                 )
                             )
                         )
+
+                    # Phase D1: Token Usage Tracking (Gemini tool call)
+                    try:
+                        from server.services.token_tracker import TokenTracker
+                        from pathlib import Path as _Path
+                        _tracker = TokenTracker(str(_Path(os.getcwd())))
+                        _um = getattr(response, "usage_metadata", None)
+                        _inp = int(getattr(_um, "prompt_token_count", 0) or 0) if _um else 0
+                        _out = int(getattr(_um, "candidates_token_count", 0) or 0) if _um else 0
+                        _tot = int(getattr(_um, "total_token_count", 0) or 0) if _um else 0
+                        # Record one line per tool
+                        for fn_name, _fn_args in pending_calls:
+                            _tracker.record_usage(
+                                session_id=session_id or "",
+                                user_id=user_id,
+                                chat_type=chat_type,
+                                chat_id=chat_id,
+                                tier=tier,
+                                response_id=response_id,
+                                skill=fn_name,
+                                model=self.model_name,
+                                input_tokens=_inp,
+                                output_tokens=_out,
+                                total_tokens=_tot,
+                                status="success",
+                                duration_ms=0,
+                            )
+                    except Exception:
+                        pass
 
                     # 4. Send all results back in one go
                     response = chat.send_message(

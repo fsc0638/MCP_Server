@@ -14,6 +14,7 @@ from server.core.retriever import retriever
 from server.adapters.openai_adapter import OpenAIAdapter
 from server.dependencies.session import get_session_manager
 from server.schemas.chat import ChatRequest
+from main import PROJECT_ROOT
 
 logger = logging.getLogger("MCP_Server.ChatCore")
 
@@ -55,6 +56,11 @@ async def process_chat_native(req: ChatRequest):
     
     session_mgr = get_session_manager()
     session_id = req.session_id or "default"
+    try:
+        from server.services.id_utils import validate_session_id
+        session_id = validate_session_id(session_id)
+    except Exception:
+        session_id = "default"
     
     # Use dynamic universal prompt to align with LINE bot behavior (time awareness, etc.)
     logger.info(f"Chat Request: [Model: {req.model}] [Lang: {req.language}] [Detail: {req.detail_level}]")
@@ -69,6 +75,29 @@ async def process_chat_native(req: ChatRequest):
     # Force update system prompt to ensure latest time, language and style are injected
     session_mgr._update_system_prompt(session_id, dynamic_prompt)
     user_content = req.user_input
+
+    # Phase 1(A2): Build a token-budgeted outbound prompt (PromptBuilder)
+    # - behavior rules are already appended inside dynamic_prompt (Phase 2-A)
+    # - session summary + retrieved memory are injected as optional context blocks
+    session_summary = ""
+    try:
+        from server.services.id_utils import is_anonymous_web_session_id
+        if not is_anonymous_web_session_id(session_id):
+            from server.services.session_summarizer import SessionSummarizer, render_session_summary_injection
+            ssum = SessionSummarizer(PROJECT_ROOT).maybe_update(session_id, min_new_messages=6)
+            session_summary = render_session_summary_injection(ssum, max_chars=900)
+    except Exception:
+        pass
+
+    retrieved_memory = ""
+    try:
+        from server.services.memory_retriever import MemoryRetriever, render_memory_injection
+        from server.services.behavior_rule_loader import load_behavior_rule_texts
+        br_texts = load_behavior_rule_texts(PROJECT_ROOT, max_each=8)
+        mem_items = MemoryRetriever(PROJECT_ROOT).retrieve(req.user_input, max_items=8)
+        retrieved_memory = render_memory_injection(mem_items, max_chars=800, exclude_texts=br_texts)
+    except Exception:
+        pass
 
     # Optional document context injection
     if req.selected_docs is not None:
@@ -93,17 +122,65 @@ async def process_chat_native(req: ChatRequest):
     if req.language and req.language != "自動偵測":
         user_content += f"\n\n(System Note: Respond strictly in {req.language}. If input is in another language, translate your answer.)"
 
-    raw_outbound = history + [{"role": "user", "content": user_content}]
-    
-    # Sanitize history for API compatibility
-    outbound_history = []
-    for m in raw_outbound:
-        clean_msg = {k: v for k, v in m.items() if k != "created_at"}
-        outbound_history.append(clean_msg)
+    # Use PromptBuilder to trim history/context to a fixed token budget
+    try:
+        from server.services.prompt_builder import Budget, PromptParts, build_prompt_messages
+        from server.services.budget_profiles import get_budget_for_model
+
+        sanitized_history = [{k: v for k, v in m.items() if k != "created_at"} for m in history]
+        bp = get_budget_for_model(req.model, platform="web")
+
+        outbound_history, prompt_meta = build_prompt_messages(
+            model=req.model or "gpt-4o-mini",
+            budget=Budget(max_input_tokens=bp.max_input_tokens, reserve_output_tokens=bp.reserve_output_tokens),
+            parts=PromptParts(
+                system=dynamic_prompt,
+                behavior_rules_appendix="",  # already in dynamic_prompt
+                session_summary=session_summary,
+                retrieved_memory=retrieved_memory,
+                history=sanitized_history,
+                user=user_content,
+            ),
+        )
+
+        # Phase 1b: reduce log noise; verbose meta behind env toggle
+        import os
+        if os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+            logger.info(f"[PromptBuilder] meta={prompt_meta}")
+            try:
+                from server.services.prompt_meta_logger import append_prompt_meta
+                # Strong correlation id: prefer session metadata last_response_id
+                try:
+                    from server.dependencies.session import get_session_manager as _get_session_manager
+                    _sm = _get_session_manager()
+                    correlation_id = _sm.get_metadata(session_id, "last_response_id") or ""
+                except Exception:
+                    correlation_id = ""
+                if not correlation_id:
+                    correlation_id = prompt_meta.get("provider", {}).get("response_id", "")
+                append_prompt_meta(PROJECT_ROOT, session_id, prompt_meta, correlation_id=correlation_id)
+            except Exception:
+                pass
+        else:
+            slim = {
+                "final_total_tokens": prompt_meta.get("included", {}).get("final_total_tokens"),
+                "history_messages": prompt_meta.get("included", {}).get("history_messages"),
+                "trimmed": prompt_meta.get("trimmed", {}),
+            }
+            logger.info(f"[PromptBuilder] {slim}")
+    except Exception as pb_err:
+        logger.warning(f"[PromptBuilder] Fallback to raw history: {pb_err}")
+        raw_outbound = history + [{"role": "user", "content": user_content}]
+        outbound_history = []
+        for m in raw_outbound:
+            clean_msg = {k: v for k, v in m.items() if k != "created_at"}
+            outbound_history.append(clean_msg)
 
     async def event_generator() -> AsyncGenerator[dict, None]:
         session_mgr.append_message(session_id, "user", req.user_input)
         final_content = ""
+        saw_success = False
+        last_status = None
 
         try:
             # Unify all chat paths to the robust adapter.chat which handles instructions, tools and vision
@@ -118,23 +195,96 @@ async def process_chat_native(req: ChatRequest):
 
             for chunk in chunk_iter:
                 status = chunk.get("status")
+                last_status = status
                 if status == "streaming":
                     text = chunk.get("content", "")
                     final_content += text
                     yield {"data": json.dumps({"status": "streaming", "content": text}, ensure_ascii=False)}
                 elif status == "success":
+                    saw_success = True
                     final = chunk.get("content", final_content)
                     if not final:
                         final = final_content
                     session_mgr.append_message(session_id, "assistant", final)
+
+                    # Bridge sync: Web → LINE push (user input + assistant reply)
+                    logger.info(f"[Bridge] Enter success branch for session={session_id}")
+                    try:
+                        from server.services.bridge_sync import (
+                            get_bridge_state,
+                            make_bridge_tag,
+                            session_target_from_session_id,
+                            should_sync_session,
+                        )
+                        from main import PROJECT_ROOT
+
+                        sync_ok = should_sync_session(session_id)
+                        logger.info(f"[Bridge] should_sync_session={sync_ok} session={session_id}")
+
+                        if sync_ok:
+                            st = get_bridge_state(PROJECT_ROOT)
+                            if not st.throttle_ok(session_id, cooldown_seconds=5):
+                                logger.info(f"[Bridge] Throttled for session={session_id}")
+                            else:
+                                kind, native_id = session_target_from_session_id(session_id)
+                                logger.info(f"[Bridge] Sync attempt kind={kind} native_id={native_id} session={session_id}")
+
+                                # Group gating: only if known and active within 10 minutes
+                                if kind == "group":
+                                    if not st.group_can_push(native_id, active_window_seconds=600):
+                                        logger.info(f"[Bridge] Skip group push (not active/known): group_id={native_id}")
+                                        kind = "other"
+                                if kind == "room":
+                                    if not st.group_can_push(native_id, active_window_seconds=600):
+                                        logger.info(f"[Bridge] Skip room push (not active/known): room_id={native_id}")
+                                        kind = "other"
+
+                                if kind in ("user", "group", "room"):
+                                    from server.integrations.line_connector import _get_line_components
+                                    from linebot.v3.messaging import TextMessage, PushMessageRequest
+
+                                    _, line_api, _ = _get_line_components()
+                                    if not line_api:
+                                        logger.warning("[Bridge] LINE API not available; cannot push")
+                                    else:
+                                        from server.services.bridge_sync import make_web_bridge_tag
+                                        tag1 = make_web_bridge_tag(session_id, req.user_input)
+                                        tag2 = make_web_bridge_tag(session_id, final)
+                                        msg_user = f"【Web】你：{req.user_input}\n\n{tag1}"
+                                        msg_ai = f"【Web】AI：{final}\n\n{tag2}"
+
+                                        to = native_id
+                                        try:
+                                            line_api.push_message(PushMessageRequest(to=to, messages=[TextMessage(text=msg_user[:5000])]))
+                                            line_api.push_message(PushMessageRequest(to=to, messages=[TextMessage(text=msg_ai[:5000])]))
+                                            logger.info(f"[Bridge] Pushed 2 messages → kind={kind} to={to}")
+                                        except Exception as e:
+                                            logger.error(f"[Bridge] Push failed → kind={kind} to={to}: {e}")
+                                            if kind in ("group", "room"):
+                                                st.set_group_push_capable(native_id, False)
+                                else:
+                                    logger.info(f"[Bridge] Skip push (kind={kind}) for session={session_id}")
+                    except Exception as e:
+                        logger.exception(f"[Bridge] unexpected error: {e}")
+
                     yield {"data": json.dumps({"status": "success", "content": final}, ensure_ascii=False)}
                     break
+                elif status == "provider_meta":
+                    # Provider-side metadata (e.g. response_id). Forward it but keep streaming.
+                    yield {"data": json.dumps(chunk, ensure_ascii=False)}
+                    continue
                 else:
                     yield {"data": json.dumps(chunk, ensure_ascii=False)}
                     break
         except Exception as e:
             logger.error(f"Chat stream error ({provider}): {e}")
             yield {"data": json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)}
+        finally:
+            if not saw_success:
+                logger.warning(
+                    f"[ChatCore] Stream ended without success: session={session_id} last_status={last_status} "
+                    f"final_len={len(final_content)} provider={provider} model={req.model}"
+                )
 
     return EventSourceResponse(event_generator())
 

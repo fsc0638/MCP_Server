@@ -101,8 +101,20 @@ class ClaudeAdapter:
             logger.error(f"Failed to read image for Claude Vision: {e}")
             return None
 
-    def chat(self, messages: Any = None, user_query: Optional[str] = None,
-             user_message: Optional[str] = None, system_prompt: str = "", **kwargs) -> Dict[str, Any]:
+    def chat(
+        self,
+        messages: Any = None,
+        user_query: Optional[str] = None,
+        user_message: Optional[str] = None,
+        system_prompt: str = "",
+        session_id: str = "",
+        user_id: str = "",
+        chat_type: str = "personal",
+        chat_id: str = "",
+        tier: str = "",
+        response_id: str = "",
+        **kwargs,
+    ) -> Dict[str, Any]:
         """
         Send a message to Claude with tool use support.
         D-10: Supports multi-turn tool calls (up to MAX_ITERATIONS).
@@ -146,6 +158,10 @@ class ClaudeAdapter:
                 "You are a high-performance Autonomous AI Agent. \u8acb\u4f7f\u7528\u7e41\u9ad4\u4e2d\u6587\u56de\u8986\u3002\n"
                 "\u8acb\u5118\u91cf\u7c21\u6f54\u4e14\u7d50\u69cb\u6e05\u6670\u5730\u56de\u7b54\uff0c\u4e26\u512a\u5148\u4f7f\u7528\u5df2\u8f09\u5165\u7684\u6280\u80fd\u3002"
             )
+
+        # session_id may be passed explicitly (unified adapter interface)
+        if not session_id:
+            session_id = kwargs.get("session_id", "")
 
         # Multimodal Vision (NotebookLM Style)
         attached_file = kwargs.get("attached_file")
@@ -271,15 +287,53 @@ class ClaudeAdapter:
                         })
 
                         logger.info(f"Claude tool call: {fn_name}({fn_args})")
-                        yield {"status": "streaming", "content": f"\n\n\u2699\ufe0f \u57f7\u884c\u6280\u80fd: `{fn_name}`\n"}
+                        # Phase 3-A: Broadcast tool_call status BEFORE executing
+                        yield {"status": "tool_call", "tool_name": fn_name, "message": f"正在執行技能：{fn_name}..."}
                         result = self.uma.execute_tool_call(fn_name, fn_args)
 
+                        # Phase D1: Token Usage Tracking (Claude tool call)
+                        try:
+                            from server.services.token_tracker import TokenTracker
+                            from pathlib import Path as _Path
+                            _tracker = TokenTracker(str(_Path(os.getcwd())))
+                            _usage = getattr(response, "usage", None)
+                            _inp = int(getattr(_usage, "input_tokens", 0) or 0) if _usage else 0
+                            _out = int(getattr(_usage, "output_tokens", 0) or 0) if _usage else 0
+                            _tracker.record_usage(
+                                session_id=session_id or "",
+                                user_id=user_id,
+                                chat_type=chat_type,
+                                chat_id=chat_id,
+                                tier=tier,
+                                response_id=response_id or getattr(response, "id", "") or "",
+                                skill=fn_name,
+                                model=self.model,
+                                input_tokens=_inp,
+                                output_tokens=_out,
+                                total_tokens=_inp + _out,
+                                status=result.get("status", "unknown") if isinstance(result, dict) else "unknown",
+                                duration_ms=0,
+                            )
+                        except Exception:
+                            pass
+
                         if result.get("status") == "requires_approval":
+                            # Phase 3-B: Store pending approval in session for resume endpoint
+                            from server.dependencies.session import get_session_manager
+                            _session_mgr = get_session_manager()
+                            if session_id:
+                                _session_mgr.set_pending_approval(session_id, {
+                                    "tool_name": fn_name,
+                                    "call_id": tc["id"],
+                                    "args": fn_args,
+                                    "provider": "claude",
+                                    "model": self.model,
+                                })
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
-                                "risk_description": result.get("risk_description", "High-risk operation detected"),
-                                "pending_args": fn_args
+                                "risk_description": result.get("risk_description", "高風險操作，需要使用者授權"),
+                                "pending_args": fn_args,
                             }
                             return
 
@@ -294,6 +348,34 @@ class ClaudeAdapter:
                     claude_messages.append({"role": "assistant", "content": content_to_append})
                     claude_messages.append({"role": "user", "content": tool_results})
                 else:
+                    # Phase D1: Token Usage Tracking (Claude)
+                    try:
+                        from server.services.token_tracker import TokenTracker
+                        from pathlib import Path as _Path
+                        _tracker = TokenTracker(str(_Path(os.getcwd())))
+                        _usage = getattr(response, "usage", None)
+                        _inp = int(getattr(_usage, "input_tokens", 0) or 0) if _usage else 0
+                        _out = int(getattr(_usage, "output_tokens", 0) or 0) if _usage else 0
+                        _tracker.record_usage(
+                            session_id=session_id or "",
+                            user_id=user_id,
+                            chat_type=chat_type,
+                            chat_id=chat_id,
+                            tier=tier,
+                            response_id=response_id or getattr(response, "id", "") or "",
+                            skill="(chat)",
+                            model=self.model,
+                            input_tokens=_inp,
+                            output_tokens=_out,
+                            total_tokens=_inp + _out,
+                            status="success",
+                            duration_ms=0,
+                        )
+                    except Exception:
+                        pass
+
+                    # Publish provider correlation id for strong prompt_meta ↔ token_usage join
+                    yield {"status": "provider_meta", "provider": "claude", "response_id": getattr(response, "id", "")}
                     yield {
                         "status": "success",
                         "content": full_content,

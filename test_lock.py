@@ -1,6 +1,9 @@
+import pytest
 import threading
 from contextlib import contextmanager
 import time
+
+pytestmark = pytest.mark.integration
 
 _local_locks = {}
 _local_lock_mutex = threading.Lock()

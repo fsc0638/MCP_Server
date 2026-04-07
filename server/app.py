@@ -73,6 +73,30 @@ def _scheduled_cache_cleanup():
         logger.error(f"[Scheduler] Cache cleanup failed: {e}")
 
 
+def _scheduled_line_uploads_cleanup():
+    """Scheduled job: delete LINE uploads older than 168 hours (daily 00:05)."""
+    import time
+    from pathlib import Path
+    uploads_root = PROJECT_ROOT / "Agent_workspace" / "line_uploads"
+    if not uploads_root.exists():
+        return
+    cutoff = time.time() - 168 * 3600
+    deleted_files = 0
+    try:
+        for f in uploads_root.rglob("*"):
+            if f.is_file() and f.stat().st_mtime < cutoff:
+                f.unlink()
+                deleted_files += 1
+        # Remove empty subdirectories (chat_id folders)
+        for d in sorted(uploads_root.iterdir(), reverse=True):
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        if deleted_files:
+            logger.info(f"[Scheduler] LINE uploads cleanup: removed {deleted_files} file(s) older than 168h")
+    except Exception as e:
+        logger.error(f"[Scheduler] LINE uploads cleanup failed: {e}")
+
+
 def _scheduled_push_tick():
     """Scheduled job: check and execute due push tasks (every minute)."""
     try:
@@ -105,6 +129,30 @@ def _scheduled_push_tick():
         )
     except Exception as e:
         logger.error(f"[Scheduler] Scheduled push tick failed: {e}")
+
+
+def _scheduled_continuous_learner_tick():
+    """Phase 3 scheduled job: continuous learner tick (every 10 minutes)."""
+    try:
+        from server.services.continuous_learner import ContinuousLearner
+        from server.services.learning_compactor import LearningCompactor
+
+        learner = ContinuousLearner(str(PROJECT_ROOT))
+        llm_fn = make_llm_callable()
+        learner.tick(llm_callable=llm_fn)
+
+        # Step 3: compact/mix raw learnings into a structured snapshot
+        LearningCompactor(PROJECT_ROOT).write_snapshot()
+
+        # Step 3b: derive actionable behavior rules (deterministic)
+        from server.services.behavior_rule_extractor import BehaviorRuleExtractor
+        BehaviorRuleExtractor(PROJECT_ROOT).write()
+
+        # Phase 2-B: update structured memory store (short/long term)
+        from server.services.memory_store_updater import update_memory_store
+        update_memory_store(PROJECT_ROOT)
+    except Exception as e:
+        logger.error(f"[Scheduler] Continuous learner tick failed: {e}")
 
 
 def _setup_scheduler():
@@ -143,6 +191,15 @@ def _setup_scheduler():
             replace_existing=True,
         )
 
+        # LINE uploads cleanup — 00:05 daily (168h TTL)
+        __scheduler.add_job(
+            _scheduled_line_uploads_cleanup,
+            CronTrigger(hour=0, minute=5),
+            id="line_uploads_cleanup",
+            name="LINE Uploads Cleanup (168h TTL)",
+            replace_existing=True,
+        )
+
         # Scheduled Push: check every minute for due tasks
         from apscheduler.triggers.interval import IntervalTrigger
         __scheduler.add_job(
@@ -153,8 +210,17 @@ def _setup_scheduler():
             replace_existing=True,
         )
 
+        # Phase 3: Continuous learner tick — every 10 minutes
+        __scheduler.add_job(
+            _scheduled_continuous_learner_tick,
+            IntervalTrigger(minutes=10),
+            id="continuous_learner_tick",
+            name="Continuous Learner Tick",
+            replace_existing=True,
+        )
+
         __scheduler.start()
-        logger.info("[Scheduler] APScheduler started with 4 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), push_tick(1min)")
+        logger.info("[Scheduler] APScheduler started with 6 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), line_uploads_cleanup(00:05), push_tick(1min), continuous_learner(10min)")
 
     except ImportError:
         logger.warning(

@@ -15,6 +15,7 @@ Content types:
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -30,8 +31,23 @@ def _parse_simple_cron(cron_str: str) -> dict:
     Parse simple cron: '08:30' or '每天 08:30' → {"hour": 8, "minute": 30}
     Also supports: 'weekday 09:00' → {"day_of_week": "mon-fri", "hour": 9, "minute": 0}
     Full cron: '0 8 * * 1-5' → parsed as minute hour day month day_of_week
+    Interval: 'every +10m' or '*/10 * * * *' → {"interval_minutes": 10}
     """
+    import re as _re
     cron_str = cron_str.strip()
+
+    # Interval: 'every +10m' / 'every 10m' / 'every 10 min'
+    _iv = _re.search(r'every\s*\+?(\d+)\s*(?:m|min)', cron_str)
+    if _iv:
+        return {"interval_minutes": int(_iv.group(1))}
+
+    # Full cron with interval in minute field: '*/10 * * * *'
+    _parts = cron_str.split()
+    if len(_parts) == 5 and _parts[0].startswith("*/"):
+        try:
+            return {"interval_minutes": int(_parts[0][2:])}
+        except ValueError:
+            pass
 
     # Format: HH:MM
     if ":" in cron_str and len(cron_str.split()) <= 2:
@@ -70,6 +86,7 @@ class ScheduledPushService:
         self.project_root = Path(project_root).resolve()
         self.schedules_dir = self.project_root / "workspace" / "schedules"
         self.schedules_dir.mkdir(parents=True, exist_ok=True)
+        self._adapter_cache = None  # Lazy-init, reused across scheduled ticks
 
     # ─── Config CRUD ─────────────────────────────────────────────────────────
 
@@ -98,10 +115,40 @@ class ScheduledPushService:
         cron_str: str,
         config: dict = None,
     ) -> dict:
-        """Add a scheduled task. Returns the created task dict."""
+        """Add a scheduled task. Detects duplicates and updates instead of creating a new one."""
         cfg = self.load_config(session_id)
         cfg["chat_id"] = chat_id
         cfg["session_id"] = session_id
+
+        config = config or {}
+
+        # ── Duplicate detection: same cron + same type → update existing ──
+        for existing in cfg["tasks"]:
+            if not existing.get("enabled", True):
+                continue
+            if existing["cron"] != cron_str or existing["type"] != task_type:
+                continue
+            ec = existing.get("config", {})
+            is_dup = False
+            if task_type == "language":
+                is_dup = (ec.get("language") == config.get("language")
+                          and ec.get("content_type") == config.get("content_type"))
+            elif task_type == "news":
+                is_dup = True  # same cron + same type = same news schedule
+            elif task_type == "work_summary":
+                is_dup = True
+            elif task_type in ("custom", "pipeline"):
+                is_dup = (ec.get("original_request") == config.get("original_request"))
+            elif task_type == "reminder":
+                is_dup = (ec.get("message") == config.get("message"))
+
+            if is_dup:
+                # Update existing task instead of creating duplicate
+                existing["config"].update(config)
+                existing["name"] = name
+                self.save_config(session_id, cfg)
+                logger.info(f"[ScheduledPush] Updated existing task '{name}' ({existing['id']}) instead of creating duplicate")
+                return existing
 
         task = {
             "id": f"task_{uuid.uuid4().hex[:8]}",
@@ -109,7 +156,7 @@ class ScheduledPushService:
             "name": name,
             "cron": cron_str,
             "cron_parsed": _parse_simple_cron(cron_str),
-            "config": config or {},
+            "config": config,
             "enabled": True,
             "created_at": datetime.now().isoformat(),
             "last_run": None,
@@ -252,26 +299,60 @@ class ScheduledPushService:
 
         return "📋 工作摘要功能需要 LLM 支援。"
 
+    # Languages that use JLPT-style N-level grading
+    _JLPT_LEVEL_LANGS = {"日文"}
+
+    def _language_vocab_format(self, language: str) -> str:
+        """Return appropriate vocabulary display format for the given language."""
+        if language in self._JLPT_LEVEL_LANGS:
+            return "原文（假名）\n發音（羅馬拼音）\n中文意思\n例句（附中文翻譯）"
+        return "原文\n發音（音標）\n中文意思\n例句（附中文翻譯）"
+
+    def _language_level_phrase(self, language: str, level: str) -> str:
+        """Return level phrase for prompt, or empty string if not applicable."""
+        if language in self._JLPT_LEVEL_LANGS and level:
+            return f"{level}程度的"
+        if level:
+            return f"{level}程度的"
+        return ""
+
     def _generate_language(self, task: dict, llm_callable=None) -> str:
-        """Generate language vocabulary learning content."""
+        """Generate language vocabulary/grammar learning content (fallback path)."""
         config = task.get("config", {})
         language = config.get("language", "日文")
-        level = config.get("level", "N3")
+        _default_level = "N3" if language in self._JLPT_LEVEL_LANGS else ""
+        level = config.get("level", _default_level)
         count = config.get("count", 5)
-        topic = config.get("topic", "商務")
+        content_type = config.get("content_type", "vocabulary")
+        current_category = config.get("current_category", config.get("topic", ""))
+        used_items = config.get("used_items", [])
+        exclusion = (
+            f"🚫 以下批次已推送過，本次必須涵蓋完全不同的內容：\n"
+            f"{chr(10).join(used_items[-20:])}\n\n"
+        ) if used_items else ""
+        focus = f"本次聚焦主題：【{current_category}】\n" if current_category else ""
+        level_phrase = self._language_level_phrase(language, level)
 
         if llm_callable:
-            prompt = (
-                f"你是一位{language}教師。請提供 {count} 個{level}程度的{topic}相關詞彙教學。\n"
-                f"格式要求（用繁體中文解釋）：\n"
-                f"📖 **每日{language}學習**\n\n"
-                f"每個詞彙包含：\n"
-                f"1️⃣ 詞彙（原文）\n"
-                f"   發音 / 羅馬拼音\n"
-                f"   中文意思\n"
-                f"   例句（附中文翻譯）\n\n"
-                f"最後附一個小測驗，讓使用者回覆答案。"
-            )
+            if content_type == "grammar":
+                prompt = (
+                    f"{exclusion}你是一位{language}教師。請提供「恰好 {count} 個」{level_phrase}【文法句型】教學。\n"
+                    f"{focus}"
+                    f"每個文法格式：句型 / 意思 / 使用情況 / 例句1（附翻譯）/ 例句2（附翻譯）。\n"
+                    f"⚠️ 輸出恰好 {count} 個文法句型，不多不少。\n"
+                    f"🚫 本任務僅限文法句型。嚴禁輸出單字/詞彙表。\n"
+                    f"最後出一道小測驗。用繁體中文說明。"
+                )
+            else:
+                vocab_fmt = self._language_vocab_format(language)
+                prompt = (
+                    f"{exclusion}你是一位{language}教師。請提供「恰好 {count} 個」{level_phrase}【詞彙/單字】教學。\n"
+                    f"{focus}"
+                    f"每個詞彙格式：\n{vocab_fmt}\n\n"
+                    f"⚠️ 輸出恰好 {count} 個詞彙，不多不少。\n"
+                    f"🚫 本任務僅限詞彙/單字。嚴禁輸出文法句型。\n"
+                    f"最後出一道小測驗。用繁體中文。"
+                )
             try:
                 return llm_callable(prompt)
             except Exception as e:
@@ -279,6 +360,55 @@ class ScheduledPushService:
                 return f"📖 今日{language}學習內容生成失敗，請稍後重試。"
 
         return f"📖 {language}學習功能需要 LLM 支援。"
+
+    def _init_language_categories(self, original_request: str, llm_callable) -> list:
+        """
+        One-time LLM call to generate a rotation category list for this task.
+        Fully generic — works for any language, content type, or level.
+        """
+        prompt = (
+            f"根據以下學習需求，列出 24 個具體且不重複的子主題或分類，"
+            f"讓每次推送都能涵蓋不同面向、避免內容重複。\n"
+            f"需求：{original_request}\n\n"
+            f"只輸出一個 JSON 陣列，例如：[\"主題1\", \"主題2\", ...]，不要任何說明或額外文字。"
+        )
+        try:
+            result = llm_callable(prompt)
+            match = re.search(r'\[.*?\]', result, re.DOTALL)
+            if match:
+                categories = json.loads(match.group())
+                if isinstance(categories, list) and len(categories) >= 3:
+                    logger.info(f"[ScheduledPush] Generated {len(categories)} rotation categories")
+                    return categories
+        except Exception as e:
+            logger.warning(f"[ScheduledPush] Category init failed: {e}")
+        return []
+
+    def _update_language_history(self, task: dict, session_id: str, current_category: str):
+        """
+        After each push, record which category was covered and advance the rotation index.
+        Format-agnostic — does not parse LLM output content.
+        """
+        config_path = self._config_path(session_id)
+        if not config_path.exists():
+            return
+        try:
+            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            for t in cfg.get("tasks", []):
+                if t["id"] == task["id"]:
+                    tc = t.get("config", {})
+                    # Advance rotation index
+                    tc["category_index"] = tc.get("category_index", 0) + 1
+                    # Append batch summary (format-agnostic)
+                    batch_num = tc["category_index"]
+                    used_items = tc.get("used_items", [])
+                    used_items.append(f"第{batch_num}批（{current_category}）")
+                    tc["used_items"] = used_items[-40:]  # keep last 40 batches
+                    break
+            config_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info(f"[ScheduledPush] History updated for {task['id']}: category={current_category}")
+        except Exception as e:
+            logger.warning(f"[ScheduledPush] Failed to update language history: {e}")
 
     def _generate_custom(self, task: dict, llm_callable=None) -> str:
         """Generate content from custom prompt."""
@@ -466,6 +596,74 @@ class ScheduledPushService:
                 # Merge: keep original_request, overlay inferred fields
                 config = {**config, **inferred}
 
+        # ── Auto-fill missing language fields from original_request ──
+        if task_type == "language" and original_request:
+            needs_fill = (
+                not config.get("count") or not config.get("level")
+                or not config.get("language") or not config.get("content_type")
+            )
+            if needs_fill:
+                filled = {}
+                if not config.get("count"):
+                    _cm = re.search(r'(\d+)\s*[個條]', original_request)
+                    filled["count"] = int(_cm.group(1)) if _cm else 5
+                if not config.get("level"):
+                    _lm = re.search(r'N([1-5])', original_request)
+                    _lang_for_level = config.get("language", "") or filled.get("language", "")
+                    if _lm:
+                        filled["level"] = f"N{_lm.group(1)}"
+                    elif _lang_for_level in self._JLPT_LEVEL_LANGS:
+                        filled["level"] = "N3"
+                    else:
+                        filled["level"] = ""  # Non-Japanese: no default level
+                if not config.get("language"):
+                    for _lang, _kws in [
+                        ("日文", ["日文", "日語", "日本語"]),
+                        ("英文", ["英文", "英語"]),
+                        ("韓文", ["韓文", "韓語"]),
+                        ("義大利文", ["義大利"]),
+                        ("法文", ["法文", "法語"]),
+                        ("西班牙文", ["西班牙"]),
+                    ]:
+                        if any(kw in original_request for kw in _kws):
+                            filled["language"] = _lang
+                            break
+                if not config.get("content_type"):
+                    _grammar_kws = ["文法", "語法", "句型", "表達方式", "grammar"]
+                    filled["content_type"] = "grammar" if any(kw in original_request for kw in _grammar_kws) else "vocabulary"
+                if filled:
+                    config = {**config, **filled}
+                    logger.info(f"[ScheduledPush] Auto-filled language fields: {filled}")
+
+        # ── Language: category rotation init + inject ──
+        current_category = None
+        if task_type == "language":
+            # Step 1: Initialize category list on first push (one-time LLM call)
+            if not config.get("categories") and llm_callable:
+                categories = self._init_language_categories(original_request or str(config), llm_callable)
+                if categories:
+                    config = {**config, "categories": categories, "category_index": 0}
+                    # Persist immediately so other ticks don't re-init
+                    config_path = self._config_path(session_id)
+                    if config_path.exists():
+                        try:
+                            cfg = json.loads(config_path.read_text(encoding="utf-8"))
+                            for t in cfg.get("tasks", []):
+                                if t["id"] == task["id"]:
+                                    t["config"]["categories"] = categories
+                                    t["config"]["category_index"] = 0
+                                    break
+                            config_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+                        except Exception:
+                            pass
+
+            # Step 2: Pick current category from rotation
+            categories = config.get("categories", [])
+            if categories:
+                idx = config.get("category_index", 0)
+                current_category = categories[idx % len(categories)]
+                config = {**config, "current_category": current_category}
+
         # Build task-specific prompt for the full adapter pipeline
         prompt = self._build_task_prompt(task_type, config, today)
 
@@ -490,6 +688,8 @@ class ScheduledPushService:
         try:
             result = self._run_via_adapter(prompt, session_id, needs_file=needs_file)
             if result:
+                if task_type == "language":
+                    self._update_language_history(task, session_id, current_category or "通用")
                 return result
         except Exception as e:
             logger.warning(f"[ScheduledPush] Adapter pipeline failed, falling back: {e}")
@@ -569,11 +769,14 @@ class ScheduledPushService:
                 prompt += f"額外要求：{extra}\n"
             if needs_pdf:
                 prompt += (
-                    f"\n搜尋並整理完全部 {count} 則後，立刻用 mcp-python-executor 一次性生成一個 PDF（禁止分批）。\n"
+                    f"\n⚠️ 本次任務必須在單一回覆中完成全部步驟，禁止分段輸出：\n"
+                    f"1. 搜尋（mcp-web-search，至少 {level['search_rounds']} 次不同關鍵字）\n"
+                    f"2. 整理（在記憶中彙整全部 {count} 則，不要先輸出文字摘要）\n"
+                    f"3. 生成 PDF（mcp-python-executor，用 ChinesePDF，一次呼叫寫入全部 {count} 則）\n"
+                    f"4. 回覆下載連結（https://... 開頭，禁止 Markdown 語法）\n"
+                    f"禁止在步驟 3 完成前輸出任何文字結果 — 所有內容直接寫入 PDF。\n"
                     f"PDF 每則必須包含完整標題、完整摘要（{level['sentences']}）、來源與 URL。\n"
                     f"路徑與 import 方式請參考 system prompt 中的 PDF 範例（ChinesePDF，不傳路徑給 constructor）。\n"
-                    f"用列表存所有 {count} 則，迴圈寫入 PDF，一次呼叫完成，勿分批。\n"
-                    f"生成後在最終回覆附上完整下載連結（https://...開頭，禁止 Markdown 語法）。\n"
                 )
             prompt += (
                 f"\n品質要求：繁體中文，恰好 {count} 則（不足需繼續搜尋補齊），每則摘要達到 {level['sentences']}，URL 必須真實存在。"
@@ -589,20 +792,67 @@ class ScheduledPushService:
             )
         elif task_type == "language":
             lang = config.get("language", "日文")
-            level = config.get("level", "N3")
+            _default_level = "N3" if lang in self._JLPT_LEVEL_LANGS else ""
+            level = config.get("level", _default_level)
             count = config.get("count", 5)
-            topic = config.get("topic", "商務")
-            return (
-                f"你是一位{lang}教師。請提供 {count} 個{level}程度的{topic}相關詞彙教學。\n"
-                f"每個詞彙含：原文、發音、中文意思、例句（附翻譯）。\n"
-                f"最後出一道小測驗。用繁體中文。"
-            )
+            topic = config.get("topic", "")
+            content_type = config.get("content_type", "vocabulary")
+            current_category = config.get("current_category", "")
+            used_items = config.get("used_items", [])
+            level_phrase = self._language_level_phrase(lang, level)
+            # A: used_items exclusion (format-agnostic batch history)
+            exclusion = (
+                f"🚫 以下批次已推送過，本次必須涵蓋完全不同的內容，嚴禁重複：\n"
+                f"{chr(10).join(used_items[-20:])}\n\n"
+            ) if used_items else ""
+            # B: category rotation — current focus topic
+            focus = f"本次聚焦主題：【{current_category}】\n" if current_category else (f"本次主題：「{topic}」\n" if topic else "")
+            if content_type == "grammar":
+                return (
+                    f"{exclusion}"
+                    f"你是一位{lang}教師。請提供「恰好 {count} 個」{level_phrase}【文法句型】教學。\n"
+                    f"{focus}"
+                    f"每個文法格式：\n"
+                    f"句型：〜（文法型）\n意思：（中文說明）\n使用情況：（何時使用）\n"
+                    f"例句1：（{lang}例句）\n翻譯：（中文翻譯）\n"
+                    f"例句2：（{lang}例句）\n翻譯：（中文翻譯）\n\n"
+                    f"⚠️ 輸出恰好 {count} 個文法句型，不多不少。\n"
+                    f"🚫 本任務僅限文法句型。嚴禁輸出單字/詞彙表 — 單字由另一個獨立排程負責。\n"
+                    f"最後出一道小測驗。用繁體中文說明。"
+                )
+            else:
+                vocab_fmt = self._language_vocab_format(lang)
+                return (
+                    f"{exclusion}"
+                    f"你是一位{lang}教師。請提供「恰好 {count} 個」{level_phrase}【詞彙/單字】教學。\n"
+                    f"{focus}"
+                    f"每個詞彙格式：\n"
+                    f"{vocab_fmt}\n\n"
+                    f"⚠️ 輸出恰好 {count} 個詞彙，不多不少。\n"
+                    f"🚫 本任務僅限詞彙/單字。嚴禁輸出文法句型 — 文法由另一個獨立排程負責。\n"
+                    f"最後出一道小測驗。用繁體中文。"
+                )
         elif task_type == "reminder":
-            # Pure reminder — just return the message, no LLM needed
             message = config.get("message", "")
             if not message:
                 message = config.get("original_request", "提醒時間到了！")
             return f"⏰ {message}"
+        elif task_type == "pipeline":
+            original = config.get("original_request", "")
+            output_fmt = config.get("output_format", "")
+            fmt_hint = ""
+            if output_fmt == "pdf":
+                fmt_hint = "\n最終結果必須生成 PDF 檔案供下載（使用 mcp-python-executor + ChinesePDF）。"
+            elif output_fmt == "docx":
+                fmt_hint = "\n最終結果必須生成 DOCX 檔案供下載（使用 mcp-python-executor + python-docx）。"
+            return (
+                f"⚠️ 以下是複合任務指令。你必須自行判斷需要哪些工具、按什麼順序執行，直接完成所有步驟。\n"
+                f"禁止輸出流程說明或步驟預告。直接執行，只回覆最終結果。\n\n"
+                f"今天是 {today}。\n"
+                f"使用者的完整需求：\n「{original}」\n"
+                f"{fmt_hint}\n"
+                f"用繁體中文回覆。"
+            )
         elif task_type == "custom":
             prompt = config.get("prompt", "")
             return f"現在時間：{today}\n用繁體中文回覆。\n\n{prompt}"
@@ -635,8 +885,10 @@ class ScheduledPushService:
             from server.dependencies.uma import get_uma_instance
             from server.adapters.openai_adapter import OpenAIAdapter
 
-            uma = get_uma_instance()
-            adapter = OpenAIAdapter(uma)
+            if self._adapter_cache is None:
+                uma = get_uma_instance()
+                self._adapter_cache = OpenAIAdapter(uma)
+            adapter = self._adapter_cache
             if not adapter.is_available:
                 return None
 
@@ -647,60 +899,22 @@ class ScheduledPushService:
             # Inject session context (use original session_id, NOT scheduled_ prefix)
             os.environ["SESSION_ID"] = session_id or ""
 
-            downloads_dir = os.path.join(os.getcwd(), "workspace", "downloads")
-            base_url = os.environ.get("BASE_URL", "")
-            workspace_dir = os.getcwd()
-            system_prompt = (
-                "你是定時推送助理。使用工具完成任務，直接輸出最終結果。\n\n"
-                "═══ 絕對禁止（違反即視為失敗）═══\n"
-                "❌ 禁止輸出任何「進度說明」「流程說明」「下一步」「請稍候」「處理中」「即將進行」\n"
+            # ── System prompt: shared base + push-specific rules ──
+            from server.services.runtime import get_universal_system_prompt
+            base_prompt = get_universal_system_prompt(platform="line")
+
+            push_addon = (
+                "\n\n═══ 定時推送專屬規則（覆蓋一般規範）═══\n"
+                "你是定時推送助理。使用工具完成任務，直接輸出最終結果。\n"
+                "❌ 禁止輸出任何「進度說明」「流程說明」「下一步」「請稍候」「處理中」\n"
                 "❌ 禁止輸出任何形式的計劃、步驟描述或預告 — 直接做，不要說你要做\n"
                 "❌ 禁止呼叫 mcp-schedule-manager（排程已建立，你的任務是執行內容）\n"
-                "❌ 禁止呼叫 mcp-pdf-llm-analyzer / mcp-docx-llm-analyzer（這是讀取工具，非生成工具）\n"
-                "❌ 禁止使用 import FPDF（必須用 ChinesePDF）\n"
-                "❌ 禁止 ChinesePDF(路徑)（路徑只能傳給 output()）\n\n"
-                "✅ 正確行為：搜尋 → 整理 → 生成檔案 → 回覆下載連結。只回覆最終完成的結果。\n\n"
-                "【檔案生成方法 — 全部使用 mcp-python-executor】\n"
-                f"所有檔案必須存到：{downloads_dir}\n\n"
-                "■ PDF（中文必須用 ChinesePDF）：\n"
-                "```python\n"
-                "import sys, os\n"
-                f"sys.path.insert(0, r'{workspace_dir}/workspace')\n"
-                "from pdf_helper import ChinesePDF\n"
-                f"DOWNLOADS = r'{downloads_dir}'\n"
-                "os.makedirs(DOWNLOADS, exist_ok=True)\n"
-                "out_path = os.path.join(DOWNLOADS, '檔名.pdf')\n"
-                "pdf = ChinesePDF()  # ← 絕對不傳路徑，路徑在 output() 才傳\n"
-                "pdf.add_page()\n"
-                "pdf.chapter_title('大標題')       # 可用別名: add_title / add_heading\n"
-                "pdf.chapter_subtitle('子標題')    # 可用別名: add_subtitle / add_subheading\n"
-                "pdf.chapter_body('內文段落...')   # 可用別名: add_text / add_paragraph / add_content\n"
-                "pdf.add_bullet('項目內容')\n"
-                "pdf.add_separator()\n"
-                "pdf.output(out_path)              # ← 路徑在這裡傳\n"
-                "print('PDF已生成:', out_path)\n"
-                "```\n"
-                "⚠️ 禁止：ChinesePDF(路徑) — 路徑不能傳給 constructor，必須傳給 output()。\n"
-                "⚠️ 禁止：import FPDF — 必須用 ChinesePDF，否則中文會亂碼。\n\n"
-                "■ DOCX：\n"
-                "```python\n"
-                "from docx import Document\n"
-                "doc = Document()\n"
-                "doc.add_heading('標題', 0)\n"
-                "doc.add_paragraph('內文...')\n"
-                f"doc.save(r'{downloads_dir}/檔名.docx')\n"
-                "```\n\n"
-                "■ TXT / MD：\n"
-                "```python\n"
-                f"with open(r'{downloads_dir}/檔名.txt', 'w', encoding='utf-8') as f:\n"
-                "    f.write('內容...')\n"
-                "```\n\n"
-                f"- 檔案存放路徑：{downloads_dir}\n"
-                f"- 下載連結格式：{base_url}/downloads/檔案名稱\n"
-                "- 禁止使用 Markdown 超連結語法 [文字](URL)，LINE 不支援\n"
-                "- URL 必須完整顯示 https://... 開頭，LINE 會自動轉為可點擊連結\n"
-                "回覆請用繁體中文。"
+                "❌ 禁止呼叫 mcp-pdf-llm-analyzer / mcp-docx-llm-analyzer（讀取工具，非生成工具）\n"
+                "✅ 正確行為：搜尋 → 整理 → 生成檔案 → 回覆下載連結。只回覆最終結果。\n"
+                "禁止使用 Markdown 超連結語法 [文字](URL)，LINE 不支援。\n"
+                "URL 必須完整顯示 https://... 開頭。\n"
             )
+            system_prompt = base_prompt + push_addon
 
             messages = [
                 {"role": "system", "content": system_prompt},
@@ -796,6 +1010,7 @@ class ScheduledPushService:
                     ]
 
                     # Create fresh adapter for follow-up to avoid token accumulation
+                    uma = get_uma_instance()
                     follow_up_adapter = OpenAIAdapter(uma)
                     follow_up_adapter.model = model
                     follow_up_adapter.get_tools = _patched_get_tools
@@ -860,38 +1075,55 @@ class ScheduledPushService:
                     continue
 
                 cron = task.get("cron_parsed", {})
-                task_hour = cron.get("hour")
-                task_minute = cron.get("minute", 0)
+                interval_minutes = cron.get("interval_minutes")
 
-                # Check hour & minute match
-                if task_hour is not None and task_hour != current_hour:
-                    continue
-                if task_minute != current_minute:
-                    continue
+                if interval_minutes:
+                    # Interval task: fire when elapsed time since last_run >= interval
+                    last_run_str = task.get("last_run")
+                    if last_run_str:
+                        try:
+                            lr = datetime.fromisoformat(last_run_str)
+                            # Prevent duplicate in same minute
+                            if lr.hour == current_hour and lr.minute == current_minute:
+                                continue
+                            elapsed = (now - lr).total_seconds() / 60
+                            if elapsed < interval_minutes:
+                                continue
+                        except ValueError:
+                            pass
+                else:
+                    task_hour = cron.get("hour")
+                    task_minute = cron.get("minute", 0)
 
-                # Check day_of_week
-                dow_filter = cron.get("day_of_week")
-                if dow_filter:
-                    if dow_filter == "mon-fri":
-                        if dow_map.get(current_dow, 0) > 4:
-                            continue
-                    elif current_dow not in dow_filter:
+                    # Check hour & minute match
+                    if task_hour is not None and task_hour != current_hour:
+                        continue
+                    if task_minute != current_minute:
                         continue
 
-                # Check day of month
-                day_filter = cron.get("day")
-                if day_filter and day_filter != current_day:
-                    continue
+                    # Check day_of_week
+                    dow_filter = cron.get("day_of_week")
+                    if dow_filter:
+                        if dow_filter == "mon-fri":
+                            if dow_map.get(current_dow, 0) > 4:
+                                continue
+                        elif current_dow not in dow_filter:
+                            continue
 
-                # Prevent duplicate runs (check last_run within same minute)
-                last_run = task.get("last_run")
-                if last_run:
-                    try:
-                        lr = datetime.fromisoformat(last_run)
-                        if lr.hour == current_hour and lr.minute == current_minute and lr.date() == now.date():
-                            continue  # Already ran this minute
-                    except ValueError:
-                        pass
+                    # Check day of month
+                    day_filter = cron.get("day")
+                    if day_filter and day_filter != current_day:
+                        continue
+
+                    # Prevent duplicate runs (check last_run within same minute)
+                    last_run = task.get("last_run")
+                    if last_run:
+                        try:
+                            lr = datetime.fromisoformat(last_run)
+                            if lr.hour == current_hour and lr.minute == current_minute and lr.date() == now.date():
+                                continue  # Already ran this minute
+                        except ValueError:
+                            pass
 
                 # ── Execute ──
                 logger.info(f"[ScheduledPush] Executing task '{task['name']}' ({task['type']}) for {session_id}")
@@ -913,6 +1145,12 @@ class ScheduledPushService:
 
                     # Update last_run
                     task["last_run"] = now.isoformat()
+
+                    # Auto-disable one-time tasks after execution
+                    if task.get("once"):
+                        task["enabled"] = False
+                        logger.info(f"[ScheduledPush] One-time task '{task['name']}' auto-disabled after execution")
+
                     self.save_config(session_id, config)
 
                 except Exception as e:
@@ -963,7 +1201,7 @@ class ScheduledPushService:
         # Detect language
         elif any(kw in text for kw in ["詞彙", "單字", "學習", "語言"]):
             lang = "日文"
-            for l in ["日文", "英文", "韓文", "法文", "德文", "西班牙文"]:
+            for l in ["日文", "英文", "韓文", "法文", "德文", "西班牙文", "義大利文"]:
                 if l in text:
                     lang = l
                     break

@@ -23,8 +23,12 @@ PDF Helper — 預設支援中文的 PDF 生成器
 """
 
 import os
+import logging
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
+
+# Suppress subsetting warnings from FPDF2 so it doesn't pollute stdout (which confuses the LLM)
+logging.getLogger('fontTools.subset').setLevel(logging.ERROR)
 
 # Windows 中文字體路徑（按優先順序嘗試）
 _FONT_CANDIDATES = [
@@ -90,7 +94,39 @@ class ChinesePDF(FPDF):
         self._chinese_font_name = 'Helvetica'
 
     def set_chinese_font(self, size=12, bold=False):
-        """設定中文字體"""
+        """設定中文字體與 Fallback (日文/Emoji)"""
+        # 嘗試加載 Fallback 字型 (只需要執行一次但放在這裡或 init 皆可)
+        if not hasattr(self, "_fallback_configured"):
+            fallbacks = []
+            
+            # 日文字型 candidate
+            jp_fonts = [
+                (r'C:/Windows/Fonts/meiryo.ttc', 'Meiryo'),
+                (r'C:/Windows/Fonts/msgothic.ttc', 'MSGothic'),
+                (r'C:/Windows/Fonts/YuGothR.ttc', 'YuGothic')
+            ]
+            for font_path, font_name in jp_fonts:
+                if os.path.exists(font_path):
+                    try:
+                        self.add_font(font_name, '', font_path)
+                        fallbacks.append(font_name)
+                        break
+                    except Exception:
+                        pass
+            
+            # Emoji 字型 candidate
+            emoji_path = r'C:/Windows/Fonts/seguiemj.ttf'
+            if os.path.exists(emoji_path):
+                try:
+                    self.add_font('Emoji', '', emoji_path)
+                    fallbacks.append('Emoji')
+                except Exception:
+                    pass
+            
+            if fallbacks:
+                self.set_fallback_fonts(fallbacks)
+            self._fallback_configured = True
+            
         style = 'B' if bold else ''
         self.set_font(self._chinese_font_name, style, size)
 
