@@ -186,12 +186,22 @@ class UMA:
             # Inject Google credentials for Google Workspace skills
             if skill_name.startswith("mcp-google-"):
                 try:
-                    from server.services.google_auth import get_credentials_env
+                    from server.services.google_auth import get_credentials_env, get_service_account_path
                     _session_id = os.environ.get("SESSION_ID", "")
+                    _google_env = None
+                    # Try session-specific credentials first (personal OAuth or SA via session)
                     if _session_id:
                         _google_env = get_credentials_env(_session_id)
-                        if _google_env:
-                            env_vars.update(_google_env)
+                    # Fallback: Service Account (global, no session needed)
+                    if not _google_env:
+                        _sa_path = get_service_account_path()
+                        if _sa_path:
+                            _google_env = {
+                                "GOOGLE_CREDENTIALS_PATH": str(_sa_path),
+                                "GOOGLE_CREDENTIAL_TYPE": "service_account",
+                            }
+                    if _google_env:
+                        env_vars.update(_google_env)
                 except Exception as _e:
                     import logging
                     logging.getLogger("MCP_Server.UMA").debug(f"Google cred injection skipped: {_e}")
