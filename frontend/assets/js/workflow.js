@@ -904,6 +904,7 @@
       this.models = ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"];
       this.modelIdx = 0;
       this.testMessages = [];
+      this._backup = null; // snapshot for rollback
     }
 
     async loadSkill(skillName) {
@@ -931,6 +932,8 @@
           fetch(`/skills/${skillName}`).then(r => r.json()),
           fetch(`/skills/${skillName}/files`).then(r => r.json()),
         ]);
+        // Store backup for rollback
+        this._backup = detail.raw_content || "";
         this._renderEditor(skillName, detail, files);
       } catch (e) {
         console.error("[SkillEditor] Load failed:", e);
@@ -948,7 +951,7 @@
       if (!body) return;
 
       const meta = detail.metadata || {};
-      const skillMd = detail.skill_md || "";
+      const skillMd = detail.raw_content || "";
 
       body.innerHTML = `
         <div class="wf-editor-field">
@@ -987,6 +990,9 @@
     }
 
     _renderFileSection(folder, title, fileList) {
+      // Map folder name to API file_type: references→knowledge, scripts→script, assets→asset
+      const typeMap = { references: "knowledge", scripts: "script", assets: "asset" };
+      const fileType = typeMap[folder] || folder;
       const items = fileList.map(f =>
         `<div class="wf-editor-file-item">
           <span>${f}</span>
@@ -999,7 +1005,7 @@
             <span>${title}</span>
             <label class="wf-editor-file-upload-btn">
               上傳
-              <input type="file" style="display:none" onchange="window._wfSkillEditor._uploadFile('${folder}',this)" />
+              <input type="file" style="display:none" onchange="window._wfSkillEditor._uploadFile('${fileType}',this)" />
             </label>
           </div>
           ${items || '<div style="font-size:0.65rem;color:var(--text-tertiary);padding:4px 0;">（無檔案）</div>'}
@@ -1015,7 +1021,7 @@
         const resp = await fetch(`/skills/${this.currentSkill}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ skill_md: skillMd }),
+          body: JSON.stringify({ yaml_content: skillMd }),
         });
         const data = await resp.json();
         if (resp.ok) {
@@ -1034,26 +1040,40 @@
 
     async rollback() {
       if (!this.currentSkill) return;
-      try {
-        await fetch(`/skills/${this.currentSkill}/rollback`, { method: "POST" });
-        if (window.showToast) window.showToast("已還原", "success");
-        this.loadSkill(this.currentSkill);
-      } catch (e) {
-        if (window.showToast) window.showToast("還原失敗", "error");
+      if (this._backup) {
+        // Restore from in-memory snapshot (before any edits)
+        const textarea = document.getElementById("wfEditSkillMd");
+        if (textarea) textarea.value = this._backup;
+        if (window.showToast) window.showToast("已還原至開啟時的版本", "success");
+      } else {
+        // Fallback: try server-side .bak rollback
+        try {
+          await fetch(`/skills/${this.currentSkill}/rollback`, { method: "POST" });
+          if (window.showToast) window.showToast("已還原至伺服器備份", "success");
+          this.loadSkill(this.currentSkill);
+        } catch (e) {
+          if (window.showToast) window.showToast("還原失敗", "error");
+        }
       }
     }
 
-    async _uploadFile(folder, input) {
+    async _uploadFile(fileType, input) {
+      // fileType: "knowledge" (references), "script" (scripts), "asset" (assets)
       if (!this.currentSkill || !input.files[0]) return;
       const formData = new FormData();
       formData.append("file", input.files[0]);
-      formData.append("folder", folder);
+      formData.append("file_type", fileType);
       try {
-        await fetch(`/skills/${this.currentSkill}/upload`, { method: "POST", body: formData });
-        if (window.showToast) window.showToast("已上傳", "success");
-        this.loadSkill(this.currentSkill);
+        const resp = await fetch(`/skills/${this.currentSkill}/upload`, { method: "POST", body: formData });
+        const data = await resp.json();
+        if (resp.ok) {
+          if (window.showToast) window.showToast(`已上傳 ${data.filename || ""}`, "success");
+          this.loadSkill(this.currentSkill);
+        } else {
+          if (window.showToast) window.showToast("上傳失敗: " + (data.detail || ""), "error");
+        }
       } catch (e) {
-        if (window.showToast) window.showToast("上傳失敗", "error");
+        if (window.showToast) window.showToast("上傳錯誤: " + e.message, "error");
       }
     }
 
