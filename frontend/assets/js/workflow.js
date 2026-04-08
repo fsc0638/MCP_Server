@@ -695,13 +695,22 @@
     const isActive = body.classList.contains("wf-mode");
 
     if (isActive) {
+      // Exit workflow mode — clean up everything
       body.classList.remove("wf-mode");
       if (btn) btn.classList.remove("active");
-      // Hide old placeholder
-      const oldView = document.getElementById("workflowView");
-      if (oldView) oldView.style.display = "none";
-      const chatBody = document.getElementById("chatBody");
-      if (chatBody) chatBody.style.display = "";
+
+      // Force exit skill-edit mode if active
+      if (_skillEditMode) {
+        _skillEditMode = false;
+        const editArea = document.getElementById("wfSkillEditArea");
+        if (editArea) { editArea.style.display = "none"; editArea.classList.remove("visible"); }
+        const canvasArea = document.getElementById("wfCanvasArea");
+        if (canvasArea) canvasArea.style.display = "flex";
+      }
+
+      // Hide all workflow containers
+      const editArea2 = document.getElementById("wfSkillEditArea");
+      if (editArea2) { editArea2.style.display = "none"; editArea2.classList.remove("visible"); }
     } else {
       body.classList.add("wf-mode");
       if (btn) btn.classList.add("active");
