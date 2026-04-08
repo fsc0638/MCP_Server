@@ -709,7 +709,32 @@
   };
 
   window.triggerAudioUpload = function () {
-    showToast("Audio pipeline is not enabled in MCP mode", "info");
+    const audioFileInput = document.getElementById("audioFileInput");
+    if (!audioFileInput) return;
+    audioFileInput.value = "";
+    audioFileInput.onchange = async function () {
+      const file = audioFileInput.files[0];
+      if (!file) return;
+
+      showToast("音訊檔案上傳中…", "info");
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        const res = await fetch("/workspace/upload", { method: "POST", body: formData });
+        const data = await res.json();
+        if (data.status !== "success") throw new Error(data.detail || "上傳失敗");
+
+        const msg = `幫我將這個音訊檔案轉換為逐字稿，file_path: ${data.filepath}`;
+        if (chatInput) chatInput.value = msg;
+        showToast(`已上傳：${file.name}`, "success");
+        sendMessage(msg);
+      } catch (err) {
+        showToast("音訊上傳失敗：" + err.message, "error");
+      }
+    };
+    audioFileInput.click();
   };
 
   if (chatInput && sendBtn) {
