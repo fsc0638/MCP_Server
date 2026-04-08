@@ -112,7 +112,8 @@
 
 .wf-connections-svg {
   position: absolute; top: 0; left: 0;
-  pointer-events: none; z-index: 1;
+  pointer-events: none; z-index: 5;
+  overflow: visible;
 }
 .wf-connections-svg path {
   pointer-events: stroke;
@@ -180,7 +181,7 @@
 
 /* Connection paths */
 .wf-conn-path {
-  fill: none; stroke: var(--text-tertiary); stroke-width: 2;
+  fill: none; stroke: #94a3b8; stroke-width: 2.5;
   transition: stroke 0.15s;
 }
 .wf-conn-path:hover {
@@ -221,6 +222,40 @@
 .wf-stat-label {
   font-size: 0.62rem; color: var(--text-tertiary); margin-top: 2px;
 }
+
+/* Dashboard sections */
+.wf-section-title {
+  font-size: 0.72rem; font-weight: 700; color: var(--text-secondary);
+  margin: 12px 0 6px; padding: 0 2px;
+}
+.wf-chart-wrap {
+  background: var(--bg-sidebar); border-radius: 10px; padding: 10px;
+  margin-bottom: 12px; height: 120px; position: relative;
+}
+.wf-chart-row {
+  display: flex; gap: 10px; align-items: center; margin-bottom: 12px;
+}
+.wf-chart-sm { flex: 0 0 100px; height: 100px; }
+.wf-chart-legend { flex: 1; }
+.wf-legend-item {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.65rem; color: var(--text-secondary); margin: 3px 0;
+}
+.wf-legend-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+}
+.wf-keyword-wrap {
+  display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px;
+}
+.wf-keyword-tag {
+  padding: 3px 10px; border-radius: var(--radius-full, 9999px);
+  background: var(--kway-blue); color: #fff;
+  font-size: 0.62rem; font-weight: 600;
+}
+.wf-log-meta {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 1px; flex-shrink: 0;
+}
+.wf-log-dur { font-size: 0.6rem; color: var(--text-tertiary); }
 
 .wf-log-section-title {
   font-size: 0.72rem; font-weight: 700; color: var(--text-secondary);

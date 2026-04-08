@@ -49,9 +49,23 @@
     }
 
     _setup() {
-      // Arrow marker
-      const defs = this.svg.querySelector("defs") || this.svg.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "defs"));
-      defs.innerHTML = '<marker id="wf-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/></marker>';
+      // Arrow marker (use createElementNS for SVG compatibility)
+      const NS = "http://www.w3.org/2000/svg";
+      let defs = this.svg.querySelector("defs");
+      if (!defs) { defs = document.createElementNS(NS, "defs"); this.svg.appendChild(defs); }
+      if (!defs.querySelector("#wf-arrow")) {
+        const marker = document.createElementNS(NS, "marker");
+        marker.setAttribute("id", "wf-arrow");
+        marker.setAttribute("viewBox", "0 0 10 10");
+        marker.setAttribute("refX", "10"); marker.setAttribute("refY", "5");
+        marker.setAttribute("markerWidth", "8"); marker.setAttribute("markerHeight", "8");
+        marker.setAttribute("orient", "auto-start-reverse");
+        const arrowPath = document.createElementNS(NS, "path");
+        arrowPath.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
+        arrowPath.setAttribute("fill", "#94a3b8");
+        marker.appendChild(arrowPath);
+        defs.appendChild(marker);
+      }
 
       // Drop from palette
       this.surface.addEventListener("dragover", e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
@@ -363,12 +377,16 @@
     }
   }
 
-  // ── Dashboard ─────────────────────────────────────────────────
+  // ── Dashboard (matches NewsAnalysis layout) ────────────────────
   class WorkflowDashboard {
     constructor(container) {
       this.container = container;
-      this.logs = [];
+      this.actChart = null;
+      this.distChart = null;
       this._render();
+      this._initCharts();
+      // Live log demo every 8s
+      setInterval(() => this._addRandomLog(), 8000);
     }
 
     _render() {
@@ -378,15 +396,117 @@
           <button style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:0.9rem;" onclick="window._wfDashboard && window._wfDashboard.refresh()">↻</button>
         </div>
         <div class="wf-dashboard-body">
+          <!-- Stat Cards -->
           <div class="wf-stats-grid">
             <div class="wf-stat-card"><div class="wf-stat-value" id="wfStatBlocks">0</div><div class="wf-stat-label">節點數</div></div>
             <div class="wf-stat-card"><div class="wf-stat-value" id="wfStatConns" style="color:#34a853">0</div><div class="wf-stat-label">連接數</div></div>
             <div class="wf-stat-card"><div class="wf-stat-value" id="wfStatRuns" style="color:#f5a623">0</div><div class="wf-stat-label">執行次數</div></div>
           </div>
+
+          <!-- Activity Chart -->
+          <div class="wf-section-title">活動趨勢</div>
+          <div class="wf-chart-wrap"><canvas id="wfActivityChart"></canvas></div>
+
+          <!-- Skill Distribution -->
+          <div class="wf-section-title">技能分布</div>
+          <div class="wf-chart-row">
+            <div class="wf-chart-wrap wf-chart-sm"><canvas id="wfDistChart"></canvas></div>
+            <div class="wf-chart-legend" id="wfDistLegend"></div>
+          </div>
+
+          <!-- Keywords -->
+          <div class="wf-section-title">常用技能</div>
+          <div class="wf-keyword-wrap" id="wfKeywords"></div>
+
+          <!-- Execution Log -->
           <div class="wf-log-section-title"><span class="wf-live-dot"></span> 執行日誌</div>
           <div class="wf-log-list" id="wfLogList"></div>
         </div>
       `;
+    }
+
+    _initCharts() {
+      // Load Chart.js from CDN if not present
+      if (typeof Chart === "undefined") {
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js";
+        script.onload = () => this._buildCharts();
+        document.head.appendChild(script);
+      } else {
+        this._buildCharts();
+      }
+    }
+
+    _buildCharts() {
+      // Activity line chart
+      const actCtx = document.getElementById("wfActivityChart");
+      if (actCtx) {
+        this.actChart = new Chart(actCtx, {
+          type: "line",
+          data: {
+            labels: this._last7Days(),
+            datasets: [{
+              data: [3, 5, 2, 8, 6, 4, 7],
+              borderColor: "#0D6EFD",
+              backgroundColor: "rgba(13,110,253,0.08)",
+              borderWidth: 2, pointRadius: 3, pointBackgroundColor: "#0D6EFD",
+              tension: 0.4, fill: true,
+            }],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { grid: { color: "#f0f2f5" }, ticks: { font: { size: 9 }, color: "#94a3b8" } },
+              y: { grid: { color: "#f0f2f5" }, ticks: { font: { size: 9 }, color: "#94a3b8", maxTicksLimit: 4 } },
+            },
+          },
+        });
+      }
+
+      // Skill distribution doughnut
+      const distCtx = document.getElementById("wfDistChart");
+      if (distCtx) {
+        const cats = Object.values(CATEGORIES);
+        this.distChart = new Chart(distCtx, {
+          type: "doughnut",
+          data: {
+            labels: cats.map(c => c.label),
+            datasets: [{ data: [2, 1, 2, 2, 2], backgroundColor: cats.map(c => c.color), borderWidth: 0, hoverOffset: 4 }],
+          },
+          options: { responsive: true, maintainAspectRatio: false, cutout: "65%", plugins: { legend: { display: false } } },
+        });
+
+        // Legend
+        const legend = document.getElementById("wfDistLegend");
+        if (legend) {
+          cats.forEach(c => {
+            const item = document.createElement("div");
+            item.className = "wf-legend-item";
+            item.innerHTML = `<span class="wf-legend-dot" style="background:${c.color}"></span>${c.label}`;
+            legend.appendChild(item);
+          });
+        }
+      }
+
+      // Keywords
+      this._renderKeywords();
+    }
+
+    _last7Days() {
+      const d = []; const now = new Date();
+      for (let i = 6; i >= 0; i--) {
+        const dt = new Date(now); dt.setDate(dt.getDate() - i);
+        d.push((dt.getMonth() + 1) + "/" + dt.getDate());
+      }
+      return d;
+    }
+
+    _renderKeywords() {
+      const wrap = document.getElementById("wfKeywords");
+      if (!wrap) return;
+      const keywords = ["網路搜尋", "Python", "排程", "日曆", "會議分析", "圖像生成"];
+      wrap.innerHTML = keywords.map(k => `<span class="wf-keyword-tag">${k}</span>`).join("");
     }
 
     updateStats(blocks, conns) {
@@ -394,22 +514,48 @@
       const c = document.getElementById("wfStatConns");
       if (b) b.textContent = blocks;
       if (c) c.textContent = conns;
+      // Update doughnut if available
+      if (this.distChart && window._wfDesigner) {
+        const catCounts = {};
+        Object.keys(CATEGORIES).forEach(k => catCounts[k] = 0);
+        window._wfDesigner.blocks.forEach(bl => {
+          const def = BLOCK_DEFS[bl.type];
+          if (def) catCounts[def.category] = (catCounts[def.category] || 0) + 1;
+        });
+        this.distChart.data.datasets[0].data = Object.keys(CATEGORIES).map(k => catCounts[k]);
+        this.distChart.update();
+      }
     }
 
     addLog(msg, status) {
       const list = document.getElementById("wfLogList");
       if (!list) return;
       const now = new Date();
-      const time = now.getHours().toString().padStart(2, "0") + ":" + now.getMinutes().toString().padStart(2, "0") + ":" + now.getSeconds().toString().padStart(2, "0");
+      const time = now.toTimeString().slice(0, 8);
+      const dur = Math.floor(Math.random() * 10 + 1) + "s";
       const entry = document.createElement("div");
       entry.className = "wf-log-entry";
-      entry.innerHTML = `<span class="wf-log-dot ${status}"></span><span class="wf-log-name">${msg}</span><span class="wf-log-time">${time}</span>`;
+      entry.innerHTML = `
+        <span class="wf-log-dot ${status}"></span>
+        <span class="wf-log-name">${msg}</span>
+        <div class="wf-log-meta">
+          <span class="wf-log-time">${time}</span>
+          <span class="wf-log-dur">${dur}</span>
+        </div>
+      `;
       list.prepend(entry);
-      // Keep max 20
       while (list.children.length > 20) list.lastChild.remove();
-      // Update run count
       const r = document.getElementById("wfStatRuns");
       if (r) r.textContent = parseInt(r.textContent || "0") + 1;
+    }
+
+    _addRandomLog() {
+      const flows = ["Skill Pipeline", "排程推播", "資料分析", "網路搜尋"];
+      const statuses = ["success", "success", "running"];
+      this.addLog(
+        flows[Math.floor(Math.random() * flows.length)],
+        statuses[Math.floor(Math.random() * statuses.length)]
+      );
     }
 
     refresh() {
