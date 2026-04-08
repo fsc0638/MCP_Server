@@ -620,8 +620,74 @@
     }
   }
 
+  // ── Dynamic Skill Registry ─────────────────────────────────────
+  // Loaded from /skills/list API, merged with BLOCK_DEFS
+  let _dynamicSkills = {};  // { "mcp-web-search": {label, icon, color, category}, ... }
+  let _skillsLoaded = false;
+
+  async function _loadSkillsFromAPI() {
+    if (_skillsLoaded) return;
+    try {
+      const resp = await fetch("/skills/list");
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const skills = data.skills || {};
+      Object.entries(skills).forEach(([name, info]) => {
+        const shortName = name.replace("mcp-", "");
+        // If already in BLOCK_DEFS, keep it; otherwise add dynamically
+        if (!BLOCK_DEFS[shortName]) {
+          BLOCK_DEFS[shortName] = {
+            label: _guessLabel(name, info.description),
+            icon: _guessIcon(name),
+            color: _guessColor(name),
+            category: _guessCategory(name, info.description),
+          };
+        }
+        _dynamicSkills[name] = { ready: info.ready !== false, description: info.description || "" };
+      });
+      _skillsLoaded = true;
+    } catch (e) {
+      console.warn("[WF] Failed to load skills from API:", e);
+    }
+  }
+
+  function _guessLabel(name, desc) {
+    const map = {
+      "mcp-txt-llm-analyzer": "TXT 分析",
+      "mcp-pdf-llm-analyzer": "PDF 分析",
+      "mcp-docx-llm-analyzer": "DOCX 分析",
+      "mcp-spreadsheet-llm-analyzer": "試算表分析",
+      "mcp-meeting-to-notion": "會議→Notion",
+      "mcp-high-risk-demo": "高風險示範",
+    };
+    return map[name] || name.replace("mcp-", "").replace(/-/g, " ");
+  }
+  function _guessIcon(name) {
+    const map = {
+      "mcp-txt-llm-analyzer": "📄", "mcp-pdf-llm-analyzer": "📕",
+      "mcp-docx-llm-analyzer": "📘", "mcp-spreadsheet-llm-analyzer": "📊",
+      "mcp-meeting-to-notion": "📝", "mcp-high-risk-demo": "⚠️",
+    };
+    return map[name] || "🔧";
+  }
+  function _guessColor(name) {
+    const map = {
+      "mcp-txt-llm-analyzer": "#607d8b", "mcp-pdf-llm-analyzer": "#c62828",
+      "mcp-docx-llm-analyzer": "#1565c0", "mcp-spreadsheet-llm-analyzer": "#2e7d32",
+      "mcp-meeting-to-notion": "#6200ea", "mcp-high-risk-demo": "#ff6f00",
+    };
+    return map[name] || "#546e7a";
+  }
+  function _guessCategory(name, desc) {
+    if (name.includes("analyzer")) return "analysis";
+    if (name.includes("notion") || name.includes("meeting")) return "analysis";
+    return "compute";
+  }
+
   // ── Palette Builder ───────────────────────────────────────────
-  function buildPalette(container) {
+  async function buildPalette(container) {
+    await _loadSkillsFromAPI();
+
     let html = `<div class="wf-palette-header">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 17h7M17.5 14v7"/></svg>
       Skill 節點
@@ -727,10 +793,10 @@
     }
   }
 
-  function _initWorkflow() {
-    // Build palette
+  async function _initWorkflow() {
+    // Build palette (async — loads skills from API)
     const paletteWrap = document.getElementById("wfPaletteWrap");
-    if (paletteWrap) buildPalette(paletteWrap);
+    if (paletteWrap) await _rebuildPaletteForFlow(paletteWrap);
 
     // Init FlowDesigner
     const surface = document.getElementById("wfCanvasSurface");
@@ -786,8 +852,10 @@
     }
   }
 
-  function _rebuildPaletteForEdit(container) {
+  async function _rebuildPaletteForEdit(container) {
     if (!container) return;
+    await _loadSkillsFromAPI();
+
     let html = `<div class="wf-palette-header">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
       Skills 維護
@@ -800,8 +868,9 @@
       html += `<div class="wf-palette-category"><div class="wf-palette-category-title">${cat.label}</div>`;
       items.forEach(([type, def]) => {
         const isControl = catKey === "control";
+        const skillName = type.startsWith("mcp-") ? type : "mcp-" + type;
         const cls = isControl ? "wf-palette-item wf-palette-item--disabled" : "wf-palette-item wf-palette-item--clickable";
-        const onclick = isControl ? "" : `onclick="window._wfSkillEditor&&window._wfSkillEditor.loadSkill('mcp-${type}')"`;
+        const onclick = isControl ? "" : `onclick="window._wfSkillEditor&&window._wfSkillEditor.loadSkill('${skillName}')"`;
         html += `<div class="${cls}" data-type="${type}" ${onclick}>
           <div class="wf-palette-item-accent" style="background:${def.color}"></div>
           <div class="wf-palette-item-icon" style="background:${def.color}">${def.icon}</div>
@@ -814,15 +883,9 @@
     container.innerHTML = html;
   }
 
-  function _rebuildPaletteForFlow(container) {
+  async function _rebuildPaletteForFlow(container) {
     if (!container) return;
-    buildPalette(container);
-  }
-
-  // Update buildPalette to include the edit button
-  const _origBuildPalette = buildPalette;
-  buildPalette = function(container) {
-    _origBuildPalette(container);
+    await buildPalette(container);
     // Add edit button to header
     const header = container.querySelector(".wf-palette-header");
     if (header && !header.querySelector(".wf-palette-header-btn")) {
@@ -832,7 +895,7 @@
       btn.onclick = toggleSkillEditMode;
       header.appendChild(btn);
     }
-  };
+  }
 
   // ── SkillEditor Class ─────────────────────────────────────────
   class SkillEditor {
