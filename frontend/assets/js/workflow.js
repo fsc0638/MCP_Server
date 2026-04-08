@@ -492,16 +492,33 @@
     }
 
     _applySkillKeywords(bySkill) {
-      // Sort skills by total_tokens descending
+      // Full skill name → display label mapping
+      const SKILL_LABELS = {
+        "mcp-python-executor": "Python 執行",
+        "mcp-web-search": "網路搜尋",
+        "mcp-schedule-manager": "排程管理",
+        "mcp-google-calendar": "Google 日曆",
+        "mcp-image-generator": "圖像生成",
+        "mcp-groovenauts-meeting-analyst": "會議分析",
+        "mcp-groovenaust-meeting-analyst": "會議分析",
+        "mcp-gai-worksheet-facilitator": "GAI 學習單",
+        "mcp-txt-llm-analyzer": "TXT 分析",
+        "mcp-pdf-llm-analyzer": "PDF 分析",
+        "mcp-docx-llm-analyzer": "DOCX 分析",
+        "mcp-spreadsheet-llm-analyzer": "試算表分析",
+        "mcp-meeting-to-notion": "會議→Notion",
+        "(chat)": "純對話",
+      };
+      // Sort skills by total_tokens descending, exclude (chat)
       const sorted = Object.entries(bySkill)
+        .filter(([name]) => name !== "(chat)")
         .sort(([, a], [, b]) => (b.total_tokens || 0) - (a.total_tokens || 0));
-      // Keywords = top skills by token usage
       const wrap = document.getElementById("wfKeywords");
       if (wrap) {
-        wrap.innerHTML = sorted.slice(0, 8).map(([name]) => {
-          const def = BLOCK_DEFS[name.replace("mcp-", "")];
-          const label = def ? def.label : name.replace("mcp-", "");
-          return `<span class="wf-keyword-tag">${label}</span>`;
+        wrap.innerHTML = sorted.slice(0, 8).map(([name, stats]) => {
+          const label = SKILL_LABELS[name] || name.replace("mcp-", "");
+          const tokens = Math.round((stats.total_tokens || 0) / 1000);
+          return `<span class="wf-keyword-tag" title="${tokens}K tokens">${label}</span>`;
         }).join("");
       }
     }

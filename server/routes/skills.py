@@ -384,10 +384,12 @@ risk_level: "low"
 @router.get("/workflow/stats")
 async def workflow_stats():
     """Return token analytics for workflow dashboard (by_skill + daily)."""
-    import json
-    summary_path = Path("workspace/analytics/token_summary.json")
+    import json, os
+    # Resolve from project root (same as main.py CWD)
+    project_root = Path(os.getenv("PROJECT_ROOT", Path(__file__).resolve().parents[2]))
+    summary_path = project_root / "workspace" / "analytics" / "token_summary.json"
     if not summary_path.exists():
-        return {"by_skill": {}, "daily": {}, "total": {}}
+        return {"by_skill": {}, "daily": {}, "total": {}, "_debug": str(summary_path)}
     try:
         data = json.loads(summary_path.read_text(encoding="utf-8"))
         return {
@@ -395,6 +397,6 @@ async def workflow_stats():
             "daily": data.get("daily", {}),
             "total": data.get("total", {}),
         }
-    except Exception:
-        return {"by_skill": {}, "daily": {}, "total": {}}
+    except Exception as e:
+        return {"by_skill": {}, "daily": {}, "total": {}, "_error": str(e)}
 
