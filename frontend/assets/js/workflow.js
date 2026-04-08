@@ -276,6 +276,25 @@
       return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
     }
 
+    // ── Reset ────────────────────────────────────────────────
+    reset() {
+      // Clear all blocks and connections
+      this.blocks.forEach(b => b.el.remove());
+      this.blocks.clear();
+      this.connections.forEach(c => c.el.remove());
+      this.connections = [];
+      this.nextId = 1;
+      this.nextConnId = 1;
+      this.select(null);
+      // Remove saved flow
+      localStorage.removeItem("wf_flow_default");
+      // Add default Start block
+      this.addBlock("start", 200, 250);
+      this.zoomFit();
+      this._updateInfo();
+      if (window.showToast) window.showToast("工作流已重置", "info");
+    }
+
     // ── Zoom ─────────────────────────────────────────────────
     zoom(delta) {
       this.scale = Math.min(2, Math.max(0.3, this.scale + delta));
