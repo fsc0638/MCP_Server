@@ -17,6 +17,10 @@
 .page-chat-body.wf-mode .wf-canvas-area,
 .page-chat-body.wf-mode .wf-dashboard-wrap { display: flex; flex-direction: column; height: 100%; }
 
+/* Skill edit area overrides canvas display */
+.page-chat-body.wf-mode .wf-skill-edit-area.visible { display: flex; flex: 1; height: 100%; }
+.page-chat-body.wf-mode .wf-skill-edit-area.visible ~ .wf-canvas-area { display: none !important; }
+
 /* ── Left Panel: Block Palette ───────────────────────────────── */
 .wf-palette-header {
   padding: 14px 16px 10px;
@@ -321,6 +325,191 @@
   outline: none; border-color: var(--kway-blue);
   box-shadow: 0 0 0 2px rgba(13,110,253,0.1);
 }
+
+/* ── Skill Edit Mode ─────────────────────────────────────────── */
+
+/* Palette header toggle button */
+.wf-palette-header-btn {
+  margin-left: auto; padding: 3px 10px;
+  background: var(--bg-hover); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full, 9999px);
+  font-size: 0.65rem; font-weight: 600; color: var(--text-secondary);
+  cursor: pointer; transition: var(--transition);
+}
+.wf-palette-header-btn:hover {
+  background: var(--kway-blue); color: #fff; border-color: var(--kway-blue);
+}
+
+/* Disabled palette items (control blocks in edit mode) */
+.wf-palette-item--disabled {
+  opacity: 0.35; pointer-events: none; cursor: default;
+}
+
+/* Clickable palette items (skills in edit mode) */
+.wf-palette-item--clickable {
+  cursor: pointer;
+}
+.wf-palette-item--clickable:hover {
+  border-color: var(--kway-blue); background: rgba(13,110,253,0.06);
+}
+.wf-palette-item--clickable.is-active {
+  border-color: var(--kway-blue); background: rgba(13,110,253,0.1);
+  box-shadow: 0 0 0 2px rgba(13,110,253,0.15);
+}
+
+/* Skill Editor area (50/50 split) */
+.wf-skill-edit-area {
+  display: none; flex: 1; min-height: 0;
+}
+.wf-skill-edit-area.visible {
+  display: flex;
+}
+.wf-skill-edit-area > .wf-editor-pane,
+.wf-skill-edit-area > .wf-test-pane {
+  flex: 1; display: flex; flex-direction: column;
+  min-width: 0; overflow: hidden;
+}
+.wf-editor-pane {
+  border-right: 1px solid var(--border-subtle);
+}
+
+/* Editor pane */
+.wf-editor-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border-subtle);
+  font-size: 0.82rem; font-weight: 700; color: var(--text-primary);
+}
+.wf-editor-header-actions { margin-left: auto; display: flex; gap: 6px; }
+.wf-editor-btn {
+  padding: 4px 12px; border-radius: 6px; font-size: 0.68rem; font-weight: 600;
+  cursor: pointer; transition: var(--transition); border: 1px solid var(--border-subtle);
+}
+.wf-editor-btn-primary {
+  background: var(--kway-blue); color: #fff; border-color: var(--kway-blue);
+}
+.wf-editor-btn-primary:hover { opacity: 0.9; }
+.wf-editor-btn-secondary {
+  background: var(--bg-surface); color: var(--text-secondary);
+}
+.wf-editor-btn-secondary:hover { background: var(--bg-hover); }
+
+.wf-editor-body {
+  flex: 1; overflow-y: auto; padding: 12px 14px;
+}
+.wf-editor-field { margin-bottom: 10px; }
+.wf-editor-field label {
+  display: block; font-size: 0.68rem; font-weight: 600;
+  color: var(--text-tertiary); margin-bottom: 3px;
+}
+.wf-editor-field input,
+.wf-editor-field select,
+.wf-editor-field textarea {
+  width: 100%; padding: 6px 10px;
+  border: 1px solid var(--border-subtle); border-radius: 8px;
+  font-size: 0.76rem; font-family: inherit;
+  background: var(--bg-main); color: var(--text-primary);
+  transition: var(--transition);
+}
+.wf-editor-field input:focus,
+.wf-editor-field select:focus,
+.wf-editor-field textarea:focus {
+  outline: none; border-color: var(--kway-blue);
+  box-shadow: 0 0 0 2px rgba(13,110,253,0.1);
+}
+.wf-editor-field textarea {
+  min-height: 200px; resize: vertical;
+  font-family: 'Roboto Mono', 'Consolas', monospace; font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+/* File sections */
+.wf-editor-file-section {
+  margin-bottom: 12px; padding: 8px 10px;
+  background: var(--bg-sidebar); border-radius: 8px;
+}
+.wf-editor-file-title {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 0.7rem; font-weight: 700; color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.wf-editor-file-upload-btn {
+  padding: 2px 8px; border-radius: 4px; font-size: 0.6rem; font-weight: 600;
+  background: var(--kway-blue); color: #fff; border: none; cursor: pointer;
+}
+.wf-editor-file-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 6px; margin: 2px 0;
+  font-size: 0.68rem; color: var(--text-secondary);
+  background: var(--bg-surface); border-radius: 5px;
+}
+.wf-editor-file-del {
+  cursor: pointer; color: var(--text-tertiary); background: none; border: none;
+  font-size: 0.8rem; padding: 0 4px;
+}
+.wf-editor-file-del:hover { color: #ea4335; }
+
+/* Test chat pane */
+.wf-test-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border-subtle);
+  font-size: 0.82rem; font-weight: 700; color: var(--text-primary);
+}
+.wf-test-model-select {
+  margin-left: auto; padding: 3px 10px;
+  background: var(--bg-sidebar); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full, 9999px);
+  font-size: 0.65rem; font-weight: 600; color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.wf-test-messages {
+  flex: 1; overflow-y: auto; padding: 12px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.wf-test-msg {
+  max-width: 85%; padding: 8px 12px;
+  border-radius: 12px; font-size: 0.76rem; line-height: 1.5;
+  word-break: break-word;
+}
+.wf-test-msg.user {
+  align-self: flex-end; background: var(--kway-blue); color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.wf-test-msg.assistant {
+  align-self: flex-start; background: var(--bg-sidebar); color: var(--text-primary);
+  border-bottom-left-radius: 4px;
+}
+.wf-test-msg.system {
+  align-self: center; background: none; color: var(--text-tertiary);
+  font-size: 0.65rem; font-style: italic;
+}
+
+.wf-test-input-wrap {
+  display: flex; gap: 6px; padding: 10px 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+.wf-test-input {
+  flex: 1; padding: 8px 12px;
+  border: 1px solid var(--border-subtle); border-radius: 10px;
+  font-size: 0.76rem; background: var(--bg-main); color: var(--text-primary);
+}
+.wf-test-input:focus { outline: none; border-color: var(--kway-blue); }
+.wf-test-send-btn {
+  padding: 8px 16px; border-radius: 10px;
+  background: var(--kway-blue); color: #fff; border: none;
+  font-size: 0.76rem; font-weight: 600; cursor: pointer;
+  transition: var(--transition);
+}
+.wf-test-send-btn:hover { opacity: 0.9; }
+.wf-test-send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Empty state */
+.wf-editor-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; color: var(--text-tertiary); gap: 8px;
+}
+.wf-editor-empty svg { opacity: 0.3; }
+.wf-editor-empty p { font-size: 0.8rem; }
 
 /* ── Animations ──────────────────────────────────────────────── */
 @keyframes wf-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }

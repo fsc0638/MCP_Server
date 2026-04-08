@@ -754,11 +754,334 @@
     }
   }
 
+  // ── Skill Edit Mode ────────────────────────────────────────────
+  let _skillEditMode = false;
+
+  function toggleSkillEditMode() {
+    _skillEditMode = !_skillEditMode;
+    const paletteWrap = document.getElementById("wfPaletteWrap");
+    const canvasArea = document.getElementById("wfCanvasArea");
+    const editArea = document.getElementById("wfSkillEditArea");
+
+    if (_skillEditMode) {
+      // Enter skill edit mode
+      if (canvasArea) canvasArea.style.display = "none";
+      if (editArea) { editArea.style.display = "flex"; editArea.classList.add("visible"); }
+      _rebuildPaletteForEdit(paletteWrap);
+      if (!window._wfSkillEditor) window._wfSkillEditor = new SkillEditor();
+    } else {
+      // Exit skill edit mode
+      if (editArea) { editArea.style.display = "none"; editArea.classList.remove("visible"); }
+      if (canvasArea) canvasArea.style.display = "flex";
+      _rebuildPaletteForFlow(paletteWrap);
+    }
+  }
+
+  function _rebuildPaletteForEdit(container) {
+    if (!container) return;
+    let html = `<div class="wf-palette-header">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      Skills 維護
+      <button class="wf-palette-header-btn" onclick="toggleSkillEditMode()">編輯節點</button>
+    </div><div class="wf-palette-body">`;
+
+    Object.entries(CATEGORIES).forEach(([catKey, cat]) => {
+      const items = Object.entries(BLOCK_DEFS).filter(([, d]) => d.category === catKey);
+      if (!items.length) return;
+      html += `<div class="wf-palette-category"><div class="wf-palette-category-title">${cat.label}</div>`;
+      items.forEach(([type, def]) => {
+        const isControl = catKey === "control";
+        const cls = isControl ? "wf-palette-item wf-palette-item--disabled" : "wf-palette-item wf-palette-item--clickable";
+        const onclick = isControl ? "" : `onclick="window._wfSkillEditor&&window._wfSkillEditor.loadSkill('mcp-${type}')"`;
+        html += `<div class="${cls}" data-type="${type}" ${onclick}>
+          <div class="wf-palette-item-accent" style="background:${def.color}"></div>
+          <div class="wf-palette-item-icon" style="background:${def.color}">${def.icon}</div>
+          <span>${def.label}</span>
+        </div>`;
+      });
+      html += `</div>`;
+    });
+    html += `</div>`;
+    container.innerHTML = html;
+  }
+
+  function _rebuildPaletteForFlow(container) {
+    if (!container) return;
+    buildPalette(container);
+  }
+
+  // Update buildPalette to include the edit button
+  const _origBuildPalette = buildPalette;
+  buildPalette = function(container) {
+    _origBuildPalette(container);
+    // Add edit button to header
+    const header = container.querySelector(".wf-palette-header");
+    if (header && !header.querySelector(".wf-palette-header-btn")) {
+      const btn = document.createElement("button");
+      btn.className = "wf-palette-header-btn";
+      btn.textContent = "編輯技能";
+      btn.onclick = toggleSkillEditMode;
+      header.appendChild(btn);
+    }
+  };
+
+  // ── SkillEditor Class ─────────────────────────────────────────
+  class SkillEditor {
+    constructor() {
+      this.currentSkill = null;
+      this.models = ["gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano"];
+      this.modelIdx = 0;
+      this.testMessages = [];
+    }
+
+    async loadSkill(skillName) {
+      this.currentSkill = skillName;
+
+      // Highlight active in palette
+      document.querySelectorAll(".wf-palette-item--clickable").forEach(el => el.classList.remove("is-active"));
+      const activeItem = document.querySelector(`.wf-palette-item--clickable[data-type="${skillName.replace("mcp-","")}"]`);
+      if (activeItem) activeItem.classList.add("is-active");
+
+      // Show editor
+      const empty = document.getElementById("wfEditorEmpty");
+      const content = document.getElementById("wfEditorContent");
+      if (empty) empty.style.display = "none";
+      if (content) content.style.display = "flex";
+
+      // Update titles
+      const def = BLOCK_DEFS[skillName.replace("mcp-", "")] || {};
+      document.getElementById("wfEditorTitle").textContent = def.label || skillName;
+      document.getElementById("wfTestSkillName").textContent = def.label || skillName;
+
+      // Fetch skill data
+      try {
+        const [detail, files] = await Promise.all([
+          fetch(`/skills/${skillName}`).then(r => r.json()),
+          fetch(`/skills/${skillName}/files`).then(r => r.json()),
+        ]);
+        this._renderEditor(skillName, detail, files);
+      } catch (e) {
+        console.error("[SkillEditor] Load failed:", e);
+        if (window.showToast) window.showToast("載入失敗: " + e.message, "error");
+      }
+
+      // Reset test chat
+      this.testMessages = [];
+      const msgArea = document.getElementById("wfTestMessages");
+      if (msgArea) msgArea.innerHTML = `<div class="wf-test-msg system">已載入 ${def.label || skillName}，可以開始測試</div>`;
+    }
+
+    _renderEditor(skillName, detail, files) {
+      const body = document.getElementById("wfEditorBody");
+      if (!body) return;
+
+      const meta = detail.metadata || {};
+      const skillMd = detail.skill_md || "";
+
+      body.innerHTML = `
+        <div class="wf-editor-field">
+          <label>名稱 (name)</label>
+          <input type="text" id="wfEditName" value="${meta.name || skillName}" readonly />
+        </div>
+        <div class="wf-editor-field">
+          <label>簡介 (description)</label>
+          <textarea id="wfEditDesc" rows="3" style="min-height:60px;font-family:inherit;">${(meta.description || "").trim()}</textarea>
+        </div>
+        <div class="wf-editor-field" style="display:flex;gap:10px;">
+          <div style="flex:1">
+            <label>Version</label>
+            <input type="text" id="wfEditVersion" value="${meta.version || "1.0.0"}" />
+          </div>
+          <div style="flex:1">
+            <label>Risk Level</label>
+            <select id="wfEditRisk">
+              <option value="low" ${meta.risk_level==="low"?"selected":""}>low</option>
+              <option value="high" ${meta.risk_level==="high"?"selected":""}>high</option>
+            </select>
+          </div>
+          <div style="flex:1">
+            <label>Timeout (s)</label>
+            <input type="number" id="wfEditTimeout" value="${meta.execution_timeout || 30}" />
+          </div>
+        </div>
+        <div class="wf-editor-field">
+          <label>SKILL.md（完整內容）</label>
+          <textarea id="wfEditSkillMd" rows="12">${this._escapeHtml(skillMd)}</textarea>
+        </div>
+        ${this._renderFileSection("references", "📁 References", files.references || [])}
+        ${this._renderFileSection("scripts", "📁 Scripts", files.scripts || [])}
+        ${this._renderFileSection("assets", "📁 Assets", files.assets || [])}
+      `;
+    }
+
+    _renderFileSection(folder, title, fileList) {
+      const items = fileList.map(f =>
+        `<div class="wf-editor-file-item">
+          <span>${f}</span>
+          <button class="wf-editor-file-del" onclick="window._wfSkillEditor._deleteFile('${folder}','${f}')">&times;</button>
+        </div>`
+      ).join("");
+      return `
+        <div class="wf-editor-file-section">
+          <div class="wf-editor-file-title">
+            <span>${title}</span>
+            <label class="wf-editor-file-upload-btn">
+              上傳
+              <input type="file" style="display:none" onchange="window._wfSkillEditor._uploadFile('${folder}',this)" />
+            </label>
+          </div>
+          ${items || '<div style="font-size:0.65rem;color:var(--text-tertiary);padding:4px 0;">（無檔案）</div>'}
+        </div>
+      `;
+    }
+
+    async save() {
+      if (!this.currentSkill) return;
+      const skillMd = document.getElementById("wfEditSkillMd")?.value;
+      if (!skillMd) return;
+      try {
+        const resp = await fetch(`/skills/${this.currentSkill}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ skill_md: skillMd }),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          // Rescan skills
+          await fetch("/skills/rescan", { method: "POST" });
+          if (window.showToast) window.showToast("已儲存並同步 ✅", "success");
+          // Refresh editor
+          this.loadSkill(this.currentSkill);
+        } else {
+          if (window.showToast) window.showToast("儲存失敗: " + (data.detail || ""), "error");
+        }
+      } catch (e) {
+        if (window.showToast) window.showToast("儲存錯誤: " + e.message, "error");
+      }
+    }
+
+    async rollback() {
+      if (!this.currentSkill) return;
+      try {
+        await fetch(`/skills/${this.currentSkill}/rollback`, { method: "POST" });
+        if (window.showToast) window.showToast("已還原", "success");
+        this.loadSkill(this.currentSkill);
+      } catch (e) {
+        if (window.showToast) window.showToast("還原失敗", "error");
+      }
+    }
+
+    async _uploadFile(folder, input) {
+      if (!this.currentSkill || !input.files[0]) return;
+      const formData = new FormData();
+      formData.append("file", input.files[0]);
+      formData.append("folder", folder);
+      try {
+        await fetch(`/skills/${this.currentSkill}/upload`, { method: "POST", body: formData });
+        if (window.showToast) window.showToast("已上傳", "success");
+        this.loadSkill(this.currentSkill);
+      } catch (e) {
+        if (window.showToast) window.showToast("上傳失敗", "error");
+      }
+    }
+
+    async _deleteFile(folder, filename) {
+      if (!this.currentSkill) return;
+      try {
+        await fetch(`/skills/${this.currentSkill}/files/${folder}/${filename}`, { method: "DELETE" });
+        if (window.showToast) window.showToast("已刪除", "success");
+        this.loadSkill(this.currentSkill);
+      } catch (e) {
+        if (window.showToast) window.showToast("刪除失敗", "error");
+      }
+    }
+
+    cycleModel() {
+      this.modelIdx = (this.modelIdx + 1) % this.models.length;
+      const btn = document.getElementById("wfTestModelBtn");
+      if (btn) btn.textContent = this.models[this.modelIdx];
+    }
+
+    async sendTest() {
+      const input = document.getElementById("wfTestInput");
+      const msgArea = document.getElementById("wfTestMessages");
+      const sendBtn = document.getElementById("wfTestSendBtn");
+      if (!input || !input.value.trim() || !this.currentSkill) return;
+
+      const userMsg = input.value.trim();
+      input.value = "";
+
+      // Add user message
+      this._addTestMsg(userMsg, "user");
+
+      // Disable send
+      if (sendBtn) sendBtn.disabled = true;
+
+      try {
+        const model = this.models[this.modelIdx];
+        const resp = await fetch("/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: "skill_test_" + this.currentSkill,
+            message: userMsg,
+            model: model,
+            injected_skill: this.currentSkill,
+          }),
+        });
+
+        // SSE stream or JSON
+        if (resp.headers.get("content-type")?.includes("text/event-stream")) {
+          const reader = resp.body.getReader();
+          const decoder = new TextDecoder();
+          let assistantText = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value);
+            const lines = chunk.split("\n");
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                try {
+                  const d = JSON.parse(line.slice(6));
+                  if (d.content) assistantText += d.content;
+                } catch (_) {}
+              }
+            }
+          }
+          if (assistantText) this._addTestMsg(assistantText, "assistant");
+        } else {
+          const data = await resp.json();
+          this._addTestMsg(data.reply || data.content || JSON.stringify(data), "assistant");
+        }
+      } catch (e) {
+        this._addTestMsg("Error: " + e.message, "system");
+      }
+
+      if (sendBtn) sendBtn.disabled = false;
+    }
+
+    _addTestMsg(text, role) {
+      const msgArea = document.getElementById("wfTestMessages");
+      if (!msgArea) return;
+      const el = document.createElement("div");
+      el.className = `wf-test-msg ${role}`;
+      el.textContent = text;
+      msgArea.appendChild(el);
+      msgArea.scrollTop = msgArea.scrollHeight;
+    }
+
+    _escapeHtml(s) {
+      return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+    }
+  }
+
   // ── Utility ───────────────────────────────────────────────────
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   // Expose to global
   window.toggleWorkflowView = toggleWorkflowView;
+  window.toggleSkillEditMode = toggleSkillEditMode;
   window.closeWfPropPanel = closeWfPropPanel;
 
 })();
