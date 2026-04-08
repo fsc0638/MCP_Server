@@ -378,3 +378,23 @@ risk_level: "low"
             shutil.rmtree(skill_path, ignore_errors=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ── Workflow Dashboard API ──────────────────────────────────────────────────
+
+@router.get("/workflow/stats")
+async def workflow_stats():
+    """Return token analytics for workflow dashboard (by_skill + daily)."""
+    import json
+    summary_path = Path("workspace/analytics/token_summary.json")
+    if not summary_path.exists():
+        return {"by_skill": {}, "daily": {}, "total": {}}
+    try:
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+        return {
+            "by_skill": data.get("by_skill", {}),
+            "daily": data.get("daily", {}),
+            "total": data.get("total", {}),
+        }
+    except Exception:
+        return {"by_skill": {}, "daily": {}, "total": {}}
+

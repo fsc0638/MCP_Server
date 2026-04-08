@@ -438,21 +438,15 @@
     }
 
     _buildCharts() {
-      // Activity line chart
+      // Activity line chart (daily token usage)
       const actCtx = document.getElementById("wfActivityChart");
       if (actCtx) {
         this.actChart = new Chart(actCtx, {
           type: "line",
-          data: {
-            labels: this._last7Days(),
-            datasets: [{
-              data: [3, 5, 2, 8, 6, 4, 7],
-              borderColor: "#0D6EFD",
-              backgroundColor: "rgba(13,110,253,0.08)",
-              borderWidth: 2, pointRadius: 3, pointBackgroundColor: "#0D6EFD",
-              tension: 0.4, fill: true,
-            }],
-          },
+          data: { labels: [], datasets: [{
+            data: [], borderColor: "#0D6EFD", backgroundColor: "rgba(13,110,253,0.08)",
+            borderWidth: 2, pointRadius: 3, pointBackgroundColor: "#0D6EFD", tension: 0.4, fill: true,
+          }] },
           options: {
             responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: false } },
@@ -464,49 +458,83 @@
         });
       }
 
-      // Skill distribution doughnut
+      // Skill distribution doughnut (from canvas blocks, real-time)
       const distCtx = document.getElementById("wfDistChart");
       if (distCtx) {
-        const cats = Object.values(CATEGORIES);
         this.distChart = new Chart(distCtx, {
           type: "doughnut",
-          data: {
-            labels: cats.map(c => c.label),
-            datasets: [{ data: [2, 1, 2, 2, 2], backgroundColor: cats.map(c => c.color), borderWidth: 0, hoverOffset: 4 }],
-          },
+          data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 0, hoverOffset: 4 }] },
           options: { responsive: true, maintainAspectRatio: false, cutout: "65%", plugins: { legend: { display: false } } },
         });
-
-        // Legend
-        const legend = document.getElementById("wfDistLegend");
-        if (legend) {
-          cats.forEach(c => {
-            const item = document.createElement("div");
-            item.className = "wf-legend-item";
-            item.innerHTML = `<span class="wf-legend-dot" style="background:${c.color}"></span>${c.label}`;
-            legend.appendChild(item);
-          });
-        }
       }
 
-      // Keywords
-      this._renderKeywords();
+      // Fetch real data from API
+      this._fetchStats();
     }
 
-    _last7Days() {
-      const d = []; const now = new Date();
-      for (let i = 6; i >= 0; i--) {
-        const dt = new Date(now); dt.setDate(dt.getDate() - i);
-        d.push((dt.getMonth() + 1) + "/" + dt.getDate());
-      }
-      return d;
+    async _fetchStats() {
+      try {
+        const resp = await fetch("/skills/workflow/stats");
+        if (!resp.ok) return;
+        const data = await resp.json();
+        this._applyDailyChart(data.daily || {});
+        this._applySkillKeywords(data.by_skill || {});
+      } catch (e) { console.warn("[WF Dashboard] Stats fetch failed:", e); }
     }
 
-    _renderKeywords() {
+    _applyDailyChart(daily) {
+      if (!this.actChart) return;
+      // Sort by date, take last 7
+      const entries = Object.entries(daily).sort(([a], [b]) => a.localeCompare(b)).slice(-7);
+      this.actChart.data.labels = entries.map(([d]) => { const p = d.split("-"); return p[1] + "/" + p[2]; });
+      this.actChart.data.datasets[0].data = entries.map(([, v]) => Math.round((v.total_tokens || 0) / 1000)); // K tokens
+      this.actChart.update();
+    }
+
+    _applySkillKeywords(bySkill) {
+      // Sort skills by total_tokens descending
+      const sorted = Object.entries(bySkill)
+        .sort(([, a], [, b]) => (b.total_tokens || 0) - (a.total_tokens || 0));
+      // Keywords = top skills by token usage
       const wrap = document.getElementById("wfKeywords");
-      if (!wrap) return;
-      const keywords = ["網路搜尋", "Python", "排程", "日曆", "會議分析", "圖像生成"];
-      wrap.innerHTML = keywords.map(k => `<span class="wf-keyword-tag">${k}</span>`).join("");
+      if (wrap) {
+        wrap.innerHTML = sorted.slice(0, 8).map(([name]) => {
+          const def = BLOCK_DEFS[name.replace("mcp-", "")];
+          const label = def ? def.label : name.replace("mcp-", "");
+          return `<span class="wf-keyword-tag">${label}</span>`;
+        }).join("");
+      }
+    }
+
+    _updateDistChart() {
+      if (!this.distChart || !window._wfDesigner) return;
+      // Count blocks on canvas by type
+      const counts = {};
+      const colors = {};
+      window._wfDesigner.blocks.forEach(bl => {
+        const def = BLOCK_DEFS[bl.type];
+        if (!def) return;
+        const label = def.label;
+        counts[label] = (counts[label] || 0) + 1;
+        colors[label] = def.color;
+      });
+      const labels = Object.keys(counts);
+      this.distChart.data.labels = labels;
+      this.distChart.data.datasets[0].data = labels.map(l => counts[l]);
+      this.distChart.data.datasets[0].backgroundColor = labels.map(l => colors[l]);
+      this.distChart.update();
+
+      // Update legend
+      const legend = document.getElementById("wfDistLegend");
+      if (legend) {
+        legend.innerHTML = "";
+        labels.forEach(l => {
+          const item = document.createElement("div");
+          item.className = "wf-legend-item";
+          item.innerHTML = `<span class="wf-legend-dot" style="background:${colors[l]}"></span>${l}`;
+          legend.appendChild(item);
+        });
+      }
     }
 
     updateStats(blocks, conns) {
@@ -514,17 +542,7 @@
       const c = document.getElementById("wfStatConns");
       if (b) b.textContent = blocks;
       if (c) c.textContent = conns;
-      // Update doughnut if available
-      if (this.distChart && window._wfDesigner) {
-        const catCounts = {};
-        Object.keys(CATEGORIES).forEach(k => catCounts[k] = 0);
-        window._wfDesigner.blocks.forEach(bl => {
-          const def = BLOCK_DEFS[bl.type];
-          if (def) catCounts[def.category] = (catCounts[def.category] || 0) + 1;
-        });
-        this.distChart.data.datasets[0].data = Object.keys(CATEGORIES).map(k => catCounts[k]);
-        this.distChart.update();
-      }
+      this._updateDistChart();
     }
 
     addLog(msg, status) {
