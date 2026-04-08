@@ -78,6 +78,25 @@ class UMA:
             return skill_md_path.read_text(encoding="utf-8", errors="replace")
         return None
 
+    def _normalize_executable_result(self, result: Any) -> Any:
+        """
+        Executable skills are expected to print JSON to stdout. Parse that JSON
+        so adapters see the real tool payload instead of the subprocess wrapper.
+        """
+        if not isinstance(result, dict):
+            return result
+        if result.get("status") != "success":
+            return result
+
+        output = result.get("output")
+        if not isinstance(output, str) or not output.strip():
+            return result
+
+        try:
+            return json.loads(output)
+        except Exception:
+            return result
+
 
     def _detect_execution_mode(self, skill_name: str) -> str:
         """
@@ -210,11 +229,12 @@ class UMA:
                     import logging
                     logging.getLogger("MCP_Server.UMA").debug(f"Google cred injection skipped: {_e}")
 
-            return self.executor.run_script(
+            raw_result = self.executor.run_script(
                 skill_name, "main.py", arg_dict,
                 env_vars=env_vars,
                 timeout=skill_timeout,
             )
+            return self._normalize_executable_result(raw_result)
 
         # === Knowledge modes (code / semantic): return full SKILL.md + references ===
         skill_md_path = skill_dir / "SKILL.md"

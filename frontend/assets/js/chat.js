@@ -5,7 +5,7 @@
     msgCount: 0,
     tokenCount: 0,
     startAt: Date.now(),
-    waiting: false,
+    pendingSessions: {},
     models: [{ provider: "openai", model: "gpt-4o", display_name: "OpenAI (gpt-4o)" }],
     modelIndex: 0,
     // Use LINE web-login session id if available; otherwise start a fresh web session.
@@ -302,11 +302,12 @@
     return document.getElementById(bubbleId);
   }
 
-  function showTyping() {
-    if (!chatMessages) return;
+  function showTyping(sessionId) {
+    if (!chatMessages || sessionId !== state.sessionId) return;
+    removeTyping(sessionId);
     const row = document.createElement("div");
     row.className = "page-chat-typing-row";
-    row.id = "typingIndicator";
+    row.id = getTypingIndicatorId(sessionId);
     row.innerHTML =
       '<div class="avatar avatar-sm avatar-ai">AI</div>' +
       '<div class="page-chat-typing-bubble">' +
@@ -318,8 +319,8 @@
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
-  function removeTyping() {
-    const el = document.getElementById("typingIndicator");
+  function removeTyping(sessionId) {
+    const el = document.getElementById(getTypingIndicatorId(sessionId));
     if (el) el.remove();
   }
 
@@ -338,6 +339,69 @@
     return m.display_name || (m.provider + " (" + m.model + ")");
   }
 
+  function isSessionPending(sessionId) {
+    return !!state.pendingSessions[sessionId];
+  }
+
+  function isCurrentSessionPending() {
+    return isSessionPending(state.sessionId);
+  }
+
+  function syncComposerState() {
+    if (!sendBtn) return;
+    const hasText = !!(chatInput && chatInput.value.trim());
+    sendBtn.disabled = !hasText || isCurrentSessionPending();
+  }
+
+  function getTypingIndicatorId(sessionId) {
+    return "typingIndicator-" + String(sessionId || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
+  }
+
+  function getOrCreatePendingState(sessionId) {
+    if (!state.pendingSessions[sessionId]) {
+      state.pendingSessions[sessionId] = {
+        text: "",
+        firstChunkReceived: false,
+        completed: false,
+        error: "",
+        bubbleEl: null
+      };
+    }
+    return state.pendingSessions[sessionId];
+  }
+
+  function showPendingBubble(sessionId, isFinal) {
+    const pending = state.pendingSessions[sessionId];
+    if (!pending || sessionId !== state.sessionId || !chatMessages) return;
+
+    let bubble = pending.bubbleEl;
+    if (!bubble || !chatMessages.contains(bubble)) {
+      bubble = renderMessage("ai", pending.text || "");
+      pending.bubbleEl = bubble;
+    }
+
+    const row = bubble.closest(".page-chat-msg-row");
+    if (row) row.style.display = "";
+
+    bubble.innerHTML = formatText(pending.text || "") + (isFinal ? "" : '<span class="page-chat-cursor"></span>');
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function restorePendingSessionUI(sessionId) {
+    const pending = state.pendingSessions[sessionId];
+    if (!pending || sessionId !== state.sessionId) return;
+
+    if (pending.firstChunkReceived || pending.text) {
+      removeTyping(sessionId);
+      showPendingBubble(sessionId, !!pending.completed);
+      return;
+    }
+
+    if (!pending.completed && !pending.error) {
+      showTyping(sessionId);
+    }
+  }
+
   function resetSession() {
     state.sessionId = "web-" + Math.random().toString(36).slice(2, 10);
     localStorage.setItem("kway_chat_session", state.sessionId);
@@ -349,6 +413,7 @@
     // when user sends their first message — not on creation.
     renderConversationList();
     updateStats();
+    syncComposerState();
   }
 
   async function loadModels() {
@@ -449,12 +514,11 @@
     }
   }
 
-  async function streamChatResponse(res, bubbleEl) {
+  async function streamChatResponse(res, sessionId) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder("utf-8");
+    const pending = getOrCreatePendingState(sessionId);
     let buffer = "";
-    let full = "";
-    let firstChunkReceived = false;
 
     while (true) {
       const read = await reader.read();
@@ -476,23 +540,18 @@
             continue;
           }
 
-          // On first real content, remove typing indicator and reveal message row
-          if (!firstChunkReceived && (parsed.status === "streaming" || parsed.status === "success")) {
-            firstChunkReceived = true;
-            removeTyping();
-            const row = bubbleEl.closest(".page-chat-msg-row");
-            if (row) row.style.display = "";
+          if (parsed.status === "streaming" || parsed.status === "success") {
+            pending.firstChunkReceived = true;
+            removeTyping(sessionId);
           }
 
           if (parsed.status === "streaming") {
-            const delta = parsed.content || "";
-            full += delta;
-            bubbleEl.innerHTML = formatText(full) + '<span class="page-chat-cursor"></span>';
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+            pending.text += parsed.content || "";
+            showPendingBubble(sessionId, false);
           } else if (parsed.status === "success") {
-            const finalText = parsed.content || full;
-            full = finalText;
-            bubbleEl.innerHTML = formatText(finalText);
+            pending.text = parsed.content || pending.text;
+            pending.completed = true;
+            showPendingBubble(sessionId, true);
           } else if (parsed.status === "error") {
             throw new Error(parsed.message || "Server error");
           }
@@ -500,26 +559,23 @@
       }
     }
 
-    // Safety: ensure typing indicator is removed even if no content chunks arrived
-    if (!firstChunkReceived) {
-      removeTyping();
-      const row = bubbleEl.closest(".page-chat-msg-row");
-      if (row) row.style.display = "";
+    removeTyping(sessionId);
+    if (pending.text) {
+      showPendingBubble(sessionId, !!pending.completed);
     }
-    bubbleEl.innerHTML = formatText(full);
-    return full;
+    return pending.text;
   }
 
   async function sendMessage(text) {
     const content = (text || "").trim();
-    if (!content || state.waiting) return;
+    const requestSessionId = state.sessionId;
+    if (!content || isSessionPending(requestSessionId)) return;
 
-    state.waiting = true;
-    if (sendBtn) sendBtn.disabled = true;
-    if (chatInput) {
+    if (requestSessionId === state.sessionId && chatInput) {
       chatInput.value = "";
       autoResize(chatInput);
     }
+    syncComposerState();
 
     // Lazy session creation: only add to sidebar when user actually sends a message
     ensureSessionExists();
@@ -527,7 +583,13 @@
     renderMessage("user", content);
     state.msgCount += 1;
     updateStats(Math.ceil(content.length / 4));
-    showTyping();
+    const pending = getOrCreatePendingState(requestSessionId);
+    pending.text = "";
+    pending.firstChunkReceived = false;
+    pending.completed = false;
+    pending.error = "";
+    pending.bubbleEl = null;
+    showTyping(requestSessionId);
     updateCurrentSessionPreview(content);
 
     try {
@@ -545,7 +607,7 @@
 
       const payload = {
         user_input: content,
-        session_id: state.sessionId,
+        session_id: requestSessionId,
         provider: m.provider || "openai",
         model: m.model || "gpt-4o",
         language: language,
@@ -558,31 +620,41 @@
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
-        removeTyping();
+        removeTyping(requestSessionId);
         const errText = await res.text();
         throw new Error("HTTP " + res.status + ": " + errText);
       }
 
-      // Keep typing indicator visible until first streaming chunk arrives
-      const bubble = renderMessage("ai", "");
-      const aiRow = bubble.closest(".page-chat-msg-row");
-      if (aiRow) aiRow.style.display = "none";
-      const finalText = await streamChatResponse(res, bubble);
-      state.msgCount += 1;
-      updateStats(Math.ceil(finalText.length / 4));
-      state.meetingText += "\n\nUser:\n" + content + "\n\nAssistant:\n" + finalText;
+      const finalText = await streamChatResponse(res, requestSessionId);
+      delete state.pendingSessions[requestSessionId];
+      if (requestSessionId === state.sessionId) {
+        state.msgCount += 1;
+        updateStats(Math.ceil(finalText.length / 4));
+        state.meetingText += "\n\nUser:\n" + content + "\n\nAssistant:\n" + finalText;
+      }
       
       // Trigger title summarization on first exchange
-      if (state.msgCount <= 2) {
+      if (requestSessionId === state.sessionId && state.msgCount <= 2) {
         summarizeConversationTitle(content, finalText);
       }
     } catch (err) {
-      removeTyping();
+      removeTyping(requestSessionId);
+      const errorText = "Request failed\n\n" + (err.message || "");
+      const pendingError = getOrCreatePendingState(requestSessionId);
+      pendingError.text = errorText;
+      pendingError.error = errorText;
+      pendingError.completed = true;
+      pendingError.firstChunkReceived = true;
+      pendingError.bubbleEl = null;
+      if (requestSessionId !== state.sessionId) {
+        showToast("Chat request failed", "error");
+        return;
+      }
       renderMessage("ai", "系統暫時無法回覆，請稍後再試。\n\n" + (err.message || ""));
       showToast("Chat request failed", "error");
+      delete state.pendingSessions[requestSessionId];
     } finally {
-      state.waiting = false;
-      if (sendBtn) sendBtn.disabled = false;
+      syncComposerState();
     }
   }
 
@@ -682,6 +754,7 @@
     if (sid === state.sessionId) return;
     state.sessionId = sid;
     localStorage.setItem("kway_chat_session", state.sessionId);
+    syncComposerState();
     
     const session = state.sessions.find(s => s.id === sid);
     if (chatTitleText) chatTitleText.textContent = session ? session.title : "MCP Assistant";
@@ -693,6 +766,7 @@
     
     renderConversationList();
     const hasHistory = await loadHistory();
+    restorePendingSessionUI(state.sessionId);
     if (!hasHistory) {
       if (chatMessages) {
         chatMessages.innerHTML =
@@ -740,7 +814,7 @@
   if (chatInput && sendBtn) {
     chatInput.addEventListener("input", function () {
       autoResize(chatInput);
-      sendBtn.disabled = !chatInput.value.trim() || state.waiting;
+      syncComposerState();
     });
     chatInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -802,5 +876,6 @@
     loadSideInfo();
     renderConversationList();
     loadHistory();
+    syncComposerState();
   });
 })();

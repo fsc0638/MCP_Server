@@ -23,7 +23,7 @@ class GeminiAdapter:
     def __init__(self, uma, model: Optional[str] = None):
         self.uma = uma
         # 1. Resolve Model: use passed model or fallback to env var
-        self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         self.model = None
         self._uploaded_files_cache = {}
 
@@ -149,6 +149,42 @@ class GeminiAdapter:
             return select_relevant_tools(user_query, all_tools, max_tools)
 
         return all_tools
+
+    def _build_tool_fallback_text(self, tool_results: List[tuple]) -> str:
+        """Surface tool output when Gemini finishes a tool round without text."""
+        segments = []
+        for fn_name, result in tool_results:
+            if not isinstance(result, dict):
+                text = str(result).strip()
+                if text:
+                    segments.append(text)
+                continue
+
+            status = (result.get("status") or "").lower()
+            if status in ("error", "failed", "security_violation"):
+                message = result.get("message") or result.get("stderr") or json.dumps(result, ensure_ascii=False)
+                message = str(message).strip()
+                if message:
+                    segments.append(f"{fn_name}: {message}")
+                continue
+
+            transcript = result.get("transcript")
+            if isinstance(transcript, str) and transcript.strip():
+                segments.append(transcript.strip())
+                continue
+
+            for key in ("content", "message", "output"):
+                value = result.get(key)
+                if isinstance(value, str) and value.strip():
+                    segments.append(value.strip())
+                    break
+            else:
+                try:
+                    segments.append(json.dumps(result, ensure_ascii=False))
+                except Exception:
+                    pass
+
+        return "\n\n".join(s for s in segments if s).strip()
 
     def chat(
         self,
@@ -323,6 +359,7 @@ class GeminiAdapter:
 
             tool_calls_made = 0
             MAX_ITERATIONS = 10
+            last_tool_results = []
 
             full_content = ""
             for _ in range(MAX_ITERATIONS):
@@ -357,6 +394,9 @@ class GeminiAdapter:
 
                     # 2. If no function calls, we are done
                     if not has_function_call:
+                        if not full_content.strip() and tool_calls_made > 0:
+                            full_content = self._build_tool_fallback_text(last_tool_results)
+
                         # Ensure stable response_id for correlation
                         if not response_id:
                             import time
@@ -403,6 +443,7 @@ class GeminiAdapter:
                     tool_results_parts = []
                     for fn_name, fn_args in pending_calls:
                         result = self.uma.execute_tool_call(fn_name, fn_args)
+                        last_tool_results.append((fn_name, result))
 
                         # Check for approval requirement
                         if result.get("status") == "requires_approval":
@@ -414,7 +455,7 @@ class GeminiAdapter:
                                     "tool_name": fn_name,
                                     "args": fn_args,
                                     "provider": "gemini",
-                                    "model": self.model,
+                                    "model": self.model_name,
                                 })
                             yield {
                                 "status": "requires_approval",
@@ -464,7 +505,7 @@ class GeminiAdapter:
 
                     # 4. Send all results back in one go
                     response = chat.send_message(
-                        genai.protos.Content(parts=tool_results_parts),
+                        genai.protos.Content(role="user", parts=tool_results_parts),
                         stream=True
                     )
                     tool_calls_made += 1
