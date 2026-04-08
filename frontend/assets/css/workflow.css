@@ -1,0 +1,293 @@
+/* ============================================================
+   AgentK Workflow Designer — CSS
+   Style: AgentK Claymorphism + Bento Grid
+   Prefix: wf-
+   ============================================================ */
+
+/* ── View Toggle ─────────────────────────────────────────────── */
+.wf-palette-wrap,
+.wf-canvas-area,
+.wf-dashboard-wrap { display: none; }
+
+.page-chat-body.wf-mode .page-chat-sidebar-left > *:not(.wf-palette-wrap) { display: none; }
+.page-chat-body.wf-mode .page-chat-main > *:not(.wf-canvas-area) { display: none; }
+.page-chat-body.wf-mode .page-chat-sidebar-right > *:not(.wf-dashboard-wrap) { display: none; }
+
+.page-chat-body.wf-mode .wf-palette-wrap,
+.page-chat-body.wf-mode .wf-canvas-area,
+.page-chat-body.wf-mode .wf-dashboard-wrap { display: flex; flex-direction: column; height: 100%; }
+
+/* ── Left Panel: Block Palette ───────────────────────────────── */
+.wf-palette-header {
+  padding: 14px 16px 10px;
+  font-size: 0.82rem; font-weight: 700; color: var(--text-primary);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex; align-items: center; gap: 8px;
+}
+.wf-palette-header svg { opacity: 0.5; }
+
+.wf-palette-body {
+  flex: 1; overflow-y: auto; padding: 8px 10px;
+}
+
+.wf-palette-category {
+  margin-bottom: 12px;
+}
+.wf-palette-category-title {
+  font-size: 0.68rem; font-weight: 700; text-transform: uppercase;
+  color: var(--text-tertiary); letter-spacing: 0.05em;
+  padding: 4px 6px; margin-bottom: 4px;
+}
+
+.wf-palette-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; margin: 2px 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md, 10px);
+  font-size: 0.76rem; font-weight: 500; color: var(--text-secondary);
+  cursor: grab; transition: var(--transition);
+  user-select: none;
+}
+.wf-palette-item:hover {
+  background: var(--bg-hover);
+  border-color: var(--kway-blue);
+  color: var(--text-primary);
+  transform: translateX(2px);
+}
+.wf-palette-item:active { cursor: grabbing; }
+
+.wf-palette-item-icon {
+  width: 24px; height: 24px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.85rem; color: #fff; flex-shrink: 0;
+}
+
+.wf-palette-item-accent {
+  width: 3px; height: 20px; border-radius: 2px; flex-shrink: 0;
+}
+
+/* ── Center: Canvas ──────────────────────────────────────────── */
+.wf-canvas-toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 12px; height: 40px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 0.72rem; color: var(--text-tertiary);
+}
+.wf-canvas-toolbar button {
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  cursor: pointer; color: var(--text-secondary);
+  transition: var(--transition);
+}
+.wf-canvas-toolbar button:hover {
+  background: var(--bg-hover); border-color: var(--border-subtle);
+}
+.wf-canvas-toolbar button.active {
+  background: var(--kway-blue); color: #fff; border-color: var(--kway-blue);
+}
+.wf-toolbar-sep {
+  width: 1px; height: 18px; background: var(--border-subtle); margin: 0 4px;
+}
+.wf-toolbar-info {
+  margin-left: auto; font-size: 0.7rem; color: var(--text-tertiary);
+}
+.wf-zoom-label {
+  min-width: 36px; text-align: center; font-variant-numeric: tabular-nums;
+}
+
+.wf-canvas-viewport {
+  flex: 1; overflow: auto; position: relative;
+  background: var(--bg-main);
+}
+.wf-canvas-surface {
+  width: 3000px; height: 2000px;
+  position: relative;
+  background-image: radial-gradient(circle, var(--border-subtle) 1px, transparent 1px);
+  background-size: 24px 24px;
+  transform-origin: 0 0;
+}
+
+.wf-connections-svg {
+  position: absolute; top: 0; left: 0;
+  pointer-events: none; z-index: 1;
+}
+.wf-connections-svg path {
+  pointer-events: stroke;
+}
+
+/* ── Flow Block ──────────────────────────────────────────────── */
+.wf-block {
+  position: absolute; width: 160px;
+  background: var(--bg-surface);
+  border: 2px solid var(--border-subtle);
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  cursor: move; z-index: 10;
+  transition: box-shadow 0.12s, border-color 0.12s;
+  user-select: none;
+}
+.wf-block:hover {
+  box-shadow: 0 3px 12px rgba(0,0,0,0.1);
+}
+.wf-block.selected {
+  border-color: var(--kway-blue);
+  box-shadow: 0 0 0 3px rgba(13,110,253,0.15), 0 3px 12px rgba(0,0,0,0.1);
+  z-index: 30;
+}
+.wf-block.running .wf-block-header {
+  animation: wf-block-pulse 1s infinite;
+}
+
+.wf-block-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px 8px 0 0;
+  color: #fff; font-size: 0.72rem; font-weight: 700;
+}
+.wf-block-body {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px;
+  font-size: 0.65rem; color: var(--text-tertiary);
+}
+
+.wf-block-status {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--border-medium, #ccc);
+}
+.wf-block-status.ok { background: #34a853; }
+.wf-block-status.running { background: var(--kway-blue); animation: wf-blink 1s infinite; }
+.wf-block-status.error { background: #ea4335; }
+
+/* Ports */
+.wf-port {
+  position: absolute; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--bg-surface); border: 2px solid var(--border-medium, #aaa);
+  cursor: crosshair; z-index: 20;
+  transition: var(--transition);
+}
+.wf-port:hover {
+  border-color: var(--kway-blue);
+  background: var(--kway-blue);
+  transform: scale(1.3);
+}
+.wf-port-in { left: -7px; top: 50%; transform: translateY(-50%); }
+.wf-port-in:hover { transform: translateY(-50%) scale(1.3); }
+.wf-port-out { right: -7px; top: 50%; transform: translateY(-50%); }
+.wf-port-out:hover { transform: translateY(-50%) scale(1.3); }
+
+/* Connection paths */
+.wf-conn-path {
+  fill: none; stroke: var(--text-tertiary); stroke-width: 2;
+  transition: stroke 0.15s;
+}
+.wf-conn-path:hover {
+  stroke: var(--kway-blue); stroke-width: 3; cursor: pointer;
+}
+.wf-conn-path.active-flow {
+  stroke: var(--kway-blue); stroke-dasharray: 8 4;
+  animation: wf-flow 0.8s linear infinite;
+}
+.wf-conn-temp {
+  fill: none; stroke: var(--kway-blue); stroke-width: 2;
+  stroke-dasharray: 5 5; pointer-events: none;
+}
+
+/* ── Right Panel: Dashboard ──────────────────────────────────── */
+.wf-dashboard-header {
+  padding: 14px 16px 10px;
+  font-size: 0.82rem; font-weight: 700; color: var(--text-primary);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.wf-dashboard-body {
+  flex: 1; overflow-y: auto; padding: 12px;
+}
+
+.wf-stats-grid {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
+  margin-bottom: 16px;
+}
+.wf-stat-card {
+  background: var(--bg-sidebar);
+  border-radius: 10px; padding: 10px;
+  text-align: center;
+}
+.wf-stat-value {
+  font-size: 1.2rem; font-weight: 800; color: var(--kway-blue);
+}
+.wf-stat-label {
+  font-size: 0.62rem; color: var(--text-tertiary); margin-top: 2px;
+}
+
+.wf-log-section-title {
+  font-size: 0.72rem; font-weight: 700; color: var(--text-secondary);
+  margin-bottom: 8px; display: flex; align-items: center; gap: 6px;
+}
+.wf-live-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: #34a853;
+  animation: wf-blink 1s infinite;
+}
+.wf-log-list {
+  max-height: 400px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.wf-log-entry {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-sidebar);
+  border-radius: 8px;
+  font-size: 0.68rem; color: var(--text-secondary);
+  animation: wf-slideIn 0.2s ease;
+}
+.wf-log-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.wf-log-dot.success { background: #34a853; }
+.wf-log-dot.running { background: var(--kway-blue); animation: wf-blink 1s infinite; }
+.wf-log-dot.failed { background: #ea4335; }
+.wf-log-name { font-weight: 600; flex: 1; }
+.wf-log-time { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+
+/* ── Property Panel (floating) ───────────────────────────────── */
+.wf-prop-panel {
+  position: fixed; z-index: 200; width: 240px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+  padding: 14px; font-size: 0.76rem;
+}
+.wf-prop-panel.hidden { display: none; }
+.wf-prop-panel-title {
+  font-weight: 700; color: var(--text-primary); margin-bottom: 10px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.wf-prop-panel-close {
+  cursor: pointer; color: var(--text-tertiary); background: none; border: none;
+  font-size: 1rem; line-height: 1;
+}
+.wf-prop-field { margin-bottom: 8px; }
+.wf-prop-field label {
+  display: block; font-size: 0.65rem; font-weight: 600;
+  color: var(--text-tertiary); margin-bottom: 3px;
+}
+.wf-prop-field input, .wf-prop-field select {
+  width: 100%; padding: 5px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px; font-size: 0.74rem;
+  background: var(--bg-main);
+  color: var(--text-primary);
+}
+.wf-prop-field input:focus, .wf-prop-field select:focus {
+  outline: none; border-color: var(--kway-blue);
+  box-shadow: 0 0 0 2px rgba(13,110,253,0.1);
+}
+
+/* ── Animations ──────────────────────────────────────────────── */
+@keyframes wf-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+@keyframes wf-block-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
+@keyframes wf-flow { to { stroke-dashoffset: -12; } }
+@keyframes wf-slideIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
