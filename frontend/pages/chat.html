@@ -34,6 +34,12 @@
         資訊處工作區
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
+      <button class="page-chat-workspace-tag" id="btnWorkflowDesigner" onclick="toggleWorkflowView()" aria-label="設計工作流">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 17h7M17.5 14v7"/>
+        </svg>
+        設計工作流
+      </button>
     </div>
 
     <div class="page-chat-topbar-right">
@@ -53,8 +59,19 @@
     </div>
   </header>
 
+  <!-- Workflow Designer View (hidden by default) -->
+  <div id="workflowView" class="page-workflow-view" style="display:none;">
+    <div class="page-workflow-placeholder">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--text-tertiary)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><path d="M14 17h7M17.5 14v7"/>
+      </svg>
+      <h2>工作流設計器</h2>
+      <p>此功能開發中，敬請期待</p>
+    </div>
+  </div>
+
   <!-- App body -->
-  <div class="page-chat-body">
+  <div id="chatBody" class="page-chat-body">
 
     <!-- Left sidebar: conversation list -->
     <aside class="page-chat-sidebar-left" aria-label="對話記錄">
@@ -315,5 +332,27 @@
 <script src="../config.js" onerror="console.warn('config.js 未找到，將使用示範模式')"></script>
 <script src="../assets/js/script.js"></script>
 <script src="../assets/js/chat.js"></script>
+<script>
+/* Workflow Designer View Toggle */
+function toggleWorkflowView() {
+  const chatBody = document.getElementById('chatBody');
+  const workflowView = document.getElementById('workflowView');
+  const btn = document.getElementById('btnWorkflowDesigner');
+
+  const isWorkflow = workflowView.style.display !== 'none';
+
+  if (isWorkflow) {
+    /* Switch back to chat */
+    workflowView.style.display = 'none';
+    chatBody.style.display = '';
+    btn.classList.remove('active');
+  } else {
+    /* Switch to workflow */
+    chatBody.style.display = 'none';
+    workflowView.style.display = 'flex';
+    btn.classList.add('active');
+  }
+}
+</script>
 </body>
 </html>
