@@ -381,7 +381,7 @@ risk_level: "low"
 
 # ── Workflow Dashboard API ──────────────────────────────────────────────────
 
-@router.get("/workflow/stats")
+@router.get("/skills/workflow/stats")
 async def workflow_stats():
     """Return token analytics for workflow dashboard (by_skill + daily)."""
     import json, os
