@@ -712,23 +712,23 @@
       if (saved) {
         window._wfDesigner.load("default");
       } else {
-        // Demo flow
-        window._wfDesigner.addBlock("start", 80, 200);
-        window._wfDesigner.addBlock("web-search", 320, 140);
-        window._wfDesigner.addBlock("python-executor", 320, 280);
-        window._wfDesigner.addBlock("end", 560, 200);
-        window._wfDesigner._addConnection(1, 2);
-        window._wfDesigner._addConnection(1, 3);
-        window._wfDesigner._addConnection(2, 4);
-        window._wfDesigner._addConnection(3, 4);
+        // Default: only a Start block
+        window._wfDesigner.addBlock("start", 200, 250);
       }
     }
 
-    // Init Dashboard
+    // Init Dashboard — sync immediately with canvas state
     const dashWrap = document.getElementById("wfDashboardWrap");
     if (dashWrap) {
       window._wfDashboard = new WorkflowDashboard(dashWrap);
-      window._wfDashboard.refresh();
+      // Wait for Chart.js to load, then sync
+      const _syncDash = () => {
+        if (window._wfDashboard && window._wfDesigner) {
+          window._wfDashboard.updateStats(window._wfDesigner.blocks.size, window._wfDesigner.connections.length);
+        }
+      };
+      setTimeout(_syncDash, 500);
+      setTimeout(_syncDash, 2000); // retry after Chart.js CDN loads
     }
   }
 
