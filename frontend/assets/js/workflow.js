@@ -271,8 +271,9 @@
     }
 
     _bezier(x1, y1, x2, y2) {
-      const cx = Math.abs(x2 - x1) * 0.5;
-      return `M ${x1} ${y1} C ${x1 + cx} ${y1}, ${x2 - cx} ${y2}, ${x2} ${y2}`;
+      // Orthogonal (right-angle) routing snapped to grid
+      const midX = snap((x1 + x2) / 2);
+      return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
     }
 
     // ── Zoom ─────────────────────────────────────────────────
@@ -464,7 +465,7 @@
         this.distChart = new Chart(distCtx, {
           type: "doughnut",
           data: { labels: [], datasets: [{ data: [], backgroundColor: [], borderWidth: 0, hoverOffset: 4 }] },
-          options: { responsive: true, maintainAspectRatio: false, cutout: "65%", plugins: { legend: { display: false } } },
+          options: { responsive: true, maintainAspectRatio: false, cutout: "65%", plugins: { legend: { display: false }, tooltip: { enabled: false } } },
         });
       }
 

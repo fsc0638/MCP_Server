@@ -233,9 +233,10 @@
   margin-bottom: 12px; height: 120px; position: relative;
 }
 .wf-chart-row {
-  display: flex; gap: 10px; align-items: center; margin-bottom: 12px;
+  display: flex; gap: 12px; align-items: center; margin-bottom: 12px;
+  flex-direction: row;
 }
-.wf-chart-sm { flex: 0 0 100px; height: 100px; }
+.wf-chart-sm { flex: 0 0 110px; height: 110px; }
 .wf-chart-legend { flex: 1; }
 .wf-legend-item {
   display: flex; align-items: center; gap: 6px;
