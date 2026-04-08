@@ -181,7 +181,7 @@
 
 /* Connection paths */
 .wf-conn-path {
-  fill: none; stroke: #94a3b8; stroke-width: 2.5;
+  fill: none; stroke: #94a3b8; stroke-width: 2;
   transition: stroke 0.15s;
 }
 .wf-conn-path:hover {
@@ -239,10 +239,10 @@
 .wf-chart-legend { flex: 1; }
 .wf-legend-item {
   display: flex; align-items: center; gap: 6px;
-  font-size: 0.65rem; color: var(--text-secondary); margin: 3px 0;
+  font-size: 0.7rem; font-weight: 500; color: var(--text-primary); margin: 4px 0;
 }
 .wf-legend-dot {
-  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
 }
 .wf-keyword-wrap {
   display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 14px;

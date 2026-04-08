@@ -28,7 +28,7 @@
     analysis:   { label: "分析",   color: "#6200ea" },
   };
 
-  const BLOCK_W = 160, BLOCK_H = 68, GRID = 8;
+  const BLOCK_W = 160, BLOCK_H = 68, GRID = 24;  // Snap to dot grid (24px)
   const snap = v => Math.round(v / GRID) * GRID;
 
   // ── FlowDesigner ──────────────────────────────────────────────
@@ -58,7 +58,7 @@
         marker.setAttribute("id", "wf-arrow");
         marker.setAttribute("viewBox", "0 0 10 10");
         marker.setAttribute("refX", "10"); marker.setAttribute("refY", "5");
-        marker.setAttribute("markerWidth", "8"); marker.setAttribute("markerHeight", "8");
+        marker.setAttribute("markerWidth", "5"); marker.setAttribute("markerHeight", "5");
         marker.setAttribute("orient", "auto-start-reverse");
         const arrowPath = document.createElementNS(NS, "path");
         arrowPath.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
@@ -468,8 +468,10 @@
         });
       }
 
-      // Fetch real data from API
+      // Fetch real data from API + sync canvas state
       this._fetchStats();
+      // Sync distribution chart with current canvas blocks
+      setTimeout(() => this._updateDistChart(), 300);
     }
 
     async _fetchStats() {
