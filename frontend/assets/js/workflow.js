@@ -849,11 +849,23 @@
     const editArea = document.getElementById("wfSkillEditArea");
 
     if (_skillEditMode) {
-      // Enter skill edit mode
+      // Enter skill edit mode — reset to initial state
       if (canvasArea) canvasArea.style.display = "none";
       if (editArea) { editArea.style.display = "flex"; editArea.classList.add("visible"); }
       _rebuildPaletteForEdit(paletteWrap);
       if (!window._wfSkillEditor) window._wfSkillEditor = new SkillEditor();
+      // Reset editor to empty state
+      const empty = document.getElementById("wfEditorEmpty");
+      const content = document.getElementById("wfEditorContent");
+      if (empty) empty.style.display = "";
+      if (content) content.style.display = "none";
+      // Reset test chat
+      const msgArea = document.getElementById("wfTestMessages");
+      if (msgArea) msgArea.innerHTML = '<div class="wf-test-msg system">選擇 Skill 後即可開始測試對話</div>';
+      document.getElementById("wfTestSkillName").textContent = "—";
+      // Clear palette selection
+      document.querySelectorAll(".wf-palette-item--clickable").forEach(el => el.classList.remove("is-active"));
+      if (window._wfSkillEditor) window._wfSkillEditor.currentSkill = null;
     } else {
       // Exit skill edit mode
       if (editArea) { editArea.style.display = "none"; editArea.classList.remove("visible"); }
