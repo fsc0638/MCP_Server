@@ -557,31 +557,47 @@
     }
 
     _updateDistChart() {
-      if (!this.distChart || !window._wfDesigner) return;
-      // Count blocks on canvas by type
+      const chartWrap = document.querySelector(".wf-chart-row");
+      if (!chartWrap || !window._wfDesigner) return;
+
+      // Count blocks on canvas by type (exclude control: start/end/branch)
       const counts = {};
       const colors = {};
       window._wfDesigner.blocks.forEach(bl => {
         const def = BLOCK_DEFS[bl.type];
-        if (!def) return;
+        if (!def || def.category === "control") return; // Skip control nodes
         const label = def.label;
         counts[label] = (counts[label] || 0) + 1;
         colors[label] = def.color;
       });
       const labels = Object.keys(counts);
-      this.distChart.data.labels = labels;
-      this.distChart.data.datasets[0].data = labels.map(l => counts[l]);
-      this.distChart.data.datasets[0].backgroundColor = labels.map(l => colors[l]);
-      this.distChart.update();
 
-      // Update legend
+      // No skill blocks → show placeholder
       const legend = document.getElementById("wfDistLegend");
+      if (!labels.length) {
+        if (this.distChart) {
+          this.distChart.data.labels = [];
+          this.distChart.data.datasets[0].data = [];
+          this.distChart.update();
+        }
+        if (legend) legend.innerHTML = '<div class="wf-legend-item" style="color:var(--text-tertiary);font-style:italic;">尚無技能節點</div>';
+        return;
+      }
+
+      if (this.distChart) {
+        this.distChart.data.labels = labels;
+        this.distChart.data.datasets[0].data = labels.map(l => counts[l]);
+        this.distChart.data.datasets[0].backgroundColor = labels.map(l => colors[l]);
+        this.distChart.update();
+      }
+
+      // Update legend with counts
       if (legend) {
         legend.innerHTML = "";
         labels.forEach(l => {
           const item = document.createElement("div");
           item.className = "wf-legend-item";
-          item.innerHTML = `<span class="wf-legend-dot" style="background:${colors[l]}"></span>${l}`;
+          item.innerHTML = `<span class="wf-legend-dot" style="background:${colors[l]}"></span>${l} <span style="color:var(--text-tertiary);font-size:0.6rem;margin-left:2px;">(${counts[l]})</span>`;
           legend.appendChild(item);
         });
       }
