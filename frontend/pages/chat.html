@@ -195,7 +195,8 @@
         <div class="wf-editor-pane" id="wfEditorPane">
           <div class="wf-editor-empty" id="wfEditorEmpty">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-            <p>從左側選擇一個 Skill 開始編輯</p>
+            <p>請從左側選擇一個 Skill 開始編輯<br/>或</p>
+            <button class="wf-editor-btn wf-editor-btn-primary" style="padding:8px 20px;font-size:0.8rem;" onclick="window._wfSkillEditor&&window._wfSkillEditor.createNewSkill()">+ 新增 Skill</button>
           </div>
           <div id="wfEditorContent" style="display:none;flex-direction:column;height:100%;">
             <div class="wf-editor-header">

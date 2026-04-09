@@ -929,6 +929,41 @@
       this._backup = null; // snapshot for rollback
     }
 
+    async createNewSkill() {
+      const name = prompt("請輸入新 Skill 名稱（格式：mcp-xxx-xxx）", "mcp-new-skill");
+      if (!name || !name.trim()) return;
+      const skillName = name.trim().toLowerCase();
+
+      // Validate format
+      if (!/^mcp-[a-z0-9-]+$/.test(skillName)) {
+        if (window.showToast) window.showToast("名稱格式錯誤，必須為 mcp-{小寫英數字-}", "error");
+        return;
+      }
+
+      try {
+        const resp = await fetch("/skills/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: skillName }),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+          // Rescan + refresh palette
+          await fetch("/skills/rescan", { method: "POST" });
+          _skillsLoaded = false;
+          const paletteWrap = document.getElementById("wfPaletteWrap");
+          if (paletteWrap) await _rebuildPaletteForEdit(paletteWrap);
+          // Load the new skill in editor
+          this.loadSkill(skillName);
+          if (window.showToast) window.showToast(`已建立 ${skillName}`, "success");
+        } else {
+          if (window.showToast) window.showToast("建立失敗: " + (data.detail || ""), "error");
+        }
+      } catch (e) {
+        if (window.showToast) window.showToast("建立錯誤: " + e.message, "error");
+      }
+    }
+
     async loadSkill(skillName) {
       this.currentSkill = skillName;
 
