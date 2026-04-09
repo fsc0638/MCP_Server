@@ -780,17 +780,13 @@
       if (btn) btn.classList.remove("active");
 
       // Force exit skill-edit mode if active
-      if (_skillEditMode) {
-        _skillEditMode = false;
-        const editArea = document.getElementById("wfSkillEditArea");
-        if (editArea) { editArea.style.display = "none"; editArea.classList.remove("visible"); }
-        const canvasArea = document.getElementById("wfCanvasArea");
-        if (canvasArea) canvasArea.style.display = "flex";
-      }
+      _skillEditMode = false;
 
-      // Hide all workflow containers
-      const editArea2 = document.getElementById("wfSkillEditArea");
-      if (editArea2) { editArea2.style.display = "none"; editArea2.classList.remove("visible"); }
+      // Reset ALL inline display styles so CSS takes over
+      ["wfSkillEditArea", "wfCanvasArea", "wfPaletteWrap", "wfDashboardWrap"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.style.display = ""; el.classList.remove("visible"); }
+      });
     } else {
       body.classList.add("wf-mode");
       if (btn) btn.classList.add("active");
