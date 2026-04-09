@@ -767,7 +767,7 @@
   // ── View Toggle ───────────────────────────────────────────────
   let _initialized = false;
 
-  function toggleWorkflowView() {
+  async function toggleWorkflowView() {
     const body = document.querySelector(".page-chat-body");
     const btn = document.getElementById("btnWorkflowDesigner");
     if (!body) return;
@@ -777,9 +777,8 @@
     if (isActive) {
       // Check for unsaved skill edits before exiting
       if (_skillEditMode && window._wfSkillEditor?._hasUnsavedChanges()) {
-        if (!confirm("技能尚未儲存，確定要退出嗎？")) {
-          return;
-        }
+        const ok = await _showConfirmAsync("技能尚未儲存，確定要退出嗎？");
+        if (!ok) return;
       }
 
       // Exit workflow mode — clean up everything
@@ -849,12 +848,11 @@
   // ── Skill Edit Mode ────────────────────────────────────────────
   let _skillEditMode = false;
 
-  function toggleSkillEditMode() {
+  async function toggleSkillEditMode() {
     // Check for unsaved changes before exiting
     if (_skillEditMode && window._wfSkillEditor?._hasUnsavedChanges()) {
-      if (!confirm("技能尚未儲存，確定要退出嗎？")) {
-        return; // User cancelled — stay in edit mode
-      }
+      const ok = await _showConfirmAsync("技能尚未儲存，確定要退出嗎？");
+      if (!ok) return;
     }
 
     _skillEditMode = !_skillEditMode;
@@ -944,16 +942,15 @@
     }
 
     _hasUnsavedChanges() {
-      // No skill loaded or new unsaved skill
-      if (this._isNew) return true;
-      if (!this.currentSkill || !this._backup) return false;
-      // Compare current editor content with backup
-      try {
-        const currentMd = this._assembleSkillMd();
-        return currentMd !== this._backup;
-      } catch {
-        return false;
-      }
+      return this._dirty === true;
+    }
+
+    _markDirty() {
+      this._dirty = true;
+    }
+
+    _clearDirty() {
+      this._dirty = false;
     }
 
     createNewSkill() {
@@ -961,6 +958,7 @@
       this._backup = null;
       this._editState = { skillName: "", meta: {}, rawContent: "" };
       this._isNew = true;
+      this._markDirty();
 
       // Show editor, hide empty state
       const empty = document.getElementById("wfEditorEmpty");
@@ -1019,8 +1017,14 @@
     }
 
     async loadSkill(skillName) {
+      // Check unsaved before switching
+      if (this._hasUnsavedChanges() && this.currentSkill && this.currentSkill !== skillName) {
+        const ok = await _showConfirmAsync("技能尚未儲存，確定要切換嗎？");
+        if (!ok) return;
+      }
       this.currentSkill = skillName;
       this._isNew = false;
+      this._clearDirty();
 
       // Highlight active in palette
       document.querySelectorAll(".wf-palette-item--clickable").forEach(el => el.classList.remove("is-active"));
@@ -1109,7 +1113,10 @@
         ${this._renderFileSection("assets", "模板檔案 (Assets)", files.assets || [])}
       `;
 
-      // (parameters removed — not used by system)
+      // Bind change events to mark dirty
+      body.querySelectorAll("input, textarea, select").forEach(el => {
+        el.addEventListener("input", () => this._markDirty());
+      });
     }
 
     _splitSkillMd(raw) {
@@ -1244,6 +1251,7 @@
             if (window.showToast) window.showToast("更名失敗: " + (renameErr.detail || ""), "error");
           }
         } else {
+          this._clearDirty();
           if (window.showToast) window.showToast("已儲存並同步 ✅", "success");
         }
 
@@ -1388,6 +1396,41 @@
     _escapeHtml(s) {
       return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
     }
+  }
+
+  // ── Confirm Dialog (styled) ────────────────────────────────────
+  function _showConfirmDialog(message) {
+    // Synchronous confirm — styled dialogs would need async refactor
+    // For now use native confirm but wrapped for future replacement
+    return window.confirm(message);
+  }
+
+  // Inject styled confirm modal into DOM (async version for future use)
+  function _showConfirmAsync(message) {
+    return new Promise(resolve => {
+      // Remove existing
+      let existing = document.getElementById("wfConfirmOverlay");
+      if (existing) existing.remove();
+
+      const overlay = document.createElement("div");
+      overlay.id = "wfConfirmOverlay";
+      overlay.className = "wf-confirm-overlay";
+      overlay.innerHTML = `
+        <div class="wf-confirm-box">
+          <div class="wf-confirm-icon">⚠️</div>
+          <div class="wf-confirm-msg">${message}</div>
+          <div class="wf-confirm-actions">
+            <button class="wf-confirm-btn wf-confirm-cancel">取消</button>
+            <button class="wf-confirm-btn wf-confirm-ok">確定退出</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      overlay.querySelector(".wf-confirm-cancel").onclick = () => { overlay.remove(); resolve(false); };
+      overlay.querySelector(".wf-confirm-ok").onclick = () => { overlay.remove(); resolve(true); };
+      overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); resolve(false); } };
+    });
   }
 
   // ── Utility ───────────────────────────────────────────────────
