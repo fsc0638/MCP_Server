@@ -970,34 +970,42 @@
       // Store parsed state for save
       this._editState = { skillName, meta, rawContent };
 
+      // Display name from BLOCK_DEFS or fallback
+      const def = BLOCK_DEFS[skillName.replace("mcp-", "")] || {};
+      const displayName = def.label || skillName.replace("mcp-", "").replace(/-/g, " ");
+
       body.innerHTML = `
         <div class="wf-editor-field">
-          <label>名稱 (name)</label>
+          <label>顯示名稱 (Display Name)</label>
+          <input type="text" id="wfEditDisplayName" value="${this._escapeHtml(displayName)}" />
+        </div>
+        <div class="wf-editor-field">
+          <label>名稱 (Name)</label>
           <input type="text" id="wfEditName" value="${meta.name || skillName}" readonly />
         </div>
         <div class="wf-editor-field">
-          <label>簡介 (description)</label>
+          <label>簡介 (Description)</label>
           <textarea id="wfEditDesc" rows="3" style="min-height:60px;font-family:inherit;">${this._escapeHtml((meta.description || "").trim())}</textarea>
         </div>
         <div class="wf-editor-field" style="display:flex;gap:10px;">
-          <div style="flex:1"><label>Version</label><input type="text" id="wfEditVersion" value="${meta.version || "1.0.0"}" /></div>
-          <div style="flex:1"><label>Risk Level</label>
+          <div style="flex:1"><label>技能版本 (Version)</label><input type="text" id="wfEditVersion" value="${meta.version || "1.0.0"}" /></div>
+          <div style="flex:1"><label>操作風險 (Risk)</label>
             <select id="wfEditRisk">
               <option value="low" ${meta.risk_level==="low"?"selected":""}>low</option>
               <option value="high" ${meta.risk_level==="high"?"selected":""}>high</option>
             </select>
           </div>
-          <div style="flex:1"><label>Timeout (s)</label><input type="number" id="wfEditTimeout" value="${meta.execution_timeout || 30}" /></div>
+          <div style="flex:1"><label>逾時等待 (Timeout)</label><input type="number" id="wfEditTimeout" value="${meta.execution_timeout || 30}" /></div>
         </div>
 
-        <div class="wf-editor-section-title">📄 Skill 指示（Markdown）</div>
+        <div class="wf-editor-section-title">提示詞 (Prompt)</div>
         <div class="wf-editor-field">
           <textarea id="wfEditBody" rows="12">${this._escapeHtml(mdBody.trim())}</textarea>
         </div>
 
-        ${this._renderFileSection("references", "📁 References", files.references || [])}
-        ${this._renderFileSection("scripts", "📁 Scripts", files.scripts || [])}
-        ${this._renderFileSection("assets", "📁 Assets", files.assets || [])}
+        ${this._renderFileSection("references", "知識參考 (References)", files.references || [])}
+        ${this._renderFileSection("scripts", "程式操作 (Scripts)", files.scripts || [])}
+        ${this._renderFileSection("assets", "模板檔案 (Assets)", files.assets || [])}
       `;
 
       // (parameters removed — not used by system)
