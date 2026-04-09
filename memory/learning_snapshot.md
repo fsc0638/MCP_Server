@@ -19,4 +19,4 @@
 - [profiles] workspace\profiles\line_U09e3122dcc146ed9784ec91acd6d7530_signals.jsonl
 - [profiles] workspace\profiles\line_U09e3122dcc146ed9784ec91acd6d7530_signals.jsonl
 - [profiles] workspace\profiles\line_U09e3122dcc146ed9784ec91acd6d7530_signals.jsonl
-- [profiles] workspace\profiles\line_U09e3122dcc146ed9784ec91acd6d7530_signals.jsonl
+- [profiles] workspace\sessions\line_group_Cc69660946c6ed481b220303409b9105b_msg_cache.json
