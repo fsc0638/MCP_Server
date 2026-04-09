@@ -135,6 +135,9 @@ async def approve_tool_call(session_id: str):
                     text = chunk.get("content", "")
                     final_content += text
                     yield {"data": json.dumps({"status": "streaming", "content": text}, ensure_ascii=False)}
+                elif status == "provider_meta":
+                    yield {"data": json.dumps(chunk, ensure_ascii=False)}
+                    continue
                 elif status == "success":
                     final = chunk.get("content", final_content) or final_content
                     session_mgr.append_message(session_id, "assistant", final)
