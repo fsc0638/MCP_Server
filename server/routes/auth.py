@@ -182,24 +182,22 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
     _ctx = None
     try:
         from server.services.employee_lookup import get_user_context
-        _candidates = [
-            f"line_{sess.user_id}",           # line_U09e...
-            sess.user_id,                      # U09e... (raw)
-            f"line_U{sess.user_id}",           # in case user_id doesn't have U prefix
-        ]
-        import logging as _logging
-        _log = _logging.getLogger("MCP_Server.Auth")
-        _log.info(f"[Auth /me] sess.user_id={sess.user_id}, candidates={_candidates}")
+        # sess.user_id could be:
+        #   "line_U09e..." (from LINE Login canonical_line_session_id)
+        #   "U09e..." (raw LINE userId)
+        #   "google_xxx" (from Google login)
+        _uid = sess.user_id
+        _candidates = [_uid]  # Try as-is first
+        if _uid.startswith("line_"):
+            pass  # Already has prefix, as-is is correct
+        elif _uid.startswith("U"):
+            _candidates.append(f"line_{_uid}")  # Add line_ prefix
         for _cand in _candidates:
             _ctx = get_user_context(_cand)
             if _ctx:
-                _log.info(f"[Auth /me] Found user context: {_cand}")
                 break
-        if not _ctx:
-            _log.info(f"[Auth /me] No user context found for any candidate")
-    except Exception as _e:
-        import logging as _logging
-        _logging.getLogger("MCP_Server.Auth").warning(f"[Auth /me] Error: {_e}")
+    except Exception:
+        _ctx = None
         _ctx = None
 
     user = {
@@ -224,4 +222,7 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
         user["preferences"] = _ctx.get("preferences", {})
         user["onboarding_completed"] = _ctx.get("onboarding_completed", False)
 
+    # Temporary debug: include raw session info
+    user["_debug_sess_user_id"] = sess.user_id
+    user["_debug_ctx_found"] = _ctx is not None
     return {"status": "success", "user": user}
