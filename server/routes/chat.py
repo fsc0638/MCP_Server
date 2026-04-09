@@ -80,8 +80,8 @@ async def approve_tool_call(session_id: str):
     tool_args = pending["args"]
     uma = get_uma()
 
-    # For meeting-to-notion: if transcript missing, pull from last user message in session
-    if tool_name == "mcp-meeting-to-notion" and not tool_args.get("transcript"):
+    # For meeting-analyzer: if transcript missing, pull from last user message in session
+    if tool_name == "mcp-meeting-analyzer" and not tool_args.get("transcript"):
         history = session_mgr.get_or_create_conversation(session_id)
         for msg in reversed(history):
             if msg.get("role") == "user" and msg.get("content"):

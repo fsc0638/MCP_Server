@@ -867,7 +867,7 @@ class ScheduledPushService:
         "mcp-txt-llm-analyzer",             # Read-only analyzer
         "mcp-spreadsheet-llm-analyzer",     # Read-only analyzer
         "mcp-groovenaust-meeting-analyst",  # Meeting-specific
-        "mcp-meeting-to-notion",            # Meeting-specific
+        "mcp-meeting-analyzer",              # Meeting-specific
         "mcp-high-risk-demo",               # Test only
     }
     # Tools that MUST be available for scheduled push tasks

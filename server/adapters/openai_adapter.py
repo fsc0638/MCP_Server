@@ -380,21 +380,21 @@ class OpenAIAdapter:
                                 fn_args.setdefault("_original_filename", _session_mgr.get_metadata(session_id, "last_original_filename") or "")
                                 if _orig_date:
                                     fn_args.setdefault("meeting_date", _orig_date)
-                                # For meeting-to-notion: inject full transcript text
-                                if fn_name == "mcp-meeting-to-notion":
+                                # For meeting-analyzer: inject full transcript text
+                                if fn_name == "mcp-meeting-analyzer":
                                     try:
                                         with open(_orig_path, "r", encoding="utf-8") as _f:
                                             _original_text = _f.read()
                                         if _original_text and len(_original_text) > len(fn_args.get("transcript", "")):
                                             fn_args["transcript"] = _original_text
-                                            logger.info(f"[Adapter] Injected original file ({len(_original_text)} chars) into mcp-meeting-to-notion transcript")
+                                            logger.info(f"[Adapter] Injected original file ({len(_original_text)} chars) into mcp-meeting-analyzer transcript")
                                     except Exception as _e:
                                         logger.warning(f"[Adapter] Failed to inject original file: {_e}")
 
-                        # For meeting-to-notion: fallback to user_query if transcript still empty
-                        if fn_name == "mcp-meeting-to-notion" and not fn_args.get("transcript") and user_query:
+                        # For meeting-analyzer: fallback to user_query if transcript still empty
+                        if fn_name == "mcp-meeting-analyzer" and not fn_args.get("transcript") and user_query:
                             fn_args["transcript"] = user_query
-                            logger.info(f"[Adapter] Injected user_query ({len(user_query)} chars) into mcp-meeting-to-notion transcript (no file path)")
+                            logger.info(f"[Adapter] Injected user_query ({len(user_query)} chars) into mcp-meeting-analyzer transcript (no file path)")
 
                         # Google Workspace skills: check credentials before execution
                         if fn_name.startswith("mcp-google-") and session_id:

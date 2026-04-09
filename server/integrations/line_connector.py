@@ -1367,7 +1367,7 @@ def _process_line_message(
                                     f"{extracted_text}\n\n"
                                     f"[請根據以上文件內容，直接進行分析、總結或處理使用者的需求。]"
                                 )
-                                # Store original file path for downstream skills (e.g. meeting-to-notion)
+                                # Store original file path for downstream skills (e.g. meeting-analyzer)
                                 # Use the already-saved line_uploads file directly — no temp copy needed.
                                 _session_mgr.set_metadata(session_id, "last_original_file", attached_file_path)
                                 _session_mgr.set_metadata(session_id, "last_original_filename", filename)
