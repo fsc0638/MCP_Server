@@ -187,11 +187,19 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
             sess.user_id,                      # U09e... (raw)
             f"line_U{sess.user_id}",           # in case user_id doesn't have U prefix
         ]
+        import logging as _logging
+        _log = _logging.getLogger("MCP_Server.Auth")
+        _log.info(f"[Auth /me] sess.user_id={sess.user_id}, candidates={_candidates}")
         for _cand in _candidates:
             _ctx = get_user_context(_cand)
             if _ctx:
+                _log.info(f"[Auth /me] Found user context: {_cand}")
                 break
-    except Exception:
+        if not _ctx:
+            _log.info(f"[Auth /me] No user context found for any candidate")
+    except Exception as _e:
+        import logging as _logging
+        _logging.getLogger("MCP_Server.Auth").warning(f"[Auth /me] Error: {_e}")
         _ctx = None
 
     user = {
