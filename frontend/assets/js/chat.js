@@ -514,6 +514,96 @@
     }
   }
 
+  async function handleApproval(toolName, riskDesc, sessionId, pending) {
+    const existing = document.getElementById("authApprovalModal");
+    if (existing) existing.remove();
+
+    return new Promise((resolve) => {
+      const modal = document.createElement("div");
+      modal.id = "authApprovalModal";
+      modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:9999;";
+      modal.innerHTML =
+        '<div style="background:var(--bg-surface,#1e1e2e);border-radius:12px;max-width:460px;width:92%;box-shadow:0 8px 32px rgba(0,0,0,.4);">' +
+        '<div style="background:linear-gradient(135deg,#f05252,#d03030);border-radius:12px 12px 0 0;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;">' +
+        '<div><p style="color:#fff;margin:0;font-weight:600;font-size:1rem;">⚠ 高風險操作授權請求</p>' +
+        '<p style="color:rgba(255,255,255,.8);margin:4px 0 0;font-size:.82rem;">需要您的確認才能繼續執行</p></div>' +
+        '<button id="authModalCloseBtn" style="background:none;border:none;color:#fff;font-size:1.1rem;cursor:pointer;padding:4px;">✕</button></div>' +
+        '<div style="padding:20px;">' +
+        '<p style="margin:0 0 6px;font-weight:600;font-size:.85rem;color:var(--text-secondary,#aaa);">技能名稱</p>' +
+        '<p style="margin:0 0 14px;font-family:monospace;background:var(--bg-base,#13131f);padding:8px 12px;border-radius:8px;color:#60a5fa;font-size:.9rem;">' + toolName + "</p>" +
+        '<p style="margin:0 0 6px;font-weight:600;font-size:.85rem;color:var(--text-secondary,#aaa);">風險說明</p>' +
+        '<p style="margin:0;color:var(--text-secondary,#aaa);font-size:.88rem;line-height:1.55;">' + riskDesc + "</p></div>" +
+        '<div style="display:flex;gap:10px;justify-content:flex-end;padding:14px 20px;border-top:1px solid var(--border-subtle,rgba(255,255,255,.08));">' +
+        '<button id="authRejectBtn" style="padding:8px 20px;border-radius:8px;border:1px solid var(--border-subtle,rgba(255,255,255,.15));background:none;color:var(--text-primary,#e0e0e0);cursor:pointer;font-size:.9rem;">拒絕執行</button>' +
+        '<button id="authApproveBtn" style="padding:8px 20px;border-radius:8px;border:none;background:#f05252;color:#fff;cursor:pointer;font-size:.9rem;font-weight:600;">確認授權</button></div></div>';
+      document.body.appendChild(modal);
+
+      function closeModal() { modal.remove(); }
+
+      async function doReject() {
+        closeModal();
+        try { await fetch("/chat/reject/" + encodeURIComponent(sessionId), { method: "POST" }); } catch (_) {}
+        pending.text = (pending.text ? pending.text + "\n\n" : "") + "⚠ 已拒絕執行高風險技能「" + toolName + "」。";
+        pending.completed = true;
+        showPendingBubble(sessionId, true);
+        resolve(pending.text);
+      }
+
+      async function doApprove() {
+        closeModal();
+        try {
+          const res2 = await fetch("/chat/approve/" + encodeURIComponent(sessionId), { method: "POST" });
+          if (!res2.ok) {
+            const errText = await res2.text();
+            pending.text = (pending.text ? pending.text + "\n\n" : "") + "⚠ 授權恢復失敗: " + errText;
+            pending.completed = true;
+            showPendingBubble(sessionId, true);
+            resolve(pending.text);
+            return;
+          }
+          pending.text = "";
+          const reader2 = res2.body.getReader();
+          const dec2 = new TextDecoder("utf-8");
+          let buf2 = "";
+          while (true) {
+            const r = await reader2.read();
+            if (r.done) break;
+            buf2 += dec2.decode(r.value, { stream: true });
+            const evts = buf2.split("\r\n\r\n");
+            buf2 = evts.pop() || "";
+            for (const ev of evts) {
+              for (const ln of ev.split(/\r?\n/)) {
+                if (!ln.startsWith("data: ")) continue;
+                const pl = ln.slice(6).trim();
+                if (pl === "[DONE]") continue;
+                let p2 = null;
+                try { p2 = JSON.parse(pl); } catch (_) { continue; }
+                if (p2.status === "streaming") {
+                  pending.text += p2.content || "";
+                  showPendingBubble(sessionId, false);
+                } else if (p2.status === "success") {
+                  pending.text = p2.content || pending.text;
+                  pending.completed = true;
+                  showPendingBubble(sessionId, true);
+                }
+              }
+            }
+          }
+          resolve(pending.text);
+        } catch (err) {
+          pending.text = (pending.text ? pending.text + "\n\n" : "") + "⚠ 授權執行失敗: " + (err.message || "");
+          pending.completed = true;
+          showPendingBubble(sessionId, true);
+          resolve(pending.text);
+        }
+      }
+
+      modal.querySelector("#authModalCloseBtn").onclick = doReject;
+      modal.querySelector("#authRejectBtn").onclick = doReject;
+      modal.querySelector("#authApproveBtn").onclick = doApprove;
+    });
+  }
+
   async function streamChatResponse(res, sessionId) {
     const reader = res.body.getReader();
     const decoder = new TextDecoder("utf-8");
@@ -554,6 +644,25 @@
             showPendingBubble(sessionId, true);
           } else if (parsed.status === "error") {
             throw new Error(parsed.message || "Server error");
+          } else if (parsed.status === "tool_call") {
+            if (!pending.firstChunkReceived) {
+              pending.firstChunkReceived = true;
+              removeTyping(sessionId);
+            }
+            pending.text = "⚙ " + (parsed.message || ("正在執行技能：" + (parsed.tool_name || "...")));
+            showPendingBubble(sessionId, false);
+          } else if (parsed.status === "requires_approval") {
+            if (!pending.firstChunkReceived) {
+              pending.firstChunkReceived = true;
+              removeTyping(sessionId);
+            }
+            try { reader.cancel(); } catch (_) {}
+            return await handleApproval(
+              parsed.tool_name || "未知技能",
+              parsed.risk_description || "此操作被標記為高風險，需要您的授權。",
+              sessionId,
+              pending
+            );
           }
         }
       }
