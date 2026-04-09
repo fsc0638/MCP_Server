@@ -981,7 +981,7 @@
         </div>
         <div class="wf-editor-field">
           <label>名稱 (Name)</label>
-          <input type="text" id="wfEditName" value="${meta.name || skillName}" readonly />
+          <input type="text" id="wfEditName" value="${meta.name || skillName}" data-original="${meta.name || skillName}" />
         </div>
         <div class="wf-editor-field">
           <label>簡介 (Description)</label>
@@ -1077,22 +1077,52 @@
       if (!this.currentSkill) return;
       const skillMd = this._assembleSkillMd();
       if (!skillMd) return;
+
+      // Check if name was changed (rename)
+      const nameInput = document.getElementById("wfEditName");
+      const newName = nameInput?.value?.trim();
+      const originalName = nameInput?.dataset?.original;
+      const renamed = newName && originalName && newName !== originalName;
+
       try {
+        // Save content first
         const resp = await fetch(`/skills/${this.currentSkill}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ yaml_content: skillMd }),
         });
         const data = await resp.json();
-        if (resp.ok) {
-          // Rescan skills
-          await fetch("/skills/rescan", { method: "POST" });
-          if (window.showToast) window.showToast("已儲存並同步 ✅", "success");
-          // Refresh editor
-          this.loadSkill(this.currentSkill);
-        } else {
+        if (!resp.ok) {
           if (window.showToast) window.showToast("儲存失敗: " + (data.detail || ""), "error");
+          return;
         }
+
+        // Handle rename if name changed
+        if (renamed) {
+          const renameResp = await fetch(`/skills/${this.currentSkill}/rename`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ new_name: newName }),
+          });
+          if (renameResp.ok) {
+            this.currentSkill = newName;
+            if (window.showToast) window.showToast(`已更名為 ${newName} 並同步`, "success");
+          } else {
+            const renameErr = await renameResp.json();
+            if (window.showToast) window.showToast("更名失敗: " + (renameErr.detail || ""), "error");
+          }
+        } else {
+          if (window.showToast) window.showToast("已儲存並同步 ✅", "success");
+        }
+
+        // Rescan + refresh
+        await fetch("/skills/rescan", { method: "POST" });
+        // Reload dynamic skills
+        _skillsLoaded = false;
+        this.loadSkill(this.currentSkill);
+        // Rebuild palette
+        const paletteWrap = document.getElementById("wfPaletteWrap");
+        if (paletteWrap) await _rebuildPaletteForEdit(paletteWrap);
       } catch (e) {
         if (window.showToast) window.showToast("儲存錯誤: " + e.message, "error");
       }

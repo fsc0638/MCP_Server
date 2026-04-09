@@ -186,6 +186,53 @@ def delete_skill(skill_name: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/skills/{skill_name}/rename")
+def rename_skill(skill_name: str, body: dict):
+    """Rename a skill directory. Updates SKILL.md name field and git syncs."""
+    new_name = body.get("new_name", "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="new_name is required")
+    # Validate name format
+    import re as _re
+    if not _re.match(r'^mcp-[a-z0-9-]+$', new_name):
+        raise HTTPException(status_code=400, detail="Name must match pattern: mcp-{lowercase-ascii-hyphens}")
+    if new_name == skill_name:
+        return {"status": "success", "message": "Name unchanged"}
+
+    uma = get_uma()
+    skills_home = uma.registry.skills_home.resolve()
+    old_path = (skills_home / skill_name).resolve()
+    new_path = (skills_home / new_name).resolve()
+
+    if not old_path.exists():
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    if new_path.exists():
+        raise HTTPException(status_code=409, detail=f"Skill '{new_name}' already exists")
+
+    try:
+        old_path.relative_to(skills_home)
+        new_path.relative_to(skills_home)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path traversal denied")
+
+    try:
+        old_path.rename(new_path)
+        # Update name in SKILL.md
+        skill_md_path = new_path / "SKILL.md"
+        if skill_md_path.exists():
+            content = skill_md_path.read_text(encoding="utf-8")
+            content = content.replace(f"name: {skill_name}", f"name: {new_name}", 1)
+            skill_md_path.write_text(content, encoding="utf-8")
+        # Git sync
+        sync_res = sync_skills_git(f"Renamed skill: {skill_name} → {new_name}")
+        # Re-register
+        uma.registry.scan_skills()
+        invalidate_prompt_cache()
+        return {"status": "success", "old_name": skill_name, "new_name": new_name, "git_sync": sync_res}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/skills/{skill_name}/rollback")
 def rollback_skill(skill_name: str):
     uma = get_uma()
