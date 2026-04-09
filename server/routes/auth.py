@@ -198,11 +198,10 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
                 break
     except Exception:
         _ctx = None
-        _ctx = None
 
     user = {
         "id": sess.user_id,
-        "session_id": _line_session_id,
+        "session_id": _uid,
         "name": (_ctx.get("name") if _ctx else None) or sess.name or "LINE User",
         "picture": sess.picture or "",
         "initials": ((_ctx.get("name") if _ctx else None) or sess.name or "L")[:2].upper(),
