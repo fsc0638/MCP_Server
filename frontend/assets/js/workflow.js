@@ -805,6 +805,10 @@
       if (!_initialized) {
         _initialized = true;
         _initWorkflow();
+      } else {
+        // Re-entering: ensure palette is in flow mode (not skill-edit)
+        const paletteWrap = document.getElementById("wfPaletteWrap");
+        if (paletteWrap) _rebuildPaletteForFlow(paletteWrap);
       }
     }
   }
