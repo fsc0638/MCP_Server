@@ -645,14 +645,17 @@
       const skills = data.skills || {};
       Object.entries(skills).forEach(([name, info]) => {
         const shortName = name.replace("mcp-", "");
-        // If already in BLOCK_DEFS, keep it; otherwise add dynamically
+        const apiDisplayName = info.display_name || "";
         if (!BLOCK_DEFS[shortName]) {
           BLOCK_DEFS[shortName] = {
-            label: _guessLabel(name, info.description),
+            label: apiDisplayName || _guessLabel(name, info.description),
             icon: _guessIcon(name),
             color: _guessColor(name),
             category: _guessCategory(name, info.description),
           };
+        } else if (apiDisplayName) {
+          // Update label from API display_name if available
+          BLOCK_DEFS[shortName].label = apiDisplayName;
         }
         _dynamicSkills[name] = { ready: info.ready !== false, description: info.description || "" };
       });
@@ -970,9 +973,9 @@
       // Store parsed state for save
       this._editState = { skillName, meta, rawContent };
 
-      // Display name from BLOCK_DEFS or fallback
+      // Display name: metadata > BLOCK_DEFS > fallback
       const def = BLOCK_DEFS[skillName.replace("mcp-", "")] || {};
-      const displayName = def.label || skillName.replace("mcp-", "").replace(/-/g, " ");
+      const displayName = meta.display_name || def.label || skillName.replace("mcp-", "").replace(/-/g, " ");
 
       body.innerHTML = `
         <div class="wf-editor-field">
@@ -1055,8 +1058,11 @@
 
       const meta = this._editState?.meta || {};
 
+      const displayName = document.getElementById("wfEditDisplayName")?.value?.trim() || "";
+
       // Assemble YAML frontmatter (no parameters, no estimated_tokens)
       let yaml = `---\nname: ${name}\n`;
+      if (displayName) yaml += `display_name: "${displayName}"\n`;
       if (meta.provider) yaml += `provider: ${meta.provider}\n`;
       yaml += `version: "${version}"\n`;
       if (desc) {

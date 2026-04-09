@@ -67,6 +67,7 @@ def list_skills():
         meta = data["metadata"]
         skills[name] = {
             "description": meta.get("description", ""),
+            "display_name": meta.get("display_name", ""),
             "version": meta.get("version", "unknown"),
             "ready": meta.get("_env_ready", False),
             "missing_deps": meta.get("_missing_deps", []),
