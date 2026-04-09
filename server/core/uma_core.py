@@ -412,7 +412,7 @@ class SkillRegistry:
                 "runtime_requirements": meta.get("runtime_requirements", []),
                 "estimated_tokens": meta.get("estimated_tokens", 500),
                 "requires_venv": meta.get("requires_venv", False),
-                "parameters": meta.get("parameters", {})
+                # "parameters" removed — not used by system (Phase 1 uses open schema)
             })
         manifest_path = self.skills_home.parent / "skills_manifest.json"
         try:
