@@ -929,39 +929,66 @@
       this._backup = null; // snapshot for rollback
     }
 
-    async createNewSkill() {
-      const name = prompt("請輸入新 Skill 名稱（格式：mcp-xxx-xxx）", "mcp-new-skill");
-      if (!name || !name.trim()) return;
-      const skillName = name.trim().toLowerCase();
+    createNewSkill() {
+      this.currentSkill = null;
+      this._backup = null;
+      this._editState = { skillName: "", meta: {}, rawContent: "" };
+      this._isNew = true;
 
-      // Validate format
-      if (!/^mcp-[a-z0-9-]+$/.test(skillName)) {
-        if (window.showToast) window.showToast("名稱格式錯誤，必須為 mcp-{小寫英數字-}", "error");
-        return;
-      }
+      // Show editor, hide empty state
+      const empty = document.getElementById("wfEditorEmpty");
+      const content = document.getElementById("wfEditorContent");
+      if (empty) empty.style.display = "none";
+      if (content) content.style.display = "flex";
 
-      try {
-        const resp = await fetch("/skills/create", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: skillName }),
-        });
-        const data = await resp.json();
-        if (resp.ok) {
-          // Rescan + refresh palette
-          await fetch("/skills/rescan", { method: "POST" });
-          _skillsLoaded = false;
-          const paletteWrap = document.getElementById("wfPaletteWrap");
-          if (paletteWrap) await _rebuildPaletteForEdit(paletteWrap);
-          // Load the new skill in editor
-          this.loadSkill(skillName);
-          if (window.showToast) window.showToast(`已建立 ${skillName}`, "success");
-        } else {
-          if (window.showToast) window.showToast("建立失敗: " + (data.detail || ""), "error");
-        }
-      } catch (e) {
-        if (window.showToast) window.showToast("建立錯誤: " + e.message, "error");
-      }
+      // Update header
+      document.getElementById("wfEditorTitle").textContent = "新增 Skill";
+      document.getElementById("wfTestSkillName").textContent = "—";
+
+      // Render empty form
+      const body = document.getElementById("wfEditorBody");
+      if (!body) return;
+      body.innerHTML = `
+        <div class="wf-editor-field">
+          <label>顯示名稱 (Display Name)</label>
+          <input type="text" id="wfEditDisplayName" value="" placeholder="例如：我的新技能" />
+        </div>
+        <div class="wf-editor-field">
+          <label>名稱 (Name)</label>
+          <input type="text" id="wfEditName" value="mcp-" data-original="" placeholder="mcp-my-new-skill" />
+        </div>
+        <div class="wf-editor-field">
+          <label>簡介 (Description)</label>
+          <textarea id="wfEditDesc" rows="3" style="min-height:60px;font-family:inherit;" placeholder="描述這個技能的用途，LLM 會根據此文字決定是否呼叫此技能..."></textarea>
+        </div>
+        <div class="wf-editor-field" style="display:flex;gap:10px;">
+          <div style="flex:1"><label>技能版本 (Version)</label><input type="text" id="wfEditVersion" value="1.0.0" /></div>
+          <div style="flex:1"><label>操作風險 (Risk)</label>
+            <select id="wfEditRisk"><option value="low" selected>low</option><option value="high">high</option></select>
+          </div>
+          <div style="flex:1"><label>逾時等待 (Timeout)</label><input type="number" id="wfEditTimeout" value="30" /></div>
+        </div>
+        <div class="wf-editor-section-title">提示詞 (Prompt)</div>
+        <div class="wf-editor-field">
+          <textarea id="wfEditBody" rows="12" placeholder="在此輸入 Skill 的指示內容..."></textarea>
+        </div>
+        <div class="wf-editor-file-section">
+          <div class="wf-editor-file-title"><span>知識參考 (References)</span></div>
+          <div style="font-size:0.65rem;color:var(--text-tertiary);padding:4px 0;">儲存後即可上傳檔案</div>
+        </div>
+        <div class="wf-editor-file-section">
+          <div class="wf-editor-file-title"><span>程式操作 (Scripts)</span></div>
+          <div style="font-size:0.65rem;color:var(--text-tertiary);padding:4px 0;">儲存後即可上傳檔案</div>
+        </div>
+        <div class="wf-editor-file-section">
+          <div class="wf-editor-file-title"><span>模板檔案 (Assets)</span></div>
+          <div style="font-size:0.65rem;color:var(--text-tertiary);padding:4px 0;">儲存後即可上傳檔案</div>
+        </div>
+      `;
+
+      // Reset test chat
+      const msgArea = document.getElementById("wfTestMessages");
+      if (msgArea) msgArea.innerHTML = '<div class="wf-test-msg system">儲存 Skill 後即可開始測試</div>';
     }
 
     async loadSkill(skillName) {
@@ -1123,6 +1150,34 @@
     }
 
     async save() {
+      // Handle new skill creation
+      if (this._isNew) {
+        const newName = document.getElementById("wfEditName")?.value?.trim();
+        if (!newName || !/^mcp-[a-z0-9-]+$/.test(newName)) {
+          if (window.showToast) window.showToast("名稱格式錯誤，必須為 mcp-{小寫英數字-}", "error");
+          return;
+        }
+        try {
+          // Create skill directory
+          const createResp = await fetch("/skills/create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: newName }),
+          });
+          if (!createResp.ok) {
+            const err = await createResp.json();
+            if (window.showToast) window.showToast("建立失敗: " + (err.detail || ""), "error");
+            return;
+          }
+          this.currentSkill = newName;
+          this._isNew = false;
+          this._editState = { skillName: newName, meta: {}, rawContent: "" };
+        } catch (e) {
+          if (window.showToast) window.showToast("建立錯誤: " + e.message, "error");
+          return;
+        }
+      }
+
       if (!this.currentSkill) return;
       const skillMd = this._assembleSkillMd();
       if (!skillMd) return;
