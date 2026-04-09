@@ -80,13 +80,24 @@ async def approve_tool_call(session_id: str):
     tool_args = pending["args"]
     uma = get_uma()
 
+    # For meeting-to-notion: if transcript missing, pull from last user message in session
+    if tool_name == "mcp-meeting-to-notion" and not tool_args.get("transcript"):
+        history = session_mgr.get_or_create_conversation(session_id)
+        for msg in reversed(history):
+            if msg.get("role") == "user" and msg.get("content"):
+                tool_args["transcript"] = msg["content"]
+                logger.info(f"[Approve] Injected transcript from session history ({len(tool_args['transcript'])} chars)")
+                break
+
     async def resume_generator() -> AsyncGenerator[dict, None]:
         try:
             # 1. Execute the tool (bypass risk gate — user already approved)
             executor = uma.executor
             script_path = executor.skills_home / tool_name / "scripts" / "main.py"
             if script_path.exists():
-                result = executor.run_script(tool_name, "main.py", tool_args)
+                skill_data = uma.registry.get_skill(tool_name)
+                exec_timeout = skill_data.get("metadata", {}).get("execution_timeout", 30) if skill_data else 30
+                result = executor.run_script(tool_name, "main.py", tool_args, timeout=exec_timeout)
             else:
                 result = {"status": "error", "message": f"Skill '{tool_name}' has no executable script."}
 

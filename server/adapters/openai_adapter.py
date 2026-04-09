@@ -391,6 +391,11 @@ class OpenAIAdapter:
                                     except Exception as _e:
                                         logger.warning(f"[Adapter] Failed to inject original file: {_e}")
 
+                        # For meeting-to-notion: fallback to user_query if transcript still empty
+                        if fn_name == "mcp-meeting-to-notion" and not fn_args.get("transcript") and user_query:
+                            fn_args["transcript"] = user_query
+                            logger.info(f"[Adapter] Injected user_query ({len(user_query)} chars) into mcp-meeting-to-notion transcript (no file path)")
+
                         # Google Workspace skills: check credentials before execution
                         if fn_name.startswith("mcp-google-") and session_id:
                             try:
