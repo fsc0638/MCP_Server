@@ -178,10 +178,19 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
         return {"status": "error", "message": "session_expired"}
 
     # Load extended user context if available
-    _line_session_id = f"line_{sess.user_id}" if sess.user_id.startswith("U") else sess.user_id
+    # Try multiple session_id formats to find the user context file
+    _ctx = None
     try:
         from server.services.employee_lookup import get_user_context
-        _ctx = get_user_context(_line_session_id)
+        _candidates = [
+            f"line_{sess.user_id}",           # line_U09e...
+            sess.user_id,                      # U09e... (raw)
+            f"line_U{sess.user_id}",           # in case user_id doesn't have U prefix
+        ]
+        for _cand in _candidates:
+            _ctx = get_user_context(_cand)
+            if _ctx:
+                break
     except Exception:
         _ctx = None
 
