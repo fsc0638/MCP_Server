@@ -614,21 +614,59 @@ class OpenAIAdapter:
                 clean_msg = {k: v for k, v in msg.items() if k != "created_at"}
                 clean_history.append(clean_msg)
 
+            import time as _time
+            _t0 = _time.time()
+            _session_id = kwargs.get("session_id", "")
+
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=clean_history,
                 temperature=temperature,
-                stream=True
+                stream=True,
+                stream_options={"include_usage": True},
                 # NOTE: No 'tools' or 'tool_choice' passed — strictly isolated
             )
             full_content = ""
+            _usage = {}
             for chunk in response:
+                # Capture usage from final chunk
+                if hasattr(chunk, "usage") and chunk.usage:
+                    _usage = {
+                        "input_tokens": getattr(chunk.usage, "prompt_tokens", 0),
+                        "output_tokens": getattr(chunk.usage, "completion_tokens", 0),
+                        "total_tokens": getattr(chunk.usage, "total_tokens", 0),
+                    }
                 choice = chunk.choices[0] if chunk.choices else None
-                if choice and choice.delta.content is not None:
+                if choice and choice.delta and choice.delta.content is not None:
                     text = choice.delta.content
                     full_content += text
                     yield {"status": "streaming", "content": text}
-                    
+
+            # Record token usage (D1)
+            try:
+                from server.services.token_tracker import TokenTracker
+                _elapsed = int((_time.time() - _t0) * 1000)
+                _tracker = TokenTracker(str(Path(__file__).resolve().parents[2]))
+                _tracker.record_usage(
+                    session_id=_session_id,
+                    user_id="",
+                    chat_type="web",
+                    chat_id="",
+                    skill="(chat)",
+                    model=self.model,
+                    tier="",
+                    response_id="",
+                    input_tokens=_usage.get("input_tokens", 0),
+                    output_tokens=_usage.get("output_tokens", 0),
+                    total_tokens=_usage.get("total_tokens", 0),
+                    skill_internal_tokens=0,
+                    duration_ms=_elapsed,
+                    status="success",
+                )
+                logger.info(f"[OpenAI D1] simple_chat usage: in={_usage.get('input_tokens',0)} out={_usage.get('output_tokens',0)} total={_usage.get('total_tokens',0)}")
+            except Exception as _te:
+                logger.debug(f"[OpenAI D1] simple_chat token tracking failed: {_te}")
+
             yield {"status": "success", "content": full_content}
         except Exception as e:
             err_str = str(e)
