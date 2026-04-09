@@ -207,6 +207,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         if _emp:
                             _ctx = build_user_context(_emp, session_id)
                             save_user_context(_ctx)
+                            _onboarding_attempts.pop(session_id, None)  # Clear attempts on success
                             # Write to profile.md
                             try:
                                 from server.dependencies.session import get_session_manager
@@ -248,18 +249,34 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                             ))
                             continue
                         else:
-                            # No match — ask again
+                            # No match — track attempts
+                            _attempts = _onboarding_attempts.get(session_id, 0) + 1
+                            _onboarding_attempts[session_id] = _attempts
+
                             from linebot.v3.messaging import TextMessage, ReplyMessageRequest
-                            line_api.reply_message(ReplyMessageRequest(
-                                reply_token=event.reply_token,
-                                messages=[TextMessage(text=(
-                                    f"找不到「{_user_text}」的資料 🔍\n\n"
-                                    f"請確認後重試：\n"
-                                    f"・公司信箱（如 xxx@mail.kway.com.tw）\n"
-                                    f"・員工編號（如 0337）\n\n"
-                                    f"或輸入「訪客」以訪客身份使用。"
-                                ))]
-                            ))
+                            if _attempts >= 3:
+                                # 3rd failure — lock out, ask to contact IT
+                                line_api.reply_message(ReplyMessageRequest(
+                                    reply_token=event.reply_token,
+                                    messages=[TextMessage(text=(
+                                        "身份驗證失敗次數過多 ⚠️\n\n"
+                                        "請聯繫資訊處同仁協助處理。\n"
+                                        "或輸入「訪客」以訪客身份使用。"
+                                    ))]
+                                ))
+                            else:
+                                _remaining = 3 - _attempts
+                                line_api.reply_message(ReplyMessageRequest(
+                                    reply_token=event.reply_token,
+                                    messages=[TextMessage(text=(
+                                        f"無法確認您的資料，請重新進行身份驗證 🔐\n"
+                                        f"（剩餘 {_remaining} 次機會）\n\n"
+                                        f"請輸入：\n"
+                                        f"・公司信箱（如 xxx@mail.kway.com.tw）\n"
+                                        f"・員工編號（如 0337）\n\n"
+                                        f"或輸入「訪客」以訪客身份使用。"
+                                    ))]
+                                ))
                             continue
                 except Exception as _oe:
                     logger.warning(f"[LINE Onboarding] Check failed, continuing normally: {_oe}")
@@ -511,6 +528,7 @@ _local_locks = {}
 _local_lock_mutex = threading.Lock()
 _last_request_time = {}  # 紀錄每個 session 的最後處理時間 (Debounce 用)
 _group_loading_sent = {}  # {chat_id: timestamp} — 群組文字 loading 去重 (60s cooldown)
+_onboarding_attempts = {}  # {session_id: int} — 身份驗證失敗次數
 
 # ── Message Caching (Phase 6 + Phase A1: Disk Persistence) ────────────────────
 _message_cache = {}  # {chat_id: {msg_id: {"text": str, "file_path": str, "created_at": str}}}
