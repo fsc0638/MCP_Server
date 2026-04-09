@@ -506,10 +506,21 @@
 
     _applyDailyChart(daily) {
       if (!this.actChart) return;
-      // Sort by date, take last 7
-      const entries = Object.entries(daily).sort(([a], [b]) => a.localeCompare(b)).slice(-7);
-      this.actChart.data.labels = entries.map(([d]) => { const p = d.split("-"); return p[1] + "/" + p[2]; });
-      this.actChart.data.datasets[0].data = entries.map(([, v]) => Math.round((v.total_tokens || 0) / 1000)); // K tokens
+      // Fixed 7-day window: today minus 6 days → today
+      const labels = [];
+      const data = [];
+      const now = new Date();
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now);
+        d.setDate(d.getDate() - i);
+        const key = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+        const label = (d.getMonth() + 1) + "/" + String(d.getDate()).padStart(2, "0");
+        labels.push(label);
+        const val = daily[key] ? Math.round((daily[key].total_tokens || 0) / 1000) : 0;
+        data.push(val);
+      }
+      this.actChart.data.labels = labels;
+      this.actChart.data.datasets[0].data = data;
       this.actChart.update();
     }
 
