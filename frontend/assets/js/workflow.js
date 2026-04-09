@@ -775,6 +775,13 @@
     const isActive = body.classList.contains("wf-mode");
 
     if (isActive) {
+      // Check for unsaved skill edits before exiting
+      if (_skillEditMode && window._wfSkillEditor?._hasUnsavedChanges()) {
+        if (!confirm("技能尚未儲存，確定要退出嗎？")) {
+          return;
+        }
+      }
+
       // Exit workflow mode — clean up everything
       body.classList.remove("wf-mode");
       if (btn) btn.classList.remove("active");
@@ -843,6 +850,13 @@
   let _skillEditMode = false;
 
   function toggleSkillEditMode() {
+    // Check for unsaved changes before exiting
+    if (_skillEditMode && window._wfSkillEditor?._hasUnsavedChanges()) {
+      if (!confirm("技能尚未儲存，確定要退出嗎？")) {
+        return; // User cancelled — stay in edit mode
+      }
+    }
+
     _skillEditMode = !_skillEditMode;
     const paletteWrap = document.getElementById("wfPaletteWrap");
     const canvasArea = document.getElementById("wfCanvasArea");
@@ -929,6 +943,19 @@
       this._backup = null; // snapshot for rollback
     }
 
+    _hasUnsavedChanges() {
+      // No skill loaded or new unsaved skill
+      if (this._isNew) return true;
+      if (!this.currentSkill || !this._backup) return false;
+      // Compare current editor content with backup
+      try {
+        const currentMd = this._assembleSkillMd();
+        return currentMd !== this._backup;
+      } catch {
+        return false;
+      }
+    }
+
     createNewSkill() {
       this.currentSkill = null;
       this._backup = null;
@@ -993,6 +1020,7 @@
 
     async loadSkill(skillName) {
       this.currentSkill = skillName;
+      this._isNew = false;
 
       // Highlight active in palette
       document.querySelectorAll(".wf-palette-item--clickable").forEach(el => el.classList.remove("is-active"));
