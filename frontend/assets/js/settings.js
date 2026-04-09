@@ -50,8 +50,10 @@
     setAvatar(topbarAvatar, data);
     setAvatar(profileAvatar, data);
     if (profileName) profileName.textContent = data.name || '—';
-    // Show user_id instead of email in profile card
-    if (profileEmail) profileEmail.textContent = data.id || data.session_id || '—';
+    // Show user_id (strip "line_" prefix) in profile card
+    const _rawId = data.id || data.session_id || '';
+    const _displayId = _rawId.replace(/^line_/, '');
+    if (profileEmail) profileEmail.textContent = _displayId ? `User ID : ${_displayId}` : '—';
 
     // Populate basic info fields
     const fields = {
