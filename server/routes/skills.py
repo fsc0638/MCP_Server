@@ -363,7 +363,7 @@ def rescan_skills():
     uma.registry.validation_cache.clear()
     uma.registry.scan_skills()
     summary = delta_index_skills(uma, retriever)
-    _try_invalidate_prompt_cache()
+    invalidate_prompt_cache()
     return {
         "status": "success",
         "total_skills": len(uma.registry.skills),
