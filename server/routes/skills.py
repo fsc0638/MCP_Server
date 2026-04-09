@@ -67,6 +67,7 @@ def list_skills():
         meta = data["metadata"]
         skills[name] = {
             "description": meta.get("description", ""),
+            "display_name": meta.get("display_name", ""),
             "version": meta.get("version", "unknown"),
             "ready": meta.get("_env_ready", False),
             "missing_deps": meta.get("_missing_deps", []),
@@ -182,6 +183,53 @@ def delete_skill(skill_name: str):
         invalidate_prompt_cache()
         sync_res = sync_skills_git(f"Deleted skill {skill_name}")
         return {"status": "success", "message": f"Skill '{skill_name}' deleted.", "git_sync": sync_res}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/skills/{skill_name}/rename")
+def rename_skill(skill_name: str, body: dict):
+    """Rename a skill directory. Updates SKILL.md name field and git syncs."""
+    new_name = body.get("new_name", "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="new_name is required")
+    # Validate name format
+    import re as _re
+    if not _re.match(r'^mcp-[a-z0-9-]+$', new_name):
+        raise HTTPException(status_code=400, detail="Name must match pattern: mcp-{lowercase-ascii-hyphens}")
+    if new_name == skill_name:
+        return {"status": "success", "message": "Name unchanged"}
+
+    uma = get_uma()
+    skills_home = uma.registry.skills_home.resolve()
+    old_path = (skills_home / skill_name).resolve()
+    new_path = (skills_home / new_name).resolve()
+
+    if not old_path.exists():
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    if new_path.exists():
+        raise HTTPException(status_code=409, detail=f"Skill '{new_name}' already exists")
+
+    try:
+        old_path.relative_to(skills_home)
+        new_path.relative_to(skills_home)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path traversal denied")
+
+    try:
+        old_path.rename(new_path)
+        # Update name in SKILL.md
+        skill_md_path = new_path / "SKILL.md"
+        if skill_md_path.exists():
+            content = skill_md_path.read_text(encoding="utf-8")
+            content = content.replace(f"name: {skill_name}", f"name: {new_name}", 1)
+            skill_md_path.write_text(content, encoding="utf-8")
+        # Git sync
+        sync_res = sync_skills_git(f"Renamed skill: {skill_name} → {new_name}")
+        # Re-register
+        uma.registry.scan_skills()
+        invalidate_prompt_cache()
+        return {"status": "success", "old_name": skill_name, "new_name": new_name, "git_sync": sync_res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -316,7 +364,7 @@ def rescan_skills():
     uma.registry.validation_cache.clear()
     uma.registry.scan_skills()
     summary = delta_index_skills(uma, retriever)
-    _try_invalidate_prompt_cache()
+    invalidate_prompt_cache()
     return {
         "status": "success",
         "total_skills": len(uma.registry.skills),
@@ -377,4 +425,26 @@ risk_level: "low"
         if skill_path.exists():
             shutil.rmtree(skill_path, ignore_errors=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Workflow Dashboard API ──────────────────────────────────────────────────
+
+@router.get("/skills/workflow/stats")
+async def workflow_stats():
+    """Return token analytics for workflow dashboard (by_skill + daily)."""
+    import json, os
+    # Resolve from project root (same as main.py CWD)
+    project_root = Path(os.getenv("PROJECT_ROOT", Path(__file__).resolve().parents[2]))
+    summary_path = project_root / "workspace" / "analytics" / "token_summary.json"
+    if not summary_path.exists():
+        return {"by_skill": {}, "daily": {}, "total": {}, "_debug": str(summary_path)}
+    try:
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+        return {
+            "by_skill": data.get("by_skill", {}),
+            "daily": data.get("daily", {}),
+            "total": data.get("total", {}),
+        }
+    except Exception as e:
+        return {"by_skill": {}, "daily": {}, "total": {}, "_error": str(e)}
 

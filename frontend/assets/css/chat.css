@@ -65,6 +65,44 @@ html, body { height: 100%; overflow: hidden; }
   color: var(--kway-blue);
   transform: translateY(-1px);
 }
+.page-chat-workspace-tag.active {
+  background: var(--kway-blue);
+  color: #fff;
+  border-color: var(--kway-blue);
+}
+.page-chat-workspace-tag.active:hover {
+  background: var(--kway-blue-dark, #0a5bc4);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+/* Workflow Designer View */
+.page-workflow-view {
+  flex: 1;
+  overflow: auto;
+  background: var(--bg-main);
+  min-height: 0;
+}
+.page-workflow-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 16px;
+  color: var(--text-tertiary);
+}
+.page-workflow-placeholder h2 {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+.page-workflow-placeholder p {
+  font-size: 0.9rem;
+  color: var(--text-tertiary);
+  margin: 0;
+}
 
 .page-chat-search-bar {
   display: flex; align-items: center; gap: 8px; padding: 7px 14px;
