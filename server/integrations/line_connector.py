@@ -124,8 +124,15 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"[LINE] Event parse error: {e}")
         raise HTTPException(status_code=400, detail=f"Event parse error: {e}")
 
+    # C0. Handle FollowEvent (new friend added) — no action needed, welcome message set in LINE Manager
+    from linebot.v3.webhooks import MessageEvent, FollowEvent, TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
+    for event in events:
+        if isinstance(event, FollowEvent):
+            _user_id = getattr(event.source, "user_id", "")
+            logger.info(f"[LINE] New follower: {_user_id}")
+            continue
+
     # C. 逐一處理 TextMessage / ImageMessage / FileMessage / StickerMessage Event
-    from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
     for event in events:
         if isinstance(event, MessageEvent):
             if not isinstance(event.message, (TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent)):
@@ -162,6 +169,100 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
             else:
                 session_id = f"line_{source.user_id}"
                 chat_id = session_id  # normalized key for analytics/user attribution
+
+            # Phase 0.5: Onboarding check for personal chats
+            if not is_group_or_room and isinstance(event.message, TextMessageContent):
+                try:
+                    from server.services.employee_lookup import has_completed_onboarding, lookup, build_user_context, save_user_context
+                    _line_user_id = source.user_id
+                    if not has_completed_onboarding(session_id):
+                        _user_text = user_input.strip()
+                        # Check if user is responding with email/employee ID/guest
+                        if _user_text.lower() == "訪客" or _user_text.lower() == "guest":
+                            # Guest mode — create minimal context
+                            from linebot.v3.messaging import TextMessage, ReplyMessageRequest
+                            _guest_ctx = {
+                                "user_id": session_id,
+                                "name": "訪客",
+                                "department": "",
+                                "department_code": "",
+                                "title": "",
+                                "email": "",
+                                "preferences": {"language": "繁體中文", "style": "適中", "primary_use": []},
+                                "role": "viewer",
+                                "groups": [],
+                                "skill_access": {"system": "all", "department": [], "personal": True},
+                                "onboarding_completed": True,
+                                "source": "line_bot",
+                            }
+                            save_user_context(_guest_ctx)
+                            line_api.reply_message(ReplyMessageRequest(
+                                reply_token=event.reply_token,
+                                messages=[TextMessage(text="歡迎！已為你建立訪客帳號 👋\n現在可以開始使用 AgentK 了！")]
+                            ))
+                            continue
+
+                        # Try to match employee
+                        _emp = lookup(_user_text)
+                        if _emp:
+                            _ctx = build_user_context(_emp, session_id)
+                            save_user_context(_ctx)
+                            # Write to profile.md
+                            try:
+                                from server.dependencies.session import get_session_manager
+                                from server.services.runtime import get_universal_system_prompt
+                                _sm = get_session_manager()
+                                _sm.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
+                                # Update profile with employee info
+                                from server.services.profile_updater import ProfileUpdater
+                                _profile_content = (
+                                    f"# Profile — {session_id}\n\n"
+                                    f"### 身份資訊（由系統自動建立）\n\n"
+                                    f"- 姓名：{_emp['name']}\n"
+                                    f"- 部門：{_emp['department_full']}\n"
+                                    f"- 職稱：{_emp['title']}\n"
+                                    f"- 信箱：{_emp['email']}\n"
+                                    f"- 分機：{_emp['extension']}\n"
+                                    f"- 員編：{_emp['employee_id']}\n"
+                                )
+                                _profile_dir = Path(os.getenv("PROJECT_ROOT", Path(__file__).resolve().parents[2])) / "workspace" / "profiles"
+                                _profile_dir.mkdir(parents=True, exist_ok=True)
+                                (_profile_dir / f"{session_id}.profile.md").write_text(_profile_content, encoding="utf-8")
+                                logger.info(f"[LINE Onboarding] Profile created for {session_id}: {_emp['name']}")
+                            except Exception as _pe:
+                                logger.warning(f"[LINE Onboarding] Profile write failed: {_pe}")
+
+                            from linebot.v3.messaging import TextMessage, ReplyMessageRequest
+                            _reply = (
+                                f"身份驗證成功 ✅\n\n"
+                                f"👤 {_emp['name']}\n"
+                                f"🏢 {_emp['department_full']}\n"
+                                f"💼 {_emp['title'] or '—'}\n"
+                                f"📧 {_emp['email']}\n"
+                                f"📞 分機 {_emp['extension'] or '—'}\n\n"
+                                f"歡迎使用 AgentK！現在可以開始對話了 🚀"
+                            )
+                            line_api.reply_message(ReplyMessageRequest(
+                                reply_token=event.reply_token,
+                                messages=[TextMessage(text=_reply)]
+                            ))
+                            continue
+                        else:
+                            # No match — ask again
+                            from linebot.v3.messaging import TextMessage, ReplyMessageRequest
+                            line_api.reply_message(ReplyMessageRequest(
+                                reply_token=event.reply_token,
+                                messages=[TextMessage(text=(
+                                    f"找不到「{_user_text}」的資料 🔍\n\n"
+                                    f"請確認後重試：\n"
+                                    f"・公司信箱（如 xxx@mail.kway.com.tw）\n"
+                                    f"・員工編號（如 0337）\n\n"
+                                    f"或輸入「訪客」以訪客身份使用。"
+                                ))]
+                            ))
+                            continue
+                except Exception as _oe:
+                    logger.warning(f"[LINE Onboarding] Check failed, continuing normally: {_oe}")
 
             # Phase 1: Group Mention Filter & Window
             if is_group_or_room:
