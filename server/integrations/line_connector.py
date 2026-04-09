@@ -255,7 +255,6 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
 
                             from linebot.v3.messaging import TextMessage, ReplyMessageRequest
                             if _attempts >= 3:
-                                # 3rd failure — lock out, ask to contact IT
                                 line_api.reply_message(ReplyMessageRequest(
                                     reply_token=event.reply_token,
                                     messages=[TextMessage(text=(
@@ -265,16 +264,14 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                                     ))]
                                 ))
                             else:
-                                _remaining = 3 - _attempts
                                 line_api.reply_message(ReplyMessageRequest(
                                     reply_token=event.reply_token,
                                     messages=[TextMessage(text=(
-                                        f"無法確認您的資料，請重新進行身份驗證 🔐\n"
-                                        f"（剩餘 {_remaining} 次機會）\n\n"
-                                        f"請輸入：\n"
-                                        f"・公司信箱（如 xxx@mail.kway.com.tw）\n"
-                                        f"・員工編號（如 0337）\n\n"
-                                        f"或輸入「訪客」以訪客身份使用。"
+                                        "無法確認您的資料，請重新進行身份驗證 🔐\n\n"
+                                        "請輸入：\n"
+                                        "・公司信箱（如 xxx@mail.kway.com.tw）\n"
+                                        "・員工編號（如 0337）\n\n"
+                                        "或輸入「訪客」以訪客身份使用。"
                                     ))]
                                 ))
                             continue
