@@ -241,10 +241,11 @@
   flex-direction: row;
 }
 .wf-chart-sm { flex: 0 0 120px; height: 120px; }
-.wf-chart-legend { flex: 1; }
+.wf-chart-legend { flex: 1; min-width: 0; overflow: hidden; }
 .wf-legend-item {
   display: flex; align-items: center; gap: 6px;
-  font-size: 0.7rem; font-weight: 500; color: var(--text-primary); margin: 4px 0;
+  font-size: 0.68rem; font-weight: 500; color: var(--text-primary); margin: 3px 0;
+  white-space: nowrap;
 }
 .wf-legend-dot {
   width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;

@@ -431,7 +431,9 @@
           <div class="wf-section-title">技能分布</div>
           <div class="wf-chart-row">
             <div class="wf-chart-wrap wf-chart-sm"><canvas id="wfDistChart"></canvas></div>
-            <div class="wf-chart-legend" id="wfDistLegend"></div>
+            <div class="wf-chart-legend" id="wfDistLegend">
+              <div class="wf-legend-item" style="color:var(--text-tertiary);font-style:italic;">尚無技能節點</div>
+            </div>
           </div>
 
           <!-- Keywords -->
@@ -591,13 +593,15 @@
         this.distChart.update();
       }
 
-      // Update legend with counts
+      // Update legend with name + count + percentage
       if (legend) {
+        const total = labels.reduce((s, l) => s + counts[l], 0);
         legend.innerHTML = "";
         labels.forEach(l => {
+          const pct = total > 0 ? Math.round(counts[l] / total * 100) : 0;
           const item = document.createElement("div");
           item.className = "wf-legend-item";
-          item.innerHTML = `<span class="wf-legend-dot" style="background:${colors[l]}"></span>${l} <span style="color:var(--text-tertiary);font-size:0.6rem;margin-left:2px;">(${counts[l]})</span>`;
+          item.innerHTML = `<span class="wf-legend-dot" style="background:${colors[l]}"></span><span style="flex:1">${l}</span><span style="color:var(--text-tertiary);font-size:0.6rem;">${counts[l]}個 ${pct}%</span>`;
           legend.appendChild(item);
         });
       }
