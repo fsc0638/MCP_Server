@@ -177,12 +177,34 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
     if not sess:
         return {"status": "error", "message": "session_expired"}
 
-    # UI wants: name / picture / user id
+    # Load extended user context if available
+    _line_session_id = f"line_{sess.user_id}" if sess.user_id.startswith("U") else sess.user_id
+    try:
+        from server.services.employee_lookup import get_user_context
+        _ctx = get_user_context(_line_session_id)
+    except Exception:
+        _ctx = None
+
     user = {
         "id": sess.user_id,
-        "name": sess.name or "LINE User",
+        "session_id": _line_session_id,
+        "name": (_ctx.get("name") if _ctx else None) or sess.name or "LINE User",
         "picture": sess.picture or "",
-        "initials": (sess.name or "L")[:2].upper(),
+        "initials": ((_ctx.get("name") if _ctx else None) or sess.name or "L")[:2].upper(),
         "provider": "line",
     }
+
+    # Merge extended profile fields if available
+    if _ctx:
+        user["employee_id"] = _ctx.get("employee_id", "")
+        user["email"] = _ctx.get("email", "")
+        user["department"] = _ctx.get("department", "")
+        user["department_code"] = _ctx.get("department_code", "")
+        user["department_name"] = _ctx.get("department_name", "")
+        user["title"] = _ctx.get("title", "")
+        user["extension"] = _ctx.get("extension", "")
+        user["role"] = _ctx.get("role", "editor")
+        user["preferences"] = _ctx.get("preferences", {})
+        user["onboarding_completed"] = _ctx.get("onboarding_completed", False)
+
     return {"status": "success", "user": user}

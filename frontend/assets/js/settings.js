@@ -7,9 +7,9 @@
   'use strict';
 
   /* ── User data ────────────────────────────────────────────── */
-  const userData = JSON.parse(
+  let userData = JSON.parse(
     sessionStorage.getItem('kway_user') ||
-    '{"name":"林 志遠","initials":"林","email":"user@kway.com.tw"}'
+    '{"name":"—","initials":"—","email":""}'
   );
 
   /* ── Init user display ────────────────────────────────────── */
@@ -18,12 +18,12 @@
   const profileName   = document.getElementById('profileName');
   const profileEmail  = document.getElementById('profileEmail');
 
-  function setAvatar(el) {
+  function setAvatar(el, data) {
     if (!el) return;
-
-    const safeName = (userData && typeof userData.name === 'string' && userData.name.trim()) ? userData.name.trim() : 'Workspace User';
-    const safeInitials = (userData && typeof userData.initials === 'string' && userData.initials.trim()) ? userData.initials.trim() : safeName.charAt(0);
-    const pic = (userData && typeof userData.picture === 'string' && userData.picture.trim()) ? userData.picture.trim() : '';
+    const d = data || userData;
+    const safeName = (d && typeof d.name === 'string' && d.name.trim()) ? d.name.trim() : 'Workspace User';
+    const safeInitials = (d && typeof d.initials === 'string' && d.initials.trim()) ? d.initials.trim() : safeName.charAt(0);
+    const pic = (d && typeof d.picture === 'string' && d.picture.trim()) ? d.picture.trim() : '';
 
     if (pic) {
       el.innerHTML = '';
@@ -45,10 +45,48 @@
     }
   }
 
-  setAvatar(topbarAvatar);
-  setAvatar(profileAvatar);
-  if (profileName)   profileName.textContent   = userData.name;
-  if (profileEmail)  profileEmail.textContent  = userData.email || 'user@kway.com.tw';
+  function populateProfile(data) {
+    userData = data;
+    setAvatar(topbarAvatar, data);
+    setAvatar(profileAvatar, data);
+    if (profileName) profileName.textContent = data.name || '—';
+    // Show user_id instead of email in profile card
+    if (profileEmail) profileEmail.textContent = data.id || data.session_id || '—';
+
+    // Populate basic info fields
+    const fields = {
+      settingDisplayName: data.name || '',
+      settingEmail: data.email || '',
+      settingDepartment: data.department_name || data.department || '',
+      settingTitle: data.title || '',
+      settingExtension: data.extension || '',
+    };
+    Object.entries(fields).forEach(([id, val]) => {
+      const el = document.getElementById(id);
+      if (el) el.value = val;
+    });
+
+    // Language preference
+    const langSel = document.getElementById('settingLanguageSelect');
+    if (langSel && data.preferences?.language) {
+      langSel.value = data.preferences.language;
+    }
+  }
+
+  // Load profile from API
+  fetch('/api/auth/me', { credentials: 'same-origin' })
+    .then(r => r.json())
+    .then(d => {
+      if (d.status === 'success' && d.user) {
+        populateProfile(d.user);
+        // Update sessionStorage for other pages
+        sessionStorage.setItem('kway_user', JSON.stringify(d.user));
+      } else {
+        // Fallback to sessionStorage
+        populateProfile(userData);
+      }
+    })
+    .catch(() => populateProfile(userData));
 
   /* ── Theme Palette Picker ─────────────────────────────────── */
   function _syncPaletteUI(activeId) {
