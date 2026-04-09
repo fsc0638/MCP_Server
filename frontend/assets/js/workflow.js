@@ -962,7 +962,23 @@
       if (!body) return;
 
       const meta = detail.metadata || {};
-      const skillMd = detail.raw_content || "";
+      const rawContent = detail.raw_content || "";
+
+      // Split YAML frontmatter from Markdown body
+      const { yamlMeta, mdBody } = this._splitSkillMd(rawContent);
+
+      // Extract parameters from metadata
+      const params = meta.parameters?.properties || {};
+      const required = meta.parameters?.required || [];
+
+      // Store parsed state for save
+      this._editState = {
+        skillName, meta, rawContent,
+        params: Object.entries(params).map(([k, v]) => ({
+          name: k, type: v.type || "string", description: v.description || "",
+          enum: v.enum || null, required: required.includes(k),
+        })),
+      };
 
       body.innerHTML = `
         <div class="wf-editor-field">
@@ -971,33 +987,106 @@
         </div>
         <div class="wf-editor-field">
           <label>簡介 (description)</label>
-          <textarea id="wfEditDesc" rows="3" style="min-height:60px;font-family:inherit;">${(meta.description || "").trim()}</textarea>
+          <textarea id="wfEditDesc" rows="3" style="min-height:60px;font-family:inherit;">${this._escapeHtml((meta.description || "").trim())}</textarea>
         </div>
         <div class="wf-editor-field" style="display:flex;gap:10px;">
-          <div style="flex:1">
-            <label>Version</label>
-            <input type="text" id="wfEditVersion" value="${meta.version || "1.0.0"}" />
-          </div>
-          <div style="flex:1">
-            <label>Risk Level</label>
+          <div style="flex:1"><label>Version</label><input type="text" id="wfEditVersion" value="${meta.version || "1.0.0"}" /></div>
+          <div style="flex:1"><label>Risk Level</label>
             <select id="wfEditRisk">
               <option value="low" ${meta.risk_level==="low"?"selected":""}>low</option>
               <option value="high" ${meta.risk_level==="high"?"selected":""}>high</option>
             </select>
           </div>
-          <div style="flex:1">
-            <label>Timeout (s)</label>
-            <input type="number" id="wfEditTimeout" value="${meta.execution_timeout || 30}" />
-          </div>
+          <div style="flex:1"><label>Timeout (s)</label><input type="number" id="wfEditTimeout" value="${meta.execution_timeout || 30}" /></div>
         </div>
+
+        <div class="wf-params-header">
+          <span class="wf-params-title">📋 參數定義</span>
+          <button class="wf-params-add-btn" onclick="window._wfSkillEditor._addParam()">+ 新增</button>
+        </div>
+        <div class="wf-params-list" id="wfParamsList"></div>
+
+        <div class="wf-editor-section-title">📄 Skill 指示（Markdown）</div>
         <div class="wf-editor-field">
-          <label>SKILL.md（完整內容）</label>
-          <textarea id="wfEditSkillMd" rows="12">${this._escapeHtml(skillMd)}</textarea>
+          <textarea id="wfEditBody" rows="12">${this._escapeHtml(mdBody.trim())}</textarea>
         </div>
+
         ${this._renderFileSection("references", "📁 References", files.references || [])}
         ${this._renderFileSection("scripts", "📁 Scripts", files.scripts || [])}
         ${this._renderFileSection("assets", "📁 Assets", files.assets || [])}
       `;
+
+      // Render parameter cards
+      this._renderParamCards();
+    }
+
+    _splitSkillMd(raw) {
+      // Split "---\nyaml\n---\nmarkdown body"
+      const match = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+      if (match) return { yamlMeta: match[1], mdBody: match[2] };
+      return { yamlMeta: "", mdBody: raw };
+    }
+
+    _renderParamCards() {
+      const list = document.getElementById("wfParamsList");
+      if (!list) return;
+      const params = this._editState?.params || [];
+      if (!params.length) {
+        list.innerHTML = '<div style="font-size:0.65rem;color:var(--text-tertiary);padding:4px 6px;">（無參數定義）</div>';
+        return;
+      }
+      list.innerHTML = params.map((p, i) => `
+        <div class="wf-param-card" data-idx="${i}">
+          <div class="wf-param-card-header">
+            <span class="wf-param-card-name">${p.name}</span>
+            <span class="wf-param-card-type">${p.type}</span>
+            ${p.required ? '<span class="wf-param-card-required">必填</span>' : ""}
+            <button class="wf-param-card-del" onclick="window._wfSkillEditor._removeParam(${i})">&times;</button>
+          </div>
+          <div class="wf-param-card-row">
+            <div><span class="wf-param-card-label">名稱</span><input type="text" value="${p.name}" onchange="window._wfSkillEditor._updateParam(${i},'name',this.value)" /></div>
+            <div><span class="wf-param-card-label">類型</span>
+              <select onchange="window._wfSkillEditor._updateParam(${i},'type',this.value)">
+                <option value="string" ${p.type==="string"?"selected":""}>string</option>
+                <option value="integer" ${p.type==="integer"?"selected":""}>integer</option>
+                <option value="number" ${p.type==="number"?"selected":""}>number</option>
+                <option value="boolean" ${p.type==="boolean"?"selected":""}>boolean</option>
+                <option value="object" ${p.type==="object"?"selected":""}>object</option>
+                <option value="array" ${p.type==="array"?"selected":""}>array</option>
+              </select>
+            </div>
+            <div><span class="wf-param-card-label">必填</span>
+              <select onchange="window._wfSkillEditor._updateParam(${i},'required',this.value==='true')">
+                <option value="false" ${!p.required?"selected":""}>否</option>
+                <option value="true" ${p.required?"selected":""}>是</option>
+              </select>
+            </div>
+          </div>
+          <div class="wf-param-card-row">
+            <div style="flex:1"><span class="wf-param-card-label">說明</span><input type="text" value="${this._escapeHtml(p.description)}" onchange="window._wfSkillEditor._updateParam(${i},'description',this.value)" /></div>
+          </div>
+          ${p.enum ? `<div class="wf-param-card-row"><div style="flex:1"><span class="wf-param-card-label">enum（逗號分隔）</span><input type="text" value="${p.enum.join(", ")}" onchange="window._wfSkillEditor._updateParam(${i},'enum',this.value.split(',').map(s=>s.trim()).filter(Boolean))" /></div></div>` : ""}
+        </div>
+      `).join("");
+    }
+
+    _addParam() {
+      if (!this._editState) return;
+      this._editState.params.push({ name: "new_param", type: "string", description: "", enum: null, required: false });
+      this._renderParamCards();
+    }
+
+    _removeParam(idx) {
+      if (!this._editState) return;
+      this._editState.params.splice(idx, 1);
+      this._renderParamCards();
+    }
+
+    _updateParam(idx, field, value) {
+      if (!this._editState || !this._editState.params[idx]) return;
+      this._editState.params[idx][field] = value;
+      // Re-render header (name/type/required badges)
+      this._renderParamCards();
     }
 
     _renderFileSection(folder, title, fileList) {
@@ -1024,9 +1113,58 @@
       `;
     }
 
+    _assembleSkillMd() {
+      // Build YAML frontmatter from form fields + assemble with Markdown body
+      const name = document.getElementById("wfEditName")?.value || this.currentSkill;
+      const desc = document.getElementById("wfEditDesc")?.value || "";
+      const version = document.getElementById("wfEditVersion")?.value || "1.0.0";
+      const risk = document.getElementById("wfEditRisk")?.value || "low";
+      const timeout = document.getElementById("wfEditTimeout")?.value || "30";
+      const mdBody = document.getElementById("wfEditBody")?.value || "";
+
+      // Build parameters YAML
+      const params = this._editState?.params || [];
+      let paramsYaml = "";
+      if (params.length > 0) {
+        const requiredList = params.filter(p => p.required).map(p => p.name);
+        paramsYaml += "parameters:\n  type: object\n  properties:\n";
+        params.forEach(p => {
+          paramsYaml += `    ${p.name}:\n      type: ${p.type}\n`;
+          if (p.description) paramsYaml += `      description: "${p.description.replace(/"/g, '\\"')}"\n`;
+          if (p.enum && p.enum.length) paramsYaml += `      enum: [${p.enum.map(e => `"${e}"`).join(", ")}]\n`;
+        });
+        if (requiredList.length) paramsYaml += `  required: [${requiredList.join(", ")}]\n`;
+      }
+
+      // Get existing meta fields we don't edit (runtime_requirements, estimated_tokens, etc.)
+      const meta = this._editState?.meta || {};
+      let extraYaml = "";
+      if (meta.runtime_requirements?.length) extraYaml += `runtime_requirements: [${meta.runtime_requirements.join(", ")}]\n`;
+      if (meta.estimated_tokens) extraYaml += `estimated_tokens: ${meta.estimated_tokens}\n`;
+      if (meta.provider) extraYaml += `provider: ${meta.provider}\n`;
+
+      // Assemble
+      let yaml = `---\nname: ${name}\n`;
+      if (meta.provider) yaml += `provider: ${meta.provider}\n`;
+      yaml += `version: "${version}"\n`;
+      if (desc) {
+        // Multi-line description
+        yaml += `description: >\n  ${desc.replace(/\n/g, "\n  ")}\n`;
+      }
+      if (paramsYaml) yaml += paramsYaml;
+      if (meta.runtime_requirements?.length) yaml += `runtime_requirements: [${meta.runtime_requirements.join(", ")}]\n`;
+      if (meta.estimated_tokens) yaml += `estimated_tokens: ${meta.estimated_tokens}\n`;
+      yaml += `risk_level: ${risk}\n`;
+      if (parseInt(timeout) !== 30) yaml += `execution_timeout: ${timeout}\n`;
+      yaml += `---\n\n`;
+      yaml += mdBody;
+
+      return yaml;
+    }
+
     async save() {
       if (!this.currentSkill) return;
-      const skillMd = document.getElementById("wfEditSkillMd")?.value;
+      const skillMd = this._assembleSkillMd();
       if (!skillMd) return;
       try {
         const resp = await fetch(`/skills/${this.currentSkill}`, {
@@ -1052,10 +1190,10 @@
     async rollback() {
       if (!this.currentSkill) return;
       if (this._backup) {
-        // Restore from in-memory snapshot (before any edits)
-        const textarea = document.getElementById("wfEditSkillMd");
-        if (textarea) textarea.value = this._backup;
+        // Reload from in-memory snapshot (re-render entire editor)
         if (window.showToast) window.showToast("已還原至開啟時的版本", "success");
+        this.loadSkill(this.currentSkill);
+        return;
       } else {
         // Fallback: try server-side .bak rollback
         try {

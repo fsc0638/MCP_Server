@@ -511,6 +511,78 @@
 .wf-editor-empty svg { opacity: 0.3; }
 .wf-editor-empty p { font-size: 0.8rem; }
 
+/* ── Parameter Cards ─────────────────────────────────────────── */
+.wf-params-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 14px 0 6px; padding: 0 2px;
+}
+.wf-params-title {
+  font-size: 0.72rem; font-weight: 700; color: var(--text-secondary);
+}
+.wf-params-add-btn {
+  padding: 2px 10px; border-radius: 6px; font-size: 0.62rem; font-weight: 600;
+  background: var(--kway-blue); color: #fff; border: none; cursor: pointer;
+  transition: var(--transition);
+}
+.wf-params-add-btn:hover { opacity: 0.85; }
+.wf-params-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+
+.wf-param-card {
+  background: var(--bg-sidebar); border: 1px solid var(--border-subtle);
+  border-radius: 8px; padding: 8px 10px;
+  transition: var(--transition);
+}
+.wf-param-card:hover { border-color: var(--kway-blue); }
+.wf-param-card-header {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+}
+.wf-param-card-name {
+  font-size: 0.74rem; font-weight: 700; color: var(--text-primary);
+  flex: 1;
+}
+.wf-param-card-type {
+  font-size: 0.6rem; font-weight: 600; color: var(--kway-blue);
+  background: rgba(13,110,253,0.08); padding: 1px 6px; border-radius: 4px;
+}
+.wf-param-card-required {
+  font-size: 0.55rem; font-weight: 700; color: #ea4335;
+  background: rgba(234,67,53,0.08); padding: 1px 5px; border-radius: 3px;
+}
+.wf-param-card-del {
+  cursor: pointer; color: var(--text-tertiary); background: none; border: none;
+  font-size: 0.85rem; padding: 0 4px; line-height: 1;
+}
+.wf-param-card-del:hover { color: #ea4335; }
+.wf-param-card-row {
+  display: flex; gap: 6px; margin-bottom: 4px;
+}
+.wf-param-card-row > * { flex: 1; }
+.wf-param-card-row input,
+.wf-param-card-row select,
+.wf-param-card-row textarea {
+  width: 100%; padding: 4px 8px;
+  border: 1px solid var(--border-subtle); border-radius: 5px;
+  font-size: 0.68rem; background: var(--bg-surface); color: var(--text-primary);
+}
+.wf-param-card-row input:focus,
+.wf-param-card-row select:focus {
+  outline: none; border-color: var(--kway-blue);
+}
+.wf-param-card-label {
+  font-size: 0.6rem; font-weight: 600; color: var(--text-tertiary);
+  margin-bottom: 2px; display: block;
+}
+.wf-param-card-row textarea {
+  min-height: 28px; resize: vertical; font-family: inherit;
+}
+
+/* Skill body separator */
+.wf-editor-section-title {
+  font-size: 0.72rem; font-weight: 700; color: var(--text-secondary);
+  margin: 14px 0 6px; padding: 0 2px;
+  display: flex; align-items: center; gap: 6px;
+}
+
 /* ── Animations ──────────────────────────────────────────────── */
 @keyframes wf-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 @keyframes wf-block-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
