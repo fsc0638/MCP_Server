@@ -109,10 +109,10 @@
 .wf-canvas-surface {
   width: 3000px; height: 2000px;
   position: relative;
-  background-color: #1a1d23;
+  background-color: var(--bg-main, #F8F9FB);
   background-image:
-    linear-gradient(rgba(255,255,255,0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px);
+    linear-gradient(rgba(0,0,0,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,0.04) 1px, transparent 1px);
   background-size: 24px 24px;
   transform-origin: 0 0;
 }
@@ -129,21 +129,21 @@
 /* ── Flow Block ──────────────────────────────────────────────── */
 .wf-block {
   position: absolute; width: 160px;
-  background: #2a2d35;
-  border: 2px solid #3a3d45;
+  background: var(--bg-surface, #fff);
+  border: 2px solid var(--border-subtle, #E2E8F0);
   border-radius: 10px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
   cursor: move; z-index: 10;
   transition: box-shadow 0.12s, border-color 0.12s;
   user-select: none;
 }
 .wf-block:hover {
-  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
-  border-color: #4a4d55;
+  box-shadow: 0 3px 12px rgba(0,0,0,0.12);
+  border-color: var(--border-medium, #CBD5E1);
 }
 .wf-block.selected {
   border-color: var(--kway-blue);
-  box-shadow: 0 0 0 3px rgba(13,110,253,0.3), 0 4px 16px rgba(0,0,0,0.4);
+  box-shadow: 0 0 0 3px rgba(13,110,253,0.15), 0 3px 12px rgba(0,0,0,0.12);
   z-index: 30;
 }
 .wf-block.running .wf-block-header {
@@ -159,7 +159,7 @@
 .wf-block-body {
   display: flex; align-items: center; justify-content: space-between;
   padding: 6px 10px;
-  font-size: 0.65rem; color: #8a8d95;
+  font-size: 0.65rem; color: var(--text-tertiary, #94A3B8);
 }
 
 .wf-block-status {
@@ -173,15 +173,15 @@
 /* Ports — 4 directions */
 .wf-port {
   position: absolute; width: 10px; height: 10px; border-radius: 50%;
-  background: #3a3d45; border: 2px solid #5a5d65;
+  background: var(--bg-surface, #fff); border: 2px solid var(--border-medium, #CBD5E1);
   cursor: crosshair; z-index: 20;
   transition: var(--transition);
   opacity: 0.4;
 }
 .wf-block:hover .wf-port { opacity: 1; }
 .wf-port:hover {
-  border-color: #60a5fa;
-  background: #60a5fa;
+  border-color: var(--kway-blue, #0D6EFD);
+  background: var(--kway-blue, #0D6EFD);
   transform: scale(1.4);
   opacity: 1;
 }
@@ -196,11 +196,11 @@
 
 /* Connection paths */
 .wf-conn-path {
-  fill: none; stroke: #6b7280; stroke-width: 2;
+  fill: none; stroke: #94A3B8; stroke-width: 2;
   transition: stroke 0.15s;
 }
 .wf-conn-path:hover {
-  stroke: #60a5fa; stroke-width: 3; cursor: pointer;
+  stroke: var(--kway-blue, #0D6EFD); stroke-width: 3; cursor: pointer;
 }
 .wf-conn-path.active-flow {
   stroke: var(--kway-blue); stroke-dasharray: 8 4;

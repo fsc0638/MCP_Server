@@ -62,7 +62,7 @@
         marker.setAttribute("orient", "auto-start-reverse");
         const arrowPath = document.createElementNS(NS, "path");
         arrowPath.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-        arrowPath.setAttribute("fill", "#6b7280");
+        arrowPath.setAttribute("fill", "#94A3B8");
         marker.appendChild(arrowPath);
         defs.appendChild(marker);
       }
