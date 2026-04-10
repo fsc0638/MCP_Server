@@ -103,9 +103,17 @@ def delete_workflow(workflow_id: str):
 
 # ── Execution ───────────────────────────────────────────────────────────────
 
+class WorkflowExecuteRequest(BaseModel):
+    model: str = None  # User-specified model override for entire flow
+    initial_prompt: str = ""  # User's intent for this execution
+
+
 @router.post("/api/workflows/{workflow_id}/execute")
-async def execute_workflow(workflow_id: str):
-    """Execute a workflow — run skill chain sequentially."""
+async def execute_workflow(workflow_id: str, req: WorkflowExecuteRequest = None):
+    """Execute a workflow — smart parameter routing between blocks."""
+    if req is None:
+        req = WorkflowExecuteRequest()
+
     path = _workflows_dir() / f"{workflow_id}.json"
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
@@ -138,9 +146,17 @@ async def execute_workflow(workflow_id: str):
             if indeg[nxt] == 0:
                 queue.append(nxt)
 
+    # Initialize smart router
+    from server.services.workflow_llm_router import WorkflowLLMRouter
+    router_model = req.model or os.getenv("OPENAI_MODEL", "gpt-4o")
+    llm_router = WorkflowLLMRouter(default_model=router_model)
+
+    from main import get_uma
+    uma = get_uma()
+
     # Execute each block
     results = []
-    accumulated_context = flow.get("context", {}).get("initial_prompt", "")
+    accumulated_context = req.initial_prompt or flow.get("context", {}).get("initial_prompt", "")
 
     for bid in order:
         block = blocks[bid]
@@ -154,15 +170,32 @@ async def execute_workflow(workflow_id: str):
         # Build skill name
         skill_name = block_type if block_type.startswith("mcp-") else f"mcp-{block_type}"
 
+        # Get skill metadata for routing
+        skill_info = uma.registry.get_skill(skill_name)
+        skill_meta = skill_info["metadata"] if skill_info else {}
+        skill_desc = skill_meta.get("description", "")
+        recommended_models = skill_meta.get("recommended_models", {})
+
+        # Select model for this block
+        block_override = block.get("config", {}).get("model")
+        input_size = len(accumulated_context) // 3  # rough token estimate
+        selected_model = llm_router.select_model(
+            skill_name, recommended_models, block_override, input_size
+        )
+
         try:
-            from main import get_uma
-            uma = get_uma()
+            # Smart parameter routing via LLM
+            args = await llm_router.route_params({
+                "initial_prompt": req.initial_prompt or accumulated_context[:500],
+                "previous_output": accumulated_context,
+                "skill_name": skill_name,
+                "skill_description": skill_desc,
+                "block_config": block.get("config", {}),
+            }, model=selected_model)
 
-            # Build arguments from accumulated context
-            args = {"input": accumulated_context}
-            if block.get("config"):
-                args.update(block["config"])
+            logger.info(f"[Workflow] Block {bid} ({skill_name}) params: {list(args.keys())} via {selected_model}")
 
+            # Execute skill
             result = uma.execute_tool_call(skill_name, json.dumps(args, ensure_ascii=False))
 
             # Extract output for next block
@@ -172,33 +205,35 @@ async def execute_workflow(workflow_id: str):
             else:
                 output_text = str(result)
 
-            # Accumulate context for next block
+            # Accumulate context for next block (limit size)
             if output_text:
-                accumulated_context = output_text[:3000]  # Limit context size
+                accumulated_context = output_text[:3000]
 
             results.append({
                 "block_id": bid,
                 "type": block_type,
                 "skill": skill_name,
+                "model_used": selected_model,
                 "status": "success",
                 "output_preview": output_text[:200],
             })
-            logger.info(f"[Workflow] Block {bid} ({skill_name}) executed successfully")
+            logger.info(f"[Workflow] Block {bid} ({skill_name}) executed successfully via {selected_model}")
 
         except Exception as e:
             results.append({
                 "block_id": bid,
                 "type": block_type,
                 "skill": skill_name,
+                "model_used": selected_model,
                 "status": "error",
                 "error": str(e),
             })
             logger.error(f"[Workflow] Block {bid} ({skill_name}) failed: {e}")
-            # Continue execution (don't stop on error)
 
     return {
         "status": "success",
         "workflow_id": workflow_id,
+        "router_model": router_model,
         "blocks_executed": len(results),
         "results": results,
         "executed_at": datetime.now().isoformat(),

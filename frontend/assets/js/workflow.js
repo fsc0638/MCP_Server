@@ -327,9 +327,21 @@
         await sleep(300);
       }
 
-      // Call backend execution
+      // Call backend execution with model + prompt
       try {
-        const resp = await fetch("/api/workflows/default/execute", { method: "POST" });
+        const _execBody = {
+          model: null,  // Use server default (auto per-block)
+          initial_prompt: "",
+        };
+        // If user typed something in the prompt area, use it
+        const _prompt = prompt("執行此工作流的指令（選填，可直接按確定跳過）：", "");
+        if (_prompt) _execBody.initial_prompt = _prompt;
+
+        const resp = await fetch("/api/workflows/default/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(_execBody),
+        });
         const data = await resp.json();
 
         // Update block statuses from results
@@ -1202,6 +1214,14 @@
           <div style="flex:1"><label>逾時等待 (Timeout)</label><input type="number" id="wfEditTimeout" value="${meta.execution_timeout || 30}" /></div>
         </div>
 
+        <div class="wf-editor-section-title">建議模型 (Recommended Models)</div>
+        <div class="wf-editor-field" style="display:flex;gap:10px;">
+          <div style="flex:1"><label>OpenAI</label><input type="text" id="wfEditModelOpenai" value="${(meta.recommended_models?.openai) || ''}" placeholder="自動評估" /></div>
+          <div style="flex:1"><label>Gemini</label><input type="text" id="wfEditModelGemini" value="${(meta.recommended_models?.gemini) || ''}" placeholder="自動評估" /></div>
+          <div style="flex:1"><label>Claude</label><input type="text" id="wfEditModelClaude" value="${(meta.recommended_models?.claude) || ''}" placeholder="自動評估" /></div>
+        </div>
+        <div style="font-size:0.6rem;color:var(--text-tertiary);margin:-6px 0 8px 2px;">儲存時自動評估，或手動指定具體模型名稱</div>
+
         <div class="wf-editor-section-title">提示詞 (Prompt)</div>
         <div class="wf-editor-field">
           <textarea id="wfEditBody" rows="12">${this._escapeHtml(mdBody.trim())}</textarea>
@@ -1277,6 +1297,19 @@
       yaml += `risk_level: ${risk}\n`;
       if (meta.risk_description) yaml += `risk_description: >\n  ${String(meta.risk_description).trim().replace(/\n/g, "\n  ")}\n`;
       if (parseInt(timeout) !== 30) yaml += `execution_timeout: ${timeout}\n`;
+
+      // Recommended models (user-specified override — if all empty, auto-evaluated on save)
+      const _rmOpenai = document.getElementById("wfEditModelOpenai")?.value?.trim();
+      const _rmGemini = document.getElementById("wfEditModelGemini")?.value?.trim();
+      const _rmClaude = document.getElementById("wfEditModelClaude")?.value?.trim();
+      if (_rmOpenai || _rmGemini || _rmClaude) {
+        yaml += `recommended_models:\n`;
+        if (_rmOpenai) yaml += `  openai: ${_rmOpenai}\n`;
+        if (_rmGemini) yaml += `  gemini: ${_rmGemini}\n`;
+        if (_rmClaude) yaml += `  claude: ${_rmClaude}\n`;
+      }
+      // If none specified, backend will auto-evaluate on save
+
       yaml += `---\n\n`;
       yaml += mdBody;
 

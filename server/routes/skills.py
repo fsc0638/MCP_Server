@@ -133,6 +133,28 @@ def update_skill(skill_name: str, req: SkillUpdateRequest):
     try:
         if skill_md_path.exists():
             shutil.copy2(skill_md_path, bak_path)
+
+        # Auto-analyze complexity and inject recommended_models
+        try:
+            from server.services.workflow_llm_router import analyze_skill_complexity
+            has_refs = (skill_path / "references").exists() or (skill_path / "assets").exists()
+            has_scripts = (skill_path / "scripts" / "main.py").exists()
+            rec_models = analyze_skill_complexity(new_content, has_references=has_refs, has_scripts=has_scripts)
+
+            # Inject recommended_models into YAML frontmatter if not already set by user
+            _parts = new_content.split("---")
+            if len(_parts) >= 3:
+                _meta = yaml.safe_load(_parts[1]) or {}
+                if "recommended_models" not in _meta:
+                    # Insert before closing ---
+                    _models_yaml = "recommended_models:\n"
+                    for _prov, _model in rec_models.items():
+                        _models_yaml += f"  {_prov}: {_model}\n"
+                    new_content = "---\n" + _parts[1].rstrip() + "\n" + _models_yaml + "---\n" + "---".join(_parts[2:])
+                    logger.info(f"[Skills] Auto-recommended models for {skill_name}: {rec_models}")
+        except Exception as _ae:
+            logger.debug(f"[Skills] Model recommendation skipped: {_ae}")
+
         skill_md_path.write_text(new_content, encoding="utf-8")
         uma.registry._register_skill(skill_path)
         invalidate_prompt_cache()
