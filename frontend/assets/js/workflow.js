@@ -213,11 +213,51 @@
     }
 
     _onMouseUp(e) {
-      if (this.dragging) this.dragging = null;
+      if (this.dragging) {
+        // Anti-overlap: push dragged block away if overlapping another
+        const dragId = this.dragging.id;
+        this._resolveOverlap(dragId);
+        this.dragging = null;
+        // Refresh all connections after move
+        this.connections.forEach(c => this._updateConnectionPath(c));
+      }
       if (this.connecting) {
         this.connecting.tempPath.remove();
         this.connecting = null;
       }
+    }
+
+    _resolveOverlap(movedId) {
+      const GAP = 20; // minimum distance between blocks
+      const moved = this.blocks.get(movedId);
+      if (!moved) return;
+
+      this.blocks.forEach(other => {
+        if (other.id === movedId) return;
+        // Check overlap
+        const ol = moved.x < other.x + BLOCK_W + GAP &&
+                   moved.x + BLOCK_W + GAP > other.x &&
+                   moved.y < other.y + BLOCK_H + GAP &&
+                   moved.y + BLOCK_H + GAP > other.y;
+        if (!ol) return;
+
+        // Find nearest non-overlapping position
+        // Calculate push direction: move the dragged block to the nearest edge
+        const pushRight = (other.x + BLOCK_W + GAP) - moved.x;
+        const pushLeft  = moved.x - (other.x - BLOCK_W - GAP);
+        const pushDown  = (other.y + BLOCK_H + GAP) - moved.y;
+        const pushUp    = moved.y - (other.y - BLOCK_H - GAP);
+
+        // Pick smallest push
+        const min = Math.min(pushRight, pushLeft, pushDown, pushUp);
+        if (min === pushRight)     moved.x = snap(other.x + BLOCK_W + GAP);
+        else if (min === pushLeft) moved.x = snap(other.x - BLOCK_W - GAP);
+        else if (min === pushDown) moved.y = snap(other.y + BLOCK_H + GAP);
+        else                       moved.y = snap(other.y - BLOCK_H - GAP);
+
+        moved.el.style.left = moved.x + "px";
+        moved.el.style.top = moved.y + "px";
+      });
     }
 
     // ── Connections ───────────────────────────────────────────
@@ -267,14 +307,14 @@
     }
 
     _getPortPos(block, side) {
-      // Return position OUTSIDE block, snapped to grid
-      const M = GRID; // one small grid cell away
+      // Return position 2 small grids (20px) outside block edge, snapped
+      const EXT = GRID * 2;
       switch (side) {
-        case "right":  return { x: snap(block.x + BLOCK_W + M), y: snap(block.y + BLOCK_H / 2) };
-        case "left":   return { x: snap(block.x - M),           y: snap(block.y + BLOCK_H / 2) };
-        case "bottom": return { x: snap(block.x + BLOCK_W / 2), y: snap(block.y + BLOCK_H + M) };
-        case "top":    return { x: snap(block.x + BLOCK_W / 2), y: snap(block.y - M) };
-        default:       return { x: snap(block.x + BLOCK_W + M), y: snap(block.y + BLOCK_H / 2) };
+        case "right":  return { x: snap(block.x + BLOCK_W + EXT), y: snap(block.y + BLOCK_H / 2) };
+        case "left":   return { x: snap(block.x - EXT),           y: snap(block.y + BLOCK_H / 2) };
+        case "bottom": return { x: snap(block.x + BLOCK_W / 2),  y: snap(block.y + BLOCK_H + EXT) };
+        case "top":    return { x: snap(block.x + BLOCK_W / 2),  y: snap(block.y - EXT) };
+        default:       return { x: snap(block.x + BLOCK_W + EXT), y: snap(block.y + BLOCK_H / 2) };
       }
     }
 
@@ -312,12 +352,11 @@
     _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
       // Strict orthogonal routing — lines NEVER enter any block's bounding box
 
-      const M = GRID; // 10px margin (one small grid cell)
-
-      // Build expanded bounding boxes for ALL blocks (including connected ones for collision)
+      // Build bounding boxes — use actual block rect (no inflation)
+      // Lines must not enter any block's actual pixel area
       const boxes = [];
       this.blocks.forEach(b => {
-        boxes.push({ l: b.x - M, t: b.y - M, r: b.x + BLOCK_W + M, b: b.y + BLOCK_H + M, id: b.id });
+        boxes.push({ l: b.x, t: b.y, r: b.x + BLOCK_W, b: b.y + BLOCK_H, id: b.id });
       });
 
       // Segment collision — checks ALL blocks, no exclusions
@@ -336,17 +375,18 @@
         return false;
       };
 
-      // Collect safe corridor positions — snapped to large grid
+      // Collect safe corridor positions — 20px outside each block, snapped
+      const CORR = GRID * 2; // 20px corridor distance
       const safeXs = new Set();
       const safeYs = new Set();
       this.blocks.forEach(b => {
-        safeXs.add(snapL(b.x - M));
-        safeXs.add(snapL(b.x + BLOCK_W + M));
-        safeYs.add(snapL(b.y - M));
-        safeYs.add(snapL(b.y + BLOCK_H + M));
+        safeXs.add(snap(b.x - CORR));
+        safeXs.add(snap(b.x + BLOCK_W + CORR));
+        safeYs.add(snap(b.y - CORR));
+        safeYs.add(snap(b.y + BLOCK_H + CORR));
       });
-      safeXs.add(snapL((x1 + x2) / 2));
-      safeYs.add(snapL((y1 + y2) / 2));
+      safeXs.add(snap((x1 + x2) / 2));
+      safeYs.add(snap((y1 + y2) / 2));
 
       // Score a candidate path (lower = better): total manhattan length
       const pathLen = (pts) => {
@@ -405,10 +445,10 @@
       }
 
       // Ultimate fallback — go around via outermost edge
-      const farRight = snap(Math.max(...[...safeXs]) + M * 2);
-      const farLeft  = snap(Math.min(...[...safeXs]) - M * 2);
-      const farTop   = snap(Math.min(...[...safeYs]) - M * 2);
-      const farBot   = snap(Math.max(...[...safeYs]) + M * 2);
+      const farRight = snap(Math.max(...[...safeXs]) + CORR * 2);
+      const farLeft  = snap(Math.min(...[...safeXs]) - CORR * 2);
+      const farTop   = snap(Math.min(...[...safeYs]) - CORR * 2);
+      const farBot   = snap(Math.max(...[...safeYs]) + CORR * 2);
 
       // Pick the shortest detour around everything
       const fallbacks = [
