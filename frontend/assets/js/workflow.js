@@ -206,7 +206,7 @@
         const from = this.blocks.get(this.connecting.fromId);
         if (!from) return;
         const fp = this._getPortPos(from, this.connecting.fromSide);
-        this.connecting.tempPath.setAttribute("d", this._routePath(fp.x, fp.y, mx, my, this.connecting.fromSide, "left"));
+        this.connecting.tempPath.setAttribute("d", this._routePath(fp.x, fp.y, mx, my, this.connecting.fromSide, "left", this.connecting.fromId, -1));
       }
     }
 
@@ -280,22 +280,18 @@
       if (!fb || !tb) return;
       const p1 = this._getPortPos(fb, conn.fromSide || "right");
       const p2 = this._getPortPos(tb, conn.toSide || "left");
-      conn.el.setAttribute("d", this._routePath(p1.x, p1.y, p2.x, p2.y, conn.fromSide, conn.toSide));
+      conn.el.setAttribute("d", this._routePath(p1.x, p1.y, p2.x, p2.y, conn.fromSide, conn.toSide, conn.from, conn.to));
     }
 
-    _routePath(x1, y1, x2, y2, fromSide, toSide) {
+    _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
       // A*-inspired orthogonal routing (draw.io style)
-      // 1. Build obstacle rectangles with padding
-      // 2. Generate guide lines from blocks + endpoints
-      // 3. A* search on orthogonal grid with turn penalty
-      // 4. Fallback to simple routing if A* fails
-
       const PAD = GRID; // padding around blocks
       const TURN_COST = 50; // penalty for each direction change
 
-      // Collect obstacle rects (exclude the two connected blocks)
+      // Collect obstacle rects — EXCLUDE the two connected blocks
       const obstacles = [];
       this.blocks.forEach(b => {
+        if (b.id === fromBlockId || b.id === toBlockId) return; // Skip connected blocks
         obstacles.push({ x: b.x - PAD, y: b.y - PAD, w: BLOCK_W + PAD * 2, h: BLOCK_H + PAD * 2 });
       });
 
@@ -331,9 +327,18 @@
         xs.add(b.x - PAD); xs.add(b.x + BLOCK_W / 2); xs.add(b.x + BLOCK_W + PAD);
         ys.add(b.y - PAD); ys.add(b.y + BLOCK_H / 2); ys.add(b.y + BLOCK_H + PAD);
       });
-      // Add midpoints between start and end
+      // Add midpoints and exit extension points
       xs.add(snap((x1 + x2) / 2));
       ys.add(snap((y1 + y2) / 2));
+      // Exit extension: a point GAP away from port in the exit direction
+      if (fromSide === "right") xs.add(x1 + PAD * 2);
+      if (fromSide === "left") xs.add(x1 - PAD * 2);
+      if (fromSide === "bottom") ys.add(y1 + PAD * 2);
+      if (fromSide === "top") ys.add(y1 - PAD * 2);
+      if (toSide === "left") xs.add(x2 - PAD * 2);
+      if (toSide === "right") xs.add(x2 + PAD * 2);
+      if (toSide === "top") ys.add(y2 - PAD * 2);
+      if (toSide === "bottom") ys.add(y2 + PAD * 2);
 
       const sortedXs = [...xs].sort((a, b) => a - b);
       const sortedYs = [...ys].sort((a, b) => a - b);
