@@ -35,6 +35,7 @@ apscheduler>=3.10.0
 # Data visualization & chart generation (mcp-python-executor)
 matplotlib>=3.7.0
 pandas>=2.0.0
+numpy<2
 openpyxl>=3.1.0
 tiktoken>=0.12.0
 
