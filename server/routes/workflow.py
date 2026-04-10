@@ -5,7 +5,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -104,8 +104,8 @@ def delete_workflow(workflow_id: str):
 # ── Execution ───────────────────────────────────────────────────────────────
 
 class WorkflowExecuteRequest(BaseModel):
-    model: str = None  # User-specified model override for entire flow
-    initial_prompt: str = ""  # User's intent for this execution
+    model: Optional[str] = None  # User-specified model override for entire flow
+    initial_prompt: Optional[str] = ""  # User's intent for this execution
 
 
 @router.post("/api/workflows/{workflow_id}/execute")

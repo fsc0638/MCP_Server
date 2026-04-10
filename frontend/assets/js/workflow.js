@@ -327,20 +327,12 @@
         await sleep(300);
       }
 
-      // Call backend execution with model + prompt
+      // Call backend execution
       try {
-        const _execBody = {
-          model: null,  // Use server default (auto per-block)
-          initial_prompt: "",
-        };
-        // If user typed something in the prompt area, use it
-        const _prompt = prompt("執行此工作流的指令（選填，可直接按確定跳過）：", "");
-        if (_prompt) _execBody.initial_prompt = _prompt;
-
         const resp = await fetch("/api/workflows/default/execute", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(_execBody),
+          body: JSON.stringify({ initial_prompt: "", model: null }),
         });
         const data = await resp.json();
 
