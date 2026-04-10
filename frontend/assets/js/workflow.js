@@ -118,8 +118,10 @@
           <span>${CATEGORIES[def.category]?.label || def.category}</span>
           <span class="wf-block-status"></span>
         </div>
-        ${type !== "start" ? '<div class="wf-port wf-port-in" data-port="in"></div>' : ""}
-        ${type !== "end" ? '<div class="wf-port wf-port-out" data-port="out"></div>' : ""}
+        ${type !== "start" ? '<div class="wf-port wf-port-left" data-port="in" data-side="left"></div>' : ""}
+        ${type !== "end" ? '<div class="wf-port wf-port-right" data-port="out" data-side="right"></div>' : ""}
+        <div class="wf-port wf-port-top" data-port="in" data-side="top"></div>
+        <div class="wf-port wf-port-bottom" data-port="out" data-side="bottom"></div>
       `;
 
       // Block mousedown → start drag
@@ -134,10 +136,10 @@
       el.querySelectorAll(".wf-port").forEach(port => {
         port.addEventListener("mousedown", e => {
           e.stopPropagation();
-          if (port.dataset.port === "out") this._startConnect(id, e);
+          if (port.dataset.port === "out") this._startConnect(id, port.dataset.side, e);
         });
         port.addEventListener("mouseup", e => {
-          if (this.connecting && port.dataset.port === "in") this._finishConnect(id);
+          if (this.connecting && port.dataset.port === "in") this._finishConnect(id, port.dataset.side);
         });
       });
 
@@ -203,9 +205,8 @@
         const my = (e.clientY - rect.top) / this.scale;
         const from = this.blocks.get(this.connecting.fromId);
         if (!from) return;
-        const fx = from.x + BLOCK_W + 1;
-        const fy = from.y + BLOCK_H / 2;
-        this.connecting.tempPath.setAttribute("d", this._bezier(fx, fy, mx, my));
+        const fp = this._getPortPos(from, this.connecting.fromSide);
+        this.connecting.tempPath.setAttribute("d", this._routePath(fp.x, fp.y, mx, my, this.connecting.fromSide, "left"));
       }
     }
 
@@ -218,34 +219,36 @@
     }
 
     // ── Connections ───────────────────────────────────────────
-    _startConnect(fromId, e) {
+    _startConnect(fromId, fromSide, e) {
       e.stopPropagation();
       const tempPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
       tempPath.classList.add("wf-conn-temp");
       this.svg.appendChild(tempPath);
-      this.connecting = { fromId, tempPath };
+      this.connecting = { fromId, fromSide: fromSide || "right", tempPath };
     }
 
-    _finishConnect(toId) {
+    _finishConnect(toId, toSide) {
       if (!this.connecting) return;
       const fromId = this.connecting.fromId;
       if (fromId === toId) return;
-      // Prevent duplicate
       if (this.connections.some(c => c.from === fromId && c.to === toId)) return;
-      this._addConnection(fromId, toId);
+      this._addConnection(fromId, toId, this.connecting.fromSide, toSide || "left");
     }
 
-    _addConnection(fromId, toId) {
+    _addConnection(fromId, toId, fromSide, toSide) {
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.classList.add("wf-conn-path");
       path.setAttribute("marker-end", "url(#wf-arrow)");
       this.svg.appendChild(path);
 
-      const conn = { id: this.nextConnId++, from: fromId, to: toId, el: path };
+      const conn = {
+        id: this.nextConnId++, from: fromId, to: toId,
+        fromSide: fromSide || "right", toSide: toSide || "left",
+        el: path,
+      };
       this.connections.push(conn);
       this._updateConnectionPath(conn);
 
-      // Click to delete
       path.addEventListener("click", () => {
         path.remove();
         this.connections = this.connections.filter(c => c.id !== conn.id);
@@ -261,19 +264,76 @@
       });
     }
 
+    _getPortPos(block, side) {
+      switch (side) {
+        case "right":  return { x: block.x + BLOCK_W + 1, y: block.y + BLOCK_H / 2 };
+        case "left":   return { x: block.x - 1,           y: block.y + BLOCK_H / 2 };
+        case "bottom": return { x: block.x + BLOCK_W / 2, y: block.y + BLOCK_H + 1 };
+        case "top":    return { x: block.x + BLOCK_W / 2, y: block.y - 1 };
+        default:       return { x: block.x + BLOCK_W + 1, y: block.y + BLOCK_H / 2 };
+      }
+    }
+
     _updateConnectionPath(conn) {
       const fb = this.blocks.get(conn.from);
       const tb = this.blocks.get(conn.to);
       if (!fb || !tb) return;
-      const x1 = fb.x + BLOCK_W + 1, y1 = fb.y + BLOCK_H / 2;
-      const x2 = tb.x - 1, y2 = tb.y + BLOCK_H / 2;
-      conn.el.setAttribute("d", this._bezier(x1, y1, x2, y2));
+      const p1 = this._getPortPos(fb, conn.fromSide || "right");
+      const p2 = this._getPortPos(tb, conn.toSide || "left");
+      conn.el.setAttribute("d", this._routePath(p1.x, p1.y, p2.x, p2.y, conn.fromSide, conn.toSide));
     }
 
-    _bezier(x1, y1, x2, y2) {
-      // Orthogonal (right-angle) routing snapped to grid
+    _routePath(x1, y1, x2, y2, fromSide, toSide) {
+      // Smart orthogonal routing that avoids overlapping blocks
+      const GAP = 24; // clearance around blocks
+
+      // Same axis (horizontal → horizontal)
+      if ((fromSide === "right" && toSide === "left") || (!fromSide && !toSide)) {
+        if (x2 > x1 + GAP) {
+          // Normal: right → left, go straight with mid bend
+          const midX = snap((x1 + x2) / 2);
+          return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+        } else {
+          // Target is to the left — route around
+          const detourY = snap(Math.min(y1, y2) - BLOCK_H - GAP);
+          return `M ${x1} ${y1} L ${x1 + GAP} ${y1} L ${x1 + GAP} ${detourY} L ${x2 - GAP} ${detourY} L ${x2 - GAP} ${y2} L ${x2} ${y2}`;
+        }
+      }
+
+      // Vertical connections (top/bottom)
+      if (fromSide === "bottom" && toSide === "top") {
+        if (y2 > y1 + GAP) {
+          const midY = snap((y1 + y2) / 2);
+          return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+        } else {
+          const detourX = snap(Math.max(x1, x2) + BLOCK_W + GAP);
+          return `M ${x1} ${y1} L ${x1} ${y1 + GAP} L ${detourX} ${y1 + GAP} L ${detourX} ${y2 - GAP} L ${x2} ${y2 - GAP} L ${x2} ${y2}`;
+        }
+      }
+
+      // Mixed: right → top
+      if (fromSide === "right" && toSide === "top") {
+        return `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2}`;
+      }
+
+      // Mixed: bottom → left
+      if (fromSide === "bottom" && toSide === "left") {
+        return `M ${x1} ${y1} L ${x1} ${y2} L ${x2} ${y2}`;
+      }
+
+      // Mixed: right → bottom
+      if (fromSide === "right" && toSide === "bottom") {
+        return `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2}`;
+      }
+
+      // Fallback: generic orthogonal with midpoint
       const midX = snap((x1 + x2) / 2);
-      return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+      const midY = snap((y1 + y2) / 2);
+      if (fromSide === "right" || fromSide === "left") {
+        return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+      } else {
+        return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+      }
     }
 
     // ── Reset ────────────────────────────────────────────────

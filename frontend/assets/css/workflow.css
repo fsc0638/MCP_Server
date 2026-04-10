@@ -116,7 +116,7 @@
 
 .wf-connections-svg {
   position: absolute; top: 0; left: 0;
-  pointer-events: none; z-index: 5;
+  pointer-events: none; z-index: 15;
   overflow: visible;
 }
 .wf-connections-svg path {
@@ -132,6 +132,7 @@
   box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   cursor: move; z-index: 10;
   transition: box-shadow 0.12s, border-color 0.12s;
+  /* Blocks below SVG connections (z:15) so lines always visible */
   user-select: none;
 }
 .wf-block:hover {
@@ -166,22 +167,29 @@
 .wf-block-status.running { background: var(--kway-blue); animation: wf-blink 1s infinite; }
 .wf-block-status.error { background: #ea4335; }
 
-/* Ports */
+/* Ports — 4 directions */
 .wf-port {
-  position: absolute; width: 12px; height: 12px; border-radius: 50%;
+  position: absolute; width: 10px; height: 10px; border-radius: 50%;
   background: var(--bg-surface); border: 2px solid var(--border-medium, #aaa);
   cursor: crosshair; z-index: 20;
   transition: var(--transition);
+  opacity: 0.5;
 }
+.wf-block:hover .wf-port { opacity: 1; }
 .wf-port:hover {
   border-color: var(--kway-blue);
   background: var(--kway-blue);
-  transform: scale(1.3);
+  transform: scale(1.4);
+  opacity: 1;
 }
-.wf-port-in { left: -7px; top: 50%; transform: translateY(-50%); }
-.wf-port-in:hover { transform: translateY(-50%) scale(1.3); }
-.wf-port-out { right: -7px; top: 50%; transform: translateY(-50%); }
-.wf-port-out:hover { transform: translateY(-50%) scale(1.3); }
+.wf-port-left { left: -6px; top: 50%; transform: translateY(-50%); }
+.wf-port-left:hover { transform: translateY(-50%) scale(1.4); }
+.wf-port-right { right: -6px; top: 50%; transform: translateY(-50%); }
+.wf-port-right:hover { transform: translateY(-50%) scale(1.4); }
+.wf-port-top { left: 50%; top: -6px; transform: translateX(-50%); }
+.wf-port-top:hover { transform: translateX(-50%) scale(1.4); }
+.wf-port-bottom { left: 50%; bottom: -6px; transform: translateX(-50%); }
+.wf-port-bottom:hover { transform: translateX(-50%) scale(1.4); }
 
 /* Connection paths */
 .wf-conn-path {
