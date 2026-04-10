@@ -60,6 +60,7 @@ class TaskRegistry:
         self,
         *,
         session_id: str,
+        turn_id: str,
         provider: str,
         model: str,
         user_input: str,
@@ -68,6 +69,7 @@ class TaskRegistry:
         task = {
             "task_id": uuid.uuid4().hex,
             "session_id": session_id,
+            "turn_id": turn_id,
             "provider": provider,
             "model": model,
             "user_input": user_input,

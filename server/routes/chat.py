@@ -17,10 +17,11 @@ logger = logging.getLogger("MCP_Server.Chat")
 router = APIRouter(tags=["Chat"])
 
 
-def _wrap_task_payload(task_id: str, session_id: str, payload: Dict) -> Dict:
+def _wrap_task_payload(task_id: str, session_id: str, payload: Dict, turn_id: str = "") -> Dict:
     enriched = dict(payload)
     enriched.setdefault("task_id", task_id)
     enriched.setdefault("session_id", session_id)
+    enriched.setdefault("turn_id", turn_id)
     return enriched
 
 
@@ -107,6 +108,7 @@ async def approve_tool_call_by_task(task_id: str):
     tool_args = dict(task.get("pending_args") or {})
     provider = task.get("provider") or "openai"
     model = task.get("model") or "gpt-4o"
+    turn_id = task.get("turn_id") or ""
     uma = get_uma()
 
     if tool_name == "mcp-meeting-analyzer" and not tool_args.get("transcript"):
@@ -124,7 +126,12 @@ async def approve_tool_call_by_task(task_id: str):
 
     async def resume_generator() -> AsyncGenerator[dict, None]:
         try:
-            yield {"data": json.dumps(_wrap_task_payload(task_id, session_id, {"status": "task_resumed"}), ensure_ascii=False)}
+            yield {
+                "data": json.dumps(
+                    _wrap_task_payload(task_id, session_id, {"status": "task_resumed"}, turn_id=turn_id),
+                    ensure_ascii=False,
+                )
+            }
             task_registry.mark_tool_call(task_id, tool_name, f"Approved tool running: {tool_name}")
 
             executor = uma.executor
@@ -145,8 +152,8 @@ async def approve_tool_call_by_task(task_id: str):
                 message = f"{provider} adapter not available"
                 task_registry.mark_error(task_id, message)
                 yield {
-                    "data": json.dumps(
-                        _wrap_task_payload(task_id, session_id, {"status": "error", "message": message}),
+                        "data": json.dumps(
+                        _wrap_task_payload(task_id, session_id, {"status": "error", "message": message}, turn_id=turn_id),
                         ensure_ascii=False,
                     )
                 }
@@ -170,14 +177,14 @@ async def approve_tool_call_by_task(task_id: str):
                     task_registry.append_partial_text(task_id, text)
                     yield {
                         "data": json.dumps(
-                            _wrap_task_payload(task_id, session_id, {"status": "streaming", "content": text}),
+                            _wrap_task_payload(task_id, session_id, {"status": "streaming", "content": text}, turn_id=turn_id),
                             ensure_ascii=False,
                         )
                     }
                 elif status == "provider_meta":
                     yield {
                         "data": json.dumps(
-                            _wrap_task_payload(task_id, session_id, chunk),
+                            _wrap_task_payload(task_id, session_id, chunk, turn_id=turn_id),
                             ensure_ascii=False,
                         )
                     }
@@ -191,7 +198,7 @@ async def approve_tool_call_by_task(task_id: str):
                     )
                     yield {
                         "data": json.dumps(
-                            _wrap_task_payload(task_id, session_id, {"status": "success", "content": final}),
+                            _wrap_task_payload(task_id, session_id, {"status": "success", "content": final}, turn_id=turn_id),
                             ensure_ascii=False,
                         )
                     }
@@ -201,7 +208,7 @@ async def approve_tool_call_by_task(task_id: str):
                     task_registry.mark_error(task_id, message)
                     yield {
                         "data": json.dumps(
-                            _wrap_task_payload(task_id, session_id, {"status": "error", "message": message}),
+                            _wrap_task_payload(task_id, session_id, {"status": "error", "message": message}, turn_id=turn_id),
                             ensure_ascii=False,
                         )
                     }
@@ -209,7 +216,7 @@ async def approve_tool_call_by_task(task_id: str):
                 else:
                     yield {
                         "data": json.dumps(
-                            _wrap_task_payload(task_id, session_id, chunk),
+                            _wrap_task_payload(task_id, session_id, chunk, turn_id=turn_id),
                             ensure_ascii=False,
                         )
                     }
@@ -219,7 +226,7 @@ async def approve_tool_call_by_task(task_id: str):
             task_registry.mark_error(task_id, str(exc))
             yield {
                 "data": json.dumps(
-                    _wrap_task_payload(task_id, session_id, {"status": "error", "message": str(exc)}),
+                    _wrap_task_payload(task_id, session_id, {"status": "error", "message": str(exc)}, turn_id=turn_id),
                     ensure_ascii=False,
                 )
             }

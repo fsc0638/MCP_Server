@@ -4,19 +4,43 @@
   const ACTIVE_TASK_STATUSES = new Set(["running", "tool_call", "requires_approval", "approved"]);
   const TERMINAL_TASK_STATUSES = new Set(["completed", "error", "rejected"]);
 
+  function generatePersistedSessionId() {
+    return "web-" + Math.random().toString(36).slice(2, 10);
+  }
+
+  function generateDraftSessionId() {
+    return "draft-" + Math.random().toString(36).slice(2, 10);
+  }
+
+  function isDraftSessionId(sessionId) {
+    return String(sessionId || "").startsWith("draft-");
+  }
+
+  function generateTurnId() {
+    return "turn-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+  }
+
   const state = {
     msgCount: 0,
     tokenCount: 0,
     startAt: Date.now(),
     taskPool: {},
     sessionHistoryCache: {},
-    historyLoadToken: 0,
+    sessionLoadTokens: {},
     models: [{ provider: "openai", model: "gpt-4o", display_name: "OpenAI (gpt-4o)" }],
     modelIndex: 0,
-    sessionId: localStorage.getItem("kway_chat_session") || ("web-" + Math.random().toString(36).slice(2, 10)),
+    sessionId: localStorage.getItem("kway_chat_session") || generateDraftSessionId(),
     meetingText: "",
     sessions: JSON.parse(localStorage.getItem("kway_sessions") || "[]"),
     activeApprovalTaskId: null,
+    // ── Per-session isolation state ──
+    // 每個 session 擁有獨立的 DOM 容器,放在 #chatMessages 內,只以 display 切換
+    sessionContainers: {},           // sessionId -> HTMLDivElement
+    sessionMsgCounts: {},            // sessionId -> number
+    sessionTokenCounts: {},          // sessionId -> number
+    sessionMeetingText: {},          // sessionId -> string
+    sessionHistoryLoaded: {},        // sessionId -> boolean (避免重複載入)
+    sessionInputDrafts: {},          // sessionId -> string (未送出的草稿)
   };
   localStorage.setItem("kway_chat_session", state.sessionId);
 
@@ -127,11 +151,22 @@
   }
 
   function updateStats(extraTokens) {
-    if (extraTokens) state.tokenCount += extraTokens;
+    if (extraTokens) {
+      state.tokenCount += extraTokens;
+      state.sessionTokenCounts[state.sessionId] = (state.sessionTokenCounts[state.sessionId] || 0) + extraTokens;
+    }
     const statMsgCount = document.getElementById("statMsgCount");
     const statTokens = document.getElementById("statTokens");
     if (statMsgCount) statMsgCount.textContent = String(state.msgCount);
     if (statTokens) statTokens.textContent = String(state.tokenCount);
+  }
+
+  // 套用指定 session 的統計數字到右上角 — 切換 session 時呼叫
+  function applySessionStats(sessionId) {
+    state.msgCount = state.sessionMsgCounts[sessionId] || 0;
+    state.tokenCount = state.sessionTokenCounts[sessionId] || 0;
+    state.meetingText = state.sessionMeetingText[sessionId] || "";
+    updateStats();
   }
 
   function updateSessionDuration() {
@@ -143,21 +178,27 @@
     statDuration.textContent = mm + ":" + ss;
   }
 
-  function removeChatWelcome() {
-    const welcome = document.getElementById("chatWelcome");
-    if (welcome) welcome.remove();
-  }
-
   function saveSessions() {
     localStorage.setItem("kway_sessions", JSON.stringify(state.sessions));
   }
 
-  function ensureSessionExists() {
-    if (!state.sessions.find(s => s.id === state.sessionId)) {
+  function nextSessionLoadToken(sessionId) {
+    const next = (state.sessionLoadTokens[sessionId] || 0) + 1;
+    state.sessionLoadTokens[sessionId] = next;
+    return next;
+  }
+
+  function isSessionLoadCurrent(sessionId, token) {
+    return state.sessionLoadTokens[sessionId] === token;
+  }
+
+  function ensureSessionExists(sessionId, title, preview) {
+    if (!sessionId || isDraftSessionId(sessionId)) return;
+    if (!state.sessions.find(s => s.id === sessionId)) {
       state.sessions.push({
-        id: state.sessionId,
-        title: "新對話",
-        preview: "開始新的對話...",
+        id: sessionId,
+        title: title || "新對話",
+        preview: preview || "開始新的對話...",
         timestamp: Date.now(),
       });
       saveSessions();
@@ -165,6 +206,7 @@
   }
 
   function ensureSessionRecord(sessionId, title) {
+    if (!sessionId || isDraftSessionId(sessionId)) return;
     if (state.sessions.find(item => item.id === sessionId)) return;
     state.sessions.push({
       id: sessionId,
@@ -177,7 +219,70 @@
 
   function getSessionTitle(sessionId) {
     const session = state.sessions.find(item => item.id === sessionId);
-    return session ? session.title : sessionId;
+    if (session) return session.title;
+    if (isDraftSessionId(sessionId)) return "新對話";
+    return sessionId;
+  }
+
+  function moveSessionScopedValue(store, fromId, toId, fallback) {
+    if (!store) return;
+    if (Object.prototype.hasOwnProperty.call(store, fromId)) {
+      store[toId] = store[fromId];
+      delete store[fromId];
+      return;
+    }
+    if (fallback !== undefined && !Object.prototype.hasOwnProperty.call(store, toId)) {
+      store[toId] = fallback;
+    }
+  }
+
+  function materializeDraftSession(sessionId, seedText) {
+    if (!isDraftSessionId(sessionId)) return sessionId;
+
+    let realSessionId = generatePersistedSessionId();
+    while (state.sessions.find((item) => item.id === realSessionId)) {
+      realSessionId = generatePersistedSessionId();
+    }
+
+    const container = state.sessionContainers[sessionId];
+    if (container) {
+      container.dataset.sessionId = realSessionId;
+      state.sessionContainers[realSessionId] = container;
+      delete state.sessionContainers[sessionId];
+    }
+
+    moveSessionScopedValue(state.sessionMsgCounts, sessionId, realSessionId, 0);
+    moveSessionScopedValue(state.sessionTokenCounts, sessionId, realSessionId, 0);
+    moveSessionScopedValue(state.sessionMeetingText, sessionId, realSessionId, "");
+    moveSessionScopedValue(state.sessionHistoryLoaded, sessionId, realSessionId, false);
+    moveSessionScopedValue(state.sessionInputDrafts, sessionId, realSessionId, "");
+    moveSessionScopedValue(state.sessionHistoryCache, sessionId, realSessionId, []);
+    moveSessionScopedValue(state.sessionLoadTokens, sessionId, realSessionId, 0);
+
+    Object.values(state.taskPool).forEach((task) => {
+      if (task && task.sessionId === sessionId) {
+        task.sessionId = realSessionId;
+      }
+    });
+
+    ensureSessionExists(realSessionId, "新對話", "開始新的對話...");
+
+    if (state.sessionId === sessionId) {
+      state.sessionId = realSessionId;
+      localStorage.setItem("kway_chat_session", realSessionId);
+    }
+
+    if (chatTitleText && state.sessionId === realSessionId) {
+      chatTitleText.textContent = "新對話";
+    }
+
+    if (seedText) {
+      updateSessionPreview(realSessionId, seedText);
+    } else {
+      renderConversationList();
+    }
+
+    return realSessionId;
   }
 
   function getCurrentModel() {
@@ -210,6 +315,50 @@
       .filter(Boolean);
   }
 
+  function getHistorySignature(msg) {
+    const normalized = cloneHistoryMessage(msg);
+    if (!normalized) return "";
+    return normalized.role + "\u0000" + normalized.content;
+  }
+
+  function mergeHistoryWithCache(sessionId, history) {
+    const remoteHistory = (Array.isArray(history) ? history : [])
+      .map(cloneHistoryMessage)
+      .filter(Boolean);
+
+    if (remoteHistory.length === 0) {
+      return getCachedHistory(sessionId);
+    }
+
+    const cachedHistory = getCachedHistory(sessionId);
+    if (cachedHistory.length === 0) {
+      setCachedHistory(sessionId, remoteHistory);
+      return remoteHistory;
+    }
+
+    const remoteCounts = Object.create(null);
+    remoteHistory.forEach((msg) => {
+      const key = getHistorySignature(msg);
+      if (!key) return;
+      remoteCounts[key] = (remoteCounts[key] || 0) + 1;
+    });
+
+    const cachedSeen = Object.create(null);
+    const merged = remoteHistory.slice();
+
+    cachedHistory.forEach((msg) => {
+      const key = getHistorySignature(msg);
+      if (!key) return;
+      cachedSeen[key] = (cachedSeen[key] || 0) + 1;
+      if (cachedSeen[key] > (remoteCounts[key] || 0)) {
+        merged.push(msg);
+      }
+    });
+
+    setCachedHistory(sessionId, merged);
+    return merged;
+  }
+
   function appendCachedHistoryMessage(sessionId, role, content, createdAt) {
     if (!sessionId || typeof content !== "string") return;
     const current = getCachedHistory(sessionId);
@@ -221,38 +370,104 @@
     setCachedHistory(sessionId, current);
   }
 
-  function resetConversationViewport() {
-    if (chatMessages) chatMessages.innerHTML = "";
-    state.msgCount = 0;
-    state.tokenCount = 0;
-    state.meetingText = "";
+  // ── Per-session DOM container management ──
+  // 每個 session 有自己的 <div class="page-chat-session-container"> 放在 #chatMessages 底下
+  // 切換只改 display,不清空內容,讓背景 task 的 DOM 更新永遠指向正確的容器
+  function getSessionContainer(sessionId) {
+    if (!sessionId || !chatMessages) return null;
+    let container = state.sessionContainers[sessionId];
+    if (container && chatMessages.contains(container)) return container;
+
+    container = document.createElement("div");
+    container.className = "page-chat-session-container";
+    container.dataset.sessionId = sessionId;
+    container.style.display = sessionId === state.sessionId ? "" : "none";
+    container.style.width = "100%";
+    chatMessages.appendChild(container);
+    state.sessionContainers[sessionId] = container;
+    return container;
   }
 
-  function renderConversationPlaceholder(title, body) {
-    resetConversationViewport();
+  function showSessionContainer(sessionId) {
     if (!chatMessages) return;
-    chatMessages.innerHTML =
-      '<div class="page-chat-welcome" id="chatWelcome">' +
+    Object.keys(state.sessionContainers).forEach((sid) => {
+      const el = state.sessionContainers[sid];
+      if (!el) return;
+      el.style.display = sid === sessionId ? "" : "none";
+    });
+    // 確保目標 session 的容器存在
+    getSessionContainer(sessionId);
+  }
+
+  function clearSessionContainer(sessionId) {
+    const container = state.sessionContainers[sessionId];
+    if (container) container.innerHTML = "";
+    state.sessionMsgCounts[sessionId] = 0;
+    state.sessionTokenCounts[sessionId] = 0;
+    state.sessionMeetingText[sessionId] = "";
+  }
+
+  function removeSessionContainer(sessionId) {
+    const container = state.sessionContainers[sessionId];
+    if (container && container.parentNode) container.parentNode.removeChild(container);
+    delete state.sessionContainers[sessionId];
+    delete state.sessionMsgCounts[sessionId];
+    delete state.sessionTokenCounts[sessionId];
+    delete state.sessionMeetingText[sessionId];
+    delete state.sessionHistoryLoaded[sessionId];
+    delete state.sessionInputDrafts[sessionId];
+    delete state.sessionLoadTokens[sessionId];
+  }
+
+  function scrollSessionToBottom(sessionId) {
+    if (!chatMessages) return;
+    if (sessionId !== state.sessionId) return; // 非可見 session 不捲動
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function renderConversationPlaceholder(sessionId, title, body) {
+    const container = getSessionContainer(sessionId);
+    if (!container) return;
+    container.innerHTML =
+      '<div class="page-chat-welcome" id="chatWelcome-' + String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "_") + '">' +
       '<div class="page-chat-welcome-logo"><img src="../assets/images/kw_logo.png" width="56" alt="Logo"></div>' +
       '<h2>' + escapeHtml(title) + '</h2>' +
       '<p>' + escapeHtml(body) + '</p>' +
       '</div>';
+    state.sessionMsgCounts[sessionId] = 0;
+    state.sessionTokenCounts[sessionId] = 0;
+    state.sessionMeetingText[sessionId] = "";
   }
 
-  function renderHistoryMessages(history) {
-    resetConversationViewport();
+  function renderHistoryMessages(sessionId, history) {
+    clearSessionContainer(sessionId);
     if (!Array.isArray(history) || history.length === 0) return false;
+
+    let msgCount = 0;
+    let tokenCount = 0;
+    let meetingText = "";
 
     history.forEach((msg) => {
       const normalized = cloneHistoryMessage(msg);
       if (!normalized) return;
       const role = normalized.role === "assistant" ? "ai" : "user";
-      renderMessage(role, normalized.content, normalized.created_at ? normalized.created_at * 1000 : null);
-      state.msgCount += 1;
-      state.tokenCount += Math.ceil(normalized.content.length / 4);
-      appendMeetingText(role === "ai" ? "assistant" : "user", normalized.content);
+      renderMessage(sessionId, role, normalized.content, normalized.created_at ? normalized.created_at * 1000 : null);
+      msgCount += 1;
+      tokenCount += Math.ceil(normalized.content.length / 4);
+      const speaker = role === "ai" ? "Assistant" : "User";
+      meetingText += (meetingText ? "\n\n" : "") + speaker + ":\n" + normalized.content;
     });
-    updateStats();
+
+    state.sessionMsgCounts[sessionId] = msgCount;
+    state.sessionTokenCounts[sessionId] = tokenCount;
+    state.sessionMeetingText[sessionId] = meetingText;
+
+    if (sessionId === state.sessionId) {
+      state.msgCount = msgCount;
+      state.tokenCount = tokenCount;
+      state.meetingText = meetingText;
+      updateStats();
+    }
     return true;
   }
 
@@ -282,10 +497,11 @@
     return "local-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
   }
 
-  function createTaskState(sessionId, taskId) {
+  function createTaskState(sessionId, taskId, turnId) {
     return {
       taskId: taskId,
       sessionId: sessionId,
+      turnId: turnId || "",
       localOnly: String(taskId || "").startsWith("local-"),
       status: "running",
       text: "",
@@ -311,8 +527,8 @@
     return task;
   }
 
-  function createLocalTask(sessionId) {
-    return addTask(createTaskState(sessionId, generateLocalTaskId()));
+  function createLocalTask(sessionId, turnId) {
+    return addTask(createTaskState(sessionId, generateLocalTaskId(), turnId));
   }
 
   function renameTask(task, newTaskId) {
@@ -345,11 +561,17 @@
     return tasks.length ? tasks[tasks.length - 1] : null;
   }
 
-  function findAdoptableLocalTask(sessionId) {
-    return listTasksForSession(sessionId).find(task => task.localOnly && isActiveTaskStatus(task.status));
+  function findAdoptableLocalTask(sessionId, turnId) {
+    const activeLocalTasks = listTasksForSession(sessionId).filter(task => task.localOnly && isActiveTaskStatus(task.status));
+    if (!activeLocalTasks.length) return null;
+    if (turnId) {
+      return activeLocalTasks.find(task => task.turnId === turnId) || null;
+    }
+    return activeLocalTasks[0];
   }
   function applyServerTaskData(task, taskData) {
     task.sessionId = taskData.session_id || task.sessionId;
+    task.turnId = taskData.turn_id || task.turnId || "";
     task.status = taskData.status || task.status;
     task.toolName = taskData.tool_name || task.toolName || "";
     task.toolMessage = taskData.tool_message || task.toolMessage || "";
@@ -369,13 +591,13 @@
     if (!taskData || !taskData.task_id) return null;
     let task = state.taskPool[taskData.task_id];
     if (!task) {
-      const adoptable = findAdoptableLocalTask(taskData.session_id);
+      const adoptable = findAdoptableLocalTask(taskData.session_id, taskData.turn_id);
       if (adoptable) {
         task = renameTask(adoptable, taskData.task_id);
       }
     }
     if (!task) {
-      task = createTaskState(taskData.session_id || state.sessionId, taskData.task_id);
+      task = createTaskState(taskData.session_id || state.sessionId, taskData.task_id, taskData.turn_id);
       task.localOnly = false;
       addTask(task);
     }
@@ -386,22 +608,18 @@
     if (!task || !parsed) return task;
     if (parsed.task_id) renameTask(task, parsed.task_id);
     if (parsed.session_id) task.sessionId = parsed.session_id;
+    if (parsed.turn_id) task.turnId = parsed.turn_id;
     task.updatedAt = Date.now();
     return task;
-  }
-
-  function isSessionPending(sessionId) {
-    return listActiveTasksForSession(sessionId).length > 0;
-  }
-
-  function isCurrentSessionPending() {
-    return isSessionPending(state.sessionId);
   }
 
   function syncComposerState() {
     if (!sendBtn) return;
     const hasText = !!(chatInput && chatInput.value.trim());
-    sendBtn.disabled = !hasText || isCurrentSessionPending();
+    // 只有當前 session 有活躍任務時才禁用發送按鈕
+    // 其他 session 的背景任務不影響當前 session 的輸入
+    const hasActiveTaskInCurrentSession = listActiveTasksForSession(state.sessionId).length > 0;
+    sendBtn.disabled = !hasText || hasActiveTaskInCurrentSession;
   }
 
   function getTypingIndicatorId(sessionId) {
@@ -412,7 +630,18 @@
     const convList = document.getElementById("convList");
     if (!convList) return;
 
-    const sorted = state.sessions.slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    const visibleSessions = state.sessions.slice();
+    if (isDraftSessionId(state.sessionId) && !visibleSessions.find((session) => session.id === state.sessionId)) {
+      visibleSessions.push({
+        id: state.sessionId,
+        title: "新對話",
+        preview: "開始新的對話...",
+        timestamp: Date.now(),
+        _draft: true,
+      });
+    }
+
+    const sorted = visibleSessions.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
     let html = "";
     let currentGroup = "";
 
@@ -425,6 +654,9 @@
 
       const isActive = session.id === state.sessionId ? "is-active" : "";
       const displayTime = getRelativeTimeString(session.timestamp);
+      const previewText = session._draft
+        ? (state.sessionInputDrafts[session.id] || session.preview || "開始新的對話...")
+        : session.preview;
       const activeTasks = listActiveTasksForSession(session.id);
       const latestTask = getLatestTaskForSession(session.id);
       let pendingBadge = "";
@@ -441,7 +673,7 @@
           <div class="page-chat-conv-icon page-chat-conv-icon--blue" aria-hidden="true">AI</div>
           <div class="page-chat-conv-info">
             <div class="page-chat-conv-name">${escapeHtml(session.title)}${pendingBadge}</div>
-            <div class="page-chat-conv-preview">${escapeHtml(session.preview)}</div>
+            <div class="page-chat-conv-preview">${escapeHtml(previewText)}</div>
           </div>
           <div class="page-chat-conv-time">${escapeHtml(displayTime)}</div>
         </div>`;
@@ -450,8 +682,8 @@
     convList.innerHTML = html;
   }
 
-  function updateCurrentSessionPreview(text) {
-    const session = state.sessions.find(item => item.id === state.sessionId);
+  function updateSessionPreview(sessionId, text) {
+    const session = state.sessions.find(item => item.id === sessionId);
     if (!session) return;
     session.preview = text.slice(0, 30) + (text.length > 30 ? "..." : "");
     if (session.title === "新對話") {
@@ -462,19 +694,22 @@
     renderConversationList();
   }
 
-  async function summarizeConversationTitle(userInput, aiResponse) {
-    const session = state.sessions.find(item => item.id === state.sessionId);
+  async function summarizeConversationTitle(sessionId, userInput, aiResponse) {
+    const session = state.sessions.find(item => item.id === sessionId);
     if (!session) return;
     const isGeneric = session.title === "新對話" || session.title.includes("...");
     if (!isGeneric) return;
 
     try {
+      const model = getCurrentModel();
       const res = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           user_input: "請根據這段問答內容，產生一個 10 字以內的對話標題，只回傳標題文字。\n使用者：" + userInput + "\n助手：" + aiResponse,
           session_id: "temp-title-" + Date.now(),
+          provider: model.provider || "openai",
+          model: model.model || "gpt-4o",
           language: "繁體中文",
           detail_level: "簡潔",
         }),
@@ -511,21 +746,28 @@
       session.title = cleanTitle;
       saveSessions();
       renderConversationList();
-      if (chatTitleText) chatTitleText.textContent = cleanTitle;
+      if (chatTitleText && state.sessionId === sessionId) chatTitleText.textContent = cleanTitle;
     } catch (_err) {
       // silent fail
     }
   }
 
-  function appendMeetingText(role, text) {
+  function appendMeetingText(sessionId, role, text) {
     if (!text) return;
     const speaker = role === "user" ? "User" : "Assistant";
-    state.meetingText += (state.meetingText ? "\n\n" : "") + speaker + ":\n" + text;
+    const prev = state.sessionMeetingText[sessionId] || "";
+    const next = prev + (prev ? "\n\n" : "") + speaker + ":\n" + text;
+    state.sessionMeetingText[sessionId] = next;
+    if (sessionId === state.sessionId) state.meetingText = next;
   }
 
-  function renderMessage(role, text, timestamp) {
-    removeChatWelcome();
-    if (!chatMessages) return null;
+  function renderMessage(sessionId, role, text, timestamp) {
+    const container = getSessionContainer(sessionId);
+    if (!container) return null;
+
+    // 移除該 session 自己的 welcome 畫面(不影響其他 session)
+    const welcome = container.querySelector(".page-chat-welcome");
+    if (welcome) welcome.remove();
 
     const row = document.createElement("div");
     row.className = "page-chat-msg-row " + (role === "user" ? "page-chat-msg-row--user" : "page-chat-msg-row--ai");
@@ -556,13 +798,14 @@
       '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>' +
       '</svg></button></div></div></div>';
 
-    chatMessages.appendChild(row);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-    return document.getElementById(bubbleId);
+    container.appendChild(row);
+    scrollSessionToBottom(sessionId);
+    return container.querySelector("#" + bubbleId);
   }
 
   function showTyping(sessionId) {
-    if (!chatMessages || sessionId !== state.sessionId) return;
+    const container = getSessionContainer(sessionId);
+    if (!container) return;
     removeTyping(sessionId);
     const row = document.createElement("div");
     row.className = "page-chat-typing-row";
@@ -574,8 +817,8 @@
       '<div class="page-chat-typing-dot"></div>' +
       '<div class="page-chat-typing-dot"></div>' +
       '</div>';
-    chatMessages.appendChild(row);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    container.appendChild(row);
+    scrollSessionToBottom(sessionId);
   }
 
   function removeTyping(sessionId) {
@@ -584,16 +827,21 @@
   }
 
   function showTaskBubble(task, isFinal) {
-    if (!task || task.sessionId !== state.sessionId || !chatMessages) return;
+    // Session-aware: 永遠寫入該 task 自己的 session 容器,不管當前是否可見
+    if (!task || !task.sessionId) return;
+    const container = getSessionContainer(task.sessionId);
+    if (!container) return;
+
     let bubble = task.bubbleEl;
-    if (!bubble || !chatMessages.contains(bubble)) {
-      bubble = renderMessage("ai", task.text || "");
+    if (!bubble || !container.contains(bubble)) {
+      bubble = renderMessage(task.sessionId, "ai", task.text || "");
       task.bubbleEl = bubble;
     }
+    if (!bubble) return;
     const row = bubble.closest(".page-chat-msg-row");
     if (row) row.style.display = "";
     bubble.innerHTML = formatText(task.text || "") + (isFinal ? "" : '<span class="page-chat-cursor"></span>');
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+    scrollSessionToBottom(task.sessionId);
   }
 
   function autoResize(el) {
@@ -602,7 +850,7 @@
     el.style.height = Math.min(el.scrollHeight, 180) + "px";
   }
   function restoreSessionTaskUI(sessionId) {
-    if (sessionId !== state.sessionId) return;
+    // 可以針對任何 session 重建,不限於當前 session,因為每個 session 有自己的容器
     const tasks = listTasksForSession(sessionId);
     if (!tasks.length) return;
 
@@ -623,7 +871,10 @@
       showTaskBubble(task, task.completed);
     });
 
-    maybePromptApprovalForCurrentSession(sessionId);
+    // 只有當前可見 session 才彈出 approval modal
+    if (sessionId === state.sessionId) {
+      maybePromptApprovalForCurrentSession(sessionId);
+    }
   }
 
   function maybePromptApprovalForCurrentSession(sessionId) {
@@ -635,12 +886,19 @@
   }
 
   function resetSession() {
-    state.sessionId = "web-" + Math.random().toString(36).slice(2, 10);
-    localStorage.setItem("kway_chat_session", state.sessionId);
+    const newId = generateDraftSessionId();
+    state.sessionId = newId;
+    localStorage.setItem("kway_chat_session", newId);
+    state.startAt = Date.now();
+    state.sessionMsgCounts[newId] = 0;
+    state.sessionTokenCounts[newId] = 0;
+    state.sessionMeetingText[newId] = "";
     state.msgCount = 0;
     state.tokenCount = 0;
-    state.startAt = Date.now();
     state.meetingText = "";
+    // 建立新 session 的 container 並隱藏其他 session
+    getSessionContainer(newId);
+    showSessionContainer(newId);
     renderConversationList();
     updateStats();
     syncComposerState();
@@ -720,11 +978,11 @@
     const sid = targetSessionId || state.sessionId;
     try {
       const res = await fetch("/chat/session/" + encodeURIComponent(sid));
-      if (state.sessionId !== sid || viewToken !== state.historyLoadToken) return { hasHistory: false, aborted: true, history: [] };
+      if (!isSessionLoadCurrent(sid, viewToken)) return { hasHistory: false, aborted: true, history: [] };
       if (!res.ok) return { hasHistory: false, aborted: false, history: [] };
 
       const data = await res.json();
-      if (state.sessionId !== sid || viewToken !== state.historyLoadToken) return { hasHistory: false, aborted: true, history: [] };
+      if (!isSessionLoadCurrent(sid, viewToken)) return { hasHistory: false, aborted: true, history: [] };
       const history = Array.isArray(data.history) ? data.history : [];
       return { hasHistory: history.length > 0, aborted: false, history: history };
     } catch (_err) {
@@ -736,11 +994,11 @@
     const sid = targetSessionId || state.sessionId;
     try {
       const res = await fetch("/chat/tasks/session/" + encodeURIComponent(sid));
-      if (state.sessionId !== sid || viewToken !== state.historyLoadToken) return { tasks: [], aborted: true };
+      if (!isSessionLoadCurrent(sid, viewToken)) return { tasks: [], aborted: true };
       if (!res.ok) return { tasks: [], aborted: false };
 
       const data = await res.json();
-      if (state.sessionId !== sid || viewToken !== state.historyLoadToken) return { tasks: [], aborted: true };
+      if (!isSessionLoadCurrent(sid, viewToken)) return { tasks: [], aborted: true };
       const tasks = Array.isArray(data.tasks) ? data.tasks : [];
       return { tasks: tasks.map(mergeTaskFromServer).filter(Boolean), aborted: false };
     } catch (_err) {
@@ -757,27 +1015,26 @@
   }
 
   function renderLoadedSession(sessionId, history) {
-    if (sessionId !== state.sessionId) return;
+    // 可針對任何 session 渲染,因為每個 session 有自己的容器
     const normalizedHistory = Array.isArray(history) ? history.map(cloneHistoryMessage).filter(Boolean) : [];
 
     if (normalizedHistory.length > 0) {
-      setCachedHistory(sessionId, normalizedHistory);
-      renderHistoryMessages(normalizedHistory);
+      renderHistoryMessages(sessionId, mergeHistoryWithCache(sessionId, normalizedHistory));
       return;
     }
 
     const cachedHistory = getCachedHistory(sessionId);
     if (cachedHistory.length > 0) {
-      renderHistoryMessages(cachedHistory);
+      renderHistoryMessages(sessionId, cachedHistory);
       return;
     }
 
     if (listTasksForSession(sessionId).length > 0) {
-      resetConversationViewport();
+      clearSessionContainer(sessionId);
       return;
     }
 
-    renderConversationPlaceholder("這個對話目前是空的", "輸入訊息開始新的任務，或切換到其他對話。");
+    renderConversationPlaceholder(sessionId, "這個對話目前是空的", "輸入訊息開始新的任務，或切換到其他對話。");
   }
 
   async function handleApproval(task) {
@@ -982,7 +1239,7 @@
     }
 
     removeTyping(task.sessionId);
-    if (task.text && task.sessionId === state.sessionId) {
+    if (task.text) {
       showTaskBubble(task, !!task.completed);
     }
     return task.text;
@@ -997,20 +1254,32 @@
     }
 
     if (task.status === "completed") {
-      if (task.sessionId === state.sessionId) {
-        state.msgCount += 1;
-        updateStats(Math.ceil((finalText || "").length / 4));
-        appendMeetingText("user", content);
-        appendMeetingText("assistant", finalText || "");
-        appendCachedHistoryMessage(task.sessionId, "assistant", finalText || "");
+      const taskSession = task.sessionId;
+      // 無論當前可見哪個 session,都要把訊息寫入該 task 自己的 session 統計
+      state.sessionMsgCounts[taskSession] = (state.sessionMsgCounts[taskSession] || 0) + 1;
+      const tokenDelta = Math.ceil((finalText || "").length / 4);
+      state.sessionTokenCounts[taskSession] = (state.sessionTokenCounts[taskSession] || 0) + tokenDelta;
+      appendMeetingText(taskSession, "user", content);
+      appendMeetingText(taskSession, "assistant", finalText || "");
+      appendCachedHistoryMessage(taskSession, "assistant", finalText || "");
+
+      if (taskSession === state.sessionId) {
+        state.msgCount = state.sessionMsgCounts[taskSession];
+        state.tokenCount = state.sessionTokenCounts[taskSession];
+        updateStats();
         if (state.msgCount <= 2 && finalText) {
-          summarizeConversationTitle(content, finalText);
+          summarizeConversationTitle(taskSession, content, finalText);
         }
-        removeTask(task);
-      } else if (!task.completionToastShown) {
-        task.completionToastShown = true;
-        showToast("「" + getSessionTitle(task.sessionId) + "」的任務已完成", "success");
+      } else {
+        if (state.sessionMsgCounts[taskSession] <= 2 && finalText) {
+          summarizeConversationTitle(taskSession, content, finalText);
+        }
+        if (!task.completionToastShown) {
+          task.completionToastShown = true;
+          showToast("「" + getSessionTitle(taskSession) + "」的任務已完成", "success");
+        }
       }
+      removeTask(task);
     } else if (task.status === "rejected" && task.sessionId === state.sessionId) {
       showTaskBubble(task, true);
     }
@@ -1029,14 +1298,16 @@
     task.text = "任務執行失敗：\n\n" + task.error;
     task.bubbleEl = null;
 
+    // 錯誤訊息永遠渲染到該 task 自己的 session container
+    renderMessage(task.sessionId, "ai", task.text);
+
     if (task.sessionId !== state.sessionId) {
       showToast("「" + getSessionTitle(task.sessionId) + "」的任務執行失敗", "error");
-      renderConversationList();
     } else {
-      renderMessage("ai", task.text);
       showToast("Chat request failed", "error");
-      removeTask(task);
     }
+    removeTask(task);
+    renderConversationList();
     syncComposerState();
   }
 
@@ -1051,24 +1322,41 @@
 
   async function sendMessage(text) {
     const content = (text || "").trim();
-    const requestSessionId = state.sessionId;
-    if (!content || isSessionPending(requestSessionId)) return;
+    let requestSessionId = state.sessionId;
+    // 只檢查當前 session 自己是否還在 pending;其他 session 的 task 完全不影響
+    if (!content || listActiveTasksForSession(requestSessionId).length > 0) return;
 
-    if (requestSessionId === state.sessionId && chatInput) {
+    if (isDraftSessionId(requestSessionId)) {
+      requestSessionId = materializeDraftSession(requestSessionId, content);
+    }
+    const turnId = generateTurnId();
+
+    if (chatInput) {
       chatInput.value = "";
+      // 同步清除該 session 的草稿
+      state.sessionInputDrafts[requestSessionId] = "";
       autoResize(chatInput);
     }
     syncComposerState();
 
-    ensureSessionExists();
-    renderMessage("user", content);
+    ensureSessionExists(requestSessionId, "新對話", "開始新的對話...");
+    // 渲染到該 session 自己的 container(即使使用者切到其他 session,這筆訊息仍然留在原 session)
+    renderMessage(requestSessionId, "user", content);
     appendCachedHistoryMessage(requestSessionId, "user", content);
-    state.msgCount += 1;
-    updateStats(Math.ceil(content.length / 4));
 
-    const task = createLocalTask(requestSessionId);
+    // Per-session 統計累加
+    state.sessionMsgCounts[requestSessionId] = (state.sessionMsgCounts[requestSessionId] || 0) + 1;
+    const tokenDelta = Math.ceil(content.length / 4);
+    state.sessionTokenCounts[requestSessionId] = (state.sessionTokenCounts[requestSessionId] || 0) + tokenDelta;
+    if (requestSessionId === state.sessionId) {
+      state.msgCount = state.sessionMsgCounts[requestSessionId];
+      state.tokenCount = state.sessionTokenCounts[requestSessionId];
+      updateStats();
+    }
+
+    const task = createLocalTask(requestSessionId, turnId);
     showTyping(requestSessionId);
-    updateCurrentSessionPreview(content);
+    updateSessionPreview(requestSessionId, content);
 
     try {
       const model = getCurrentModel();
@@ -1088,6 +1376,7 @@
       const payload = {
         user_input: content,
         session_id: requestSessionId,
+        turn_id: turnId,
         provider: model.provider || "openai",
         model: model.model || "gpt-4o",
         language: language,
@@ -1159,11 +1448,23 @@
     showToast("Markdown exported", "success");
   };
   window.newConversation = function () {
-    resetSession();
-    if (chatMessages) {
-      chatMessages.innerHTML = '<div class="page-chat-welcome" id="chatWelcome"><div class="page-chat-welcome-logo"><img src="../assets/images/kw_logo.png" width="56" alt="Logo"></div><h2>開始新的對話</h2><p>輸入任何問題，或上傳音檔讓助手協助處理。</p></div>';
+    const previousSessionId = state.sessionId;
+    // 切換前保存當前 session 的草稿
+    if (chatInput && state.sessionId) {
+      state.sessionInputDrafts[state.sessionId] = chatInput.value || "";
     }
+    if (isDraftSessionId(previousSessionId) && !state.sessions.find((item) => item.id === previousSessionId)) {
+      listTasksForSession(previousSessionId).forEach(removeTask);
+      removeSessionContainer(previousSessionId);
+      delete state.sessionHistoryCache[previousSessionId];
+    }
+    resetSession();
+    renderConversationPlaceholder(state.sessionId, "開始新的對話", "輸入任何問題，或上傳音檔讓助手協助處理。");
     if (chatTitleText) chatTitleText.textContent = "新對話";
+    if (chatInput) {
+      chatInput.value = "";
+      autoResize(chatInput);
+    }
     showToast("已建立新的對話", "success");
   };
 
@@ -1186,11 +1487,16 @@
   };
 
   function deleteCurrentConversation() {
-    const idx = state.sessions.findIndex(item => item.id === state.sessionId);
+    const deletingId = state.sessionId;
+    const idx = state.sessions.findIndex(item => item.id === deletingId);
     if (idx !== -1) {
       state.sessions.splice(idx, 1);
       saveSessions();
-      listTasksForSession(state.sessionId).forEach(removeTask);
+      listTasksForSession(deletingId).forEach(removeTask);
+      // 徹底移除該 session 的 container 與所有 per-session 狀態
+      removeSessionContainer(deletingId);
+      delete state.sessionHistoryCache[deletingId];
+
       if (state.sessions.length > 0) {
         const nextSessionId = state.sessions[state.sessions.length - 1].id;
         window.loadConversationById(nextSessionId, true);
@@ -1198,49 +1504,111 @@
         window.newConversation();
       }
     } else {
+      if (isDraftSessionId(deletingId)) {
+        listTasksForSession(deletingId).forEach(removeTask);
+        removeSessionContainer(deletingId);
+        delete state.sessionHistoryCache[deletingId];
+      }
       window.newConversation();
     }
   }
 
   window.loadConversationById = async function (sid, forceReload) {
-    if (!forceReload && sid === state.sessionId) return;
+    if (!sid) return;
+    const prevSessionId = state.sessionId;
+    const isSameSession = sid === prevSessionId;
 
-    if (sid !== state.sessionId) {
+    // 切換前先保存當前 session 的 composer 草稿
+    if (!isSameSession && chatInput) {
+      state.sessionInputDrafts[prevSessionId] = chatInput.value || "";
+    }
+
+    // 關掉上一個 session 的 approval modal (如果還開著)
+    if (!isSameSession) {
       dismissApprovalModal(true);
     }
 
+    // 1. 切換 session 狀態
     state.sessionId = sid;
     localStorage.setItem("kway_chat_session", state.sessionId);
-    syncComposerState();
 
     const session = state.sessions.find(item => item.id === sid);
-    if (chatTitleText) chatTitleText.textContent = session ? session.title : "MCP Assistant";
+    if (chatTitleText) chatTitleText.textContent = session ? session.title : getSessionTitle(sid);
 
-    renderConversationList();
+    // 2. 顯示/隱藏各 session 容器 — 不清空任何既有 DOM
+    showSessionContainer(sid);
 
-    const cachedHistory = getCachedHistory(sid);
-    if (cachedHistory.length > 0) {
-      renderHistoryMessages(cachedHistory);
-      restoreSessionTaskUI(sid);
-    } else if (listTasksForSession(sid).length > 0) {
-      resetConversationViewport();
-      restoreSessionTaskUI(sid);
-    } else {
-      renderConversationPlaceholder("正在載入對話", "正在同步這個對話的歷史訊息...");
+    // 3. 還原該 session 的統計、草稿、composer 狀態
+    applySessionStats(sid);
+    if (chatInput) {
+      chatInput.value = state.sessionInputDrafts[sid] || "";
+      autoResize(chatInput);
     }
 
-    const viewToken = ++state.historyLoadToken;
+    renderConversationList();
+    syncComposerState();
+
+    if (isDraftSessionId(sid)) {
+      const cachedHistory = getCachedHistory(sid);
+      if (cachedHistory.length > 0) {
+        renderHistoryMessages(sid, cachedHistory);
+        restoreSessionTaskUI(sid);
+      } else if (listTasksForSession(sid).length > 0) {
+        restoreSessionTaskUI(sid);
+      } else {
+        renderConversationPlaceholder(sid, "開始新的對話", "輸入任何問題，或上傳音檔讓助手協助處理。");
+      }
+      state.sessionHistoryLoaded[sid] = true;
+      return;
+    }
+
+    // 4. 如果該 session 的 container 是空的 (第一次進來),顯示 placeholder 再背景載入
+    const container = getSessionContainer(sid);
+    const containerIsEmpty = container && container.children.length === 0;
+    if (containerIsEmpty) {
+      const cachedHistory = getCachedHistory(sid);
+      if (cachedHistory.length > 0) {
+        renderHistoryMessages(sid, cachedHistory);
+        restoreSessionTaskUI(sid);
+      } else if (listTasksForSession(sid).length > 0) {
+        // 有 task 但沒有歷史 — 不清空,讓 task 的 bubble 直接繪上去
+        restoreSessionTaskUI(sid);
+      } else {
+        renderConversationPlaceholder(sid, "正在載入對話", "正在同步這個對話的歷史訊息...");
+      }
+    } else if (!forceReload && state.sessionHistoryLoaded[sid]) {
+      // 已載入過,直接捲到底就好
+      scrollSessionToBottom(sid);
+      return;
+    }
+
+    // 5. 背景載入歷史和任務狀態 — 不會清空 container,只在必要時重繪
+    const viewToken = nextSessionLoadToken(sid);
     const historyPromise = loadHistory(sid, viewToken);
     const taskPromise = loadSessionTasks(sid, viewToken);
 
     const historyResult = await historyPromise;
-    if (state.sessionId !== sid || viewToken !== state.historyLoadToken) return;
+    // 即便使用者已經切到別的 session,我們還是要把歷史渲染到「對應 session 的 container」
+    // 所以不再 early return — 只是不更新全域統計
     if (historyResult.aborted) return;
 
-    renderLoadedSession(sid, historyResult.history);
+    if (historyResult.hasHistory) {
+      renderLoadedSession(sid, historyResult.history);
+      restoreSessionTaskUI(sid);
+      state.sessionHistoryLoaded[sid] = true;
+    } else if (containerIsEmpty && getCachedHistory(sid).length === 0 && listTasksForSession(sid).length === 0) {
+      renderConversationPlaceholder(sid, "這個對話目前是空的", "輸入訊息開始新的任務，或切換到其他對話。");
+      state.sessionHistoryLoaded[sid] = true;
+    } else {
+      state.sessionHistoryLoaded[sid] = true;
+    }
+
+    if (sid === state.sessionId) {
+      applySessionStats(sid);
+      syncComposerState();
+    }
 
     const taskResult = await taskPromise;
-    if (state.sessionId !== sid || viewToken !== state.historyLoadToken) return;
     if (taskResult.aborted) return;
 
     if (historyResult.hasHistory || getCachedHistory(sid).length > 0 || listTasksForSession(sid).length > 0) {
@@ -1248,11 +1616,9 @@
     }
 
     reconcileSessionTasksAfterLoad(sid, historyResult.hasHistory || getCachedHistory(sid).length > 0);
-    renderLoadedSession(sid, historyResult.history);
     restoreSessionTaskUI(sid);
-
     renderConversationList();
-    syncComposerState();
+    if (sid === state.sessionId) syncComposerState();
   };
 
   window.loadConversation = function (idx) {
@@ -1291,6 +1657,10 @@
   if (chatInput && sendBtn) {
     chatInput.addEventListener("input", function () {
       autoResize(chatInput);
+      // 即時保存當前 session 的草稿,切換回來時恢復
+      if (state.sessionId) {
+        state.sessionInputDrafts[state.sessionId] = chatInput.value || "";
+      }
       syncComposerState();
     });
     chatInput.addEventListener("keydown", function (e) {

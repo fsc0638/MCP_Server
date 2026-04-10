@@ -2,6 +2,7 @@
 
 import json
 import logging
+import uuid
 from typing import AsyncGenerator
 
 from sse_starlette.sse import EventSourceResponse
@@ -62,8 +63,10 @@ async def process_chat_native(req: ChatRequest):
         or getattr(adapter, "model_name", None)
         or ""
     )
+    turn_id = (req.turn_id or "").strip() or f"turn-{uuid.uuid4().hex}"
     task = task_registry.create_task(
         session_id=session_id,
+        turn_id=turn_id,
         provider=provider,
         model=resolved_model,
         user_input=req.user_input,
@@ -195,6 +198,7 @@ async def process_chat_native(req: ChatRequest):
             enriched = dict(payload)
             enriched.setdefault("task_id", task_id)
             enriched.setdefault("session_id", session_id)
+            enriched.setdefault("turn_id", turn_id)
             return enriched
 
         yield {"data": json.dumps(wrap_payload({"status": "task_started"}), ensure_ascii=False)}
