@@ -284,98 +284,172 @@
     }
 
     _routePath(x1, y1, x2, y2, fromSide, toSide) {
-      const GAP = GRID * 2; // 48px clearance
+      // A*-inspired orthogonal routing (draw.io style)
+      // 1. Build obstacle rectangles with padding
+      // 2. Generate guide lines from blocks + endpoints
+      // 3. A* search on orthogonal grid with turn penalty
+      // 4. Fallback to simple routing if A* fails
 
-      // Get all block bounding boxes for collision detection
-      const boxes = [];
+      const PAD = GRID; // padding around blocks
+      const TURN_COST = 50; // penalty for each direction change
+
+      // Collect obstacle rects (exclude the two connected blocks)
+      const obstacles = [];
       this.blocks.forEach(b => {
-        boxes.push({ x: b.x - GAP/2, y: b.y - GAP/2, w: BLOCK_W + GAP, h: BLOCK_H + GAP });
+        obstacles.push({ x: b.x - PAD, y: b.y - PAD, w: BLOCK_W + PAD * 2, h: BLOCK_H + PAD * 2 });
       });
 
-      // Check if a horizontal or vertical segment intersects any block
-      const hitsBlock = (ax, ay, bx, by) => {
-        const minX = Math.min(ax, bx), maxX = Math.max(ax, bx);
-        const minY = Math.min(ay, by), maxY = Math.max(ay, by);
-        for (const box of boxes) {
-          if (maxX > box.x && minX < box.x + box.w && maxY > box.y && minY < box.y + box.h) {
-            return true;
-          }
+      // Check if a point is inside any obstacle
+      const inObstacle = (px, py) => {
+        for (const r of obstacles) {
+          if (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h) return true;
         }
         return false;
       };
 
-      // Horizontal exit direction
-      if (fromSide === "right" || fromSide === "left") {
-        const dir = fromSide === "right" ? 1 : -1;
-        const exitX = x1 + dir * GAP;
-
-        if (toSide === "left" || toSide === "right") {
-          const enterX = toSide === "left" ? x2 - GAP : x2 + GAP;
-
-          // Direct horizontal path (same Y or close)
-          if (Math.abs(y1 - y2) < GRID && !hitsBlock(x1, y1, x2, y2)) {
-            return `M ${x1} ${y1} L ${x2} ${y2}`;
+      // Check if a segment crosses any obstacle
+      const segmentClear = (ax, ay, bx, by) => {
+        // Only check orthogonal segments
+        if (ax === bx) { // vertical
+          const minY = Math.min(ay, by), maxY = Math.max(ay, by);
+          for (const r of obstacles) {
+            if (ax > r.x && ax < r.x + r.w && maxY > r.y && minY < r.y + r.h) return false;
           }
-
-          // Normal L-shape: horizontal → vertical → horizontal
-          const midX = snap((exitX + enterX) / 2);
-          if (!hitsBlock(exitX, y1, midX, y1) && !hitsBlock(midX, y1, midX, y2) && !hitsBlock(midX, y2, enterX, y2)) {
-            return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+        } else { // horizontal
+          const minX = Math.min(ax, bx), maxX = Math.max(ax, bx);
+          for (const r of obstacles) {
+            if (maxX > r.x && minX < r.x + r.w && ay > r.y && ay < r.y + r.h) return false;
           }
-
-          // Mid path blocked — try going around (choose shorter detour: up or down)
-          const detourUp = snap(Math.min(y1, y2) - BLOCK_H - GAP);
-          const detourDown = snap(Math.max(y1, y2) + BLOCK_H + GAP);
-          // Pick whichever is closer to the midpoint (shorter path)
-          const midY = (y1 + y2) / 2;
-          const detourY = Math.abs(detourUp - midY) < Math.abs(detourDown - midY) ? detourUp : detourDown;
-
-          return `M ${x1} ${y1} L ${exitX} ${y1} L ${exitX} ${detourY} L ${enterX} ${detourY} L ${enterX} ${y2} L ${x2} ${y2}`;
         }
+        return true;
+      };
 
-        // Horizontal → Vertical target (top/bottom)
-        if (toSide === "top" || toSide === "bottom") {
-          const enterY = toSide === "top" ? y2 - GAP : y2 + GAP;
-          return `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2}`;
+      // Generate candidate X and Y coordinates (guide lines)
+      const xs = new Set([x1, x2]);
+      const ys = new Set([y1, y2]);
+      this.blocks.forEach(b => {
+        xs.add(b.x - PAD); xs.add(b.x + BLOCK_W / 2); xs.add(b.x + BLOCK_W + PAD);
+        ys.add(b.y - PAD); ys.add(b.y + BLOCK_H / 2); ys.add(b.y + BLOCK_H + PAD);
+      });
+      // Add midpoints between start and end
+      xs.add(snap((x1 + x2) / 2));
+      ys.add(snap((y1 + y2) / 2));
+
+      const sortedXs = [...xs].sort((a, b) => a - b);
+      const sortedYs = [...ys].sort((a, b) => a - b);
+
+      // Build grid nodes
+      const nodes = [];
+      const nodeMap = new Map(); // "x,y" → index
+      for (const gx of sortedXs) {
+        for (const gy of sortedYs) {
+          const key = `${gx},${gy}`;
+          if (!nodeMap.has(key)) {
+            nodeMap.set(key, nodes.length);
+            nodes.push({ x: gx, y: gy });
+          }
         }
       }
 
-      // Vertical exit direction
-      if (fromSide === "bottom" || fromSide === "top") {
-        const dir = fromSide === "bottom" ? 1 : -1;
-        const exitY = y1 + dir * GAP;
+      // Ensure start and end are in the grid
+      const startKey = `${x1},${y1}`;
+      const endKey = `${x2},${y2}`;
+      if (!nodeMap.has(startKey)) { nodeMap.set(startKey, nodes.length); nodes.push({x:x1, y:y1}); }
+      if (!nodeMap.has(endKey)) { nodeMap.set(endKey, nodes.length); nodes.push({x:x2, y:y2}); }
+      const startIdx = nodeMap.get(startKey);
+      const endIdx = nodeMap.get(endKey);
 
-        if (toSide === "top" || toSide === "bottom") {
-          const enterY = toSide === "top" ? y2 - GAP : y2 + GAP;
+      // Build adjacency: connect nodes that share X or Y and segment is clear
+      const adj = nodes.map(() => []);
+      const nodesByX = new Map();
+      const nodesByY = new Map();
+      nodes.forEach((n, i) => {
+        const kx = n.x; const ky = n.y;
+        if (!nodesByX.has(kx)) nodesByX.set(kx, []);
+        nodesByX.get(kx).push(i);
+        if (!nodesByY.has(ky)) nodesByY.set(ky, []);
+        nodesByY.get(ky).push(i);
+      });
 
-          // Direct vertical
-          if (Math.abs(x1 - x2) < GRID && !hitsBlock(x1, y1, x2, y2)) {
-            return `M ${x1} ${y1} L ${x2} ${y2}`;
+      // Connect nodes on same X (vertical neighbors)
+      for (const [, idxs] of nodesByX) {
+        idxs.sort((a, b) => nodes[a].y - nodes[b].y);
+        for (let i = 0; i < idxs.length - 1; i++) {
+          const a = idxs[i], b = idxs[i + 1];
+          if (segmentClear(nodes[a].x, nodes[a].y, nodes[b].x, nodes[b].y)) {
+            const dist = Math.abs(nodes[b].y - nodes[a].y);
+            adj[a].push({ to: b, dist, dir: "v" });
+            adj[b].push({ to: a, dist, dir: "v" });
           }
-
-          // Normal: vertical → horizontal → vertical
-          const midY = snap((exitY + enterY) / 2);
-          if (!hitsBlock(x1, exitY, x1, midY) && !hitsBlock(x1, midY, x2, midY) && !hitsBlock(x2, midY, x2, enterY)) {
-            return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+        }
+      }
+      // Connect nodes on same Y (horizontal neighbors)
+      for (const [, idxs] of nodesByY) {
+        idxs.sort((a, b) => nodes[a].x - nodes[b].x);
+        for (let i = 0; i < idxs.length - 1; i++) {
+          const a = idxs[i], b = idxs[i + 1];
+          if (segmentClear(nodes[a].x, nodes[a].y, nodes[b].x, nodes[b].y)) {
+            const dist = Math.abs(nodes[b].x - nodes[a].x);
+            adj[a].push({ to: b, dist, dir: "h" });
+            adj[b].push({ to: a, dist, dir: "h" });
           }
-
-          // Detour left or right
-          const detourLeft = snap(Math.min(x1, x2) - BLOCK_W - GAP);
-          const detourRight = snap(Math.max(x1, x2) + BLOCK_W + GAP);
-          const midX = (x1 + x2) / 2;
-          const detourX = Math.abs(detourLeft - midX) < Math.abs(detourRight - midX) ? detourLeft : detourRight;
-
-          return `M ${x1} ${y1} L ${x1} ${exitY} L ${detourX} ${exitY} L ${detourX} ${enterY} L ${x2} ${enterY} L ${x2} ${y2}`;
         }
+      }
 
-        // Vertical → Horizontal target
-        if (toSide === "left" || toSide === "right") {
-          return `M ${x1} ${y1} L ${x1} ${y2} L ${x2} ${y2}`;
+      // A* search with turn penalty
+      const INF = 1e9;
+      const dist = new Float64Array(nodes.length).fill(INF);
+      const prev = new Int32Array(nodes.length).fill(-1);
+      const prevDir = new Array(nodes.length).fill("");
+      const visited = new Uint8Array(nodes.length);
+      dist[startIdx] = 0;
+
+      // Simple priority queue (small graph, no need for heap)
+      const pq = [{ idx: startIdx, f: 0 }];
+
+      while (pq.length) {
+        pq.sort((a, b) => a.f - b.f);
+        const { idx } = pq.shift();
+        if (visited[idx]) continue;
+        visited[idx] = 1;
+        if (idx === endIdx) break;
+
+        for (const edge of adj[idx]) {
+          const turnCost = (prevDir[idx] && prevDir[idx] !== edge.dir) ? TURN_COST : 0;
+          const newDist = dist[idx] + edge.dist + turnCost;
+          if (newDist < dist[edge.to]) {
+            dist[edge.to] = newDist;
+            prev[edge.to] = idx;
+            prevDir[edge.to] = edge.dir;
+            const h = Math.abs(nodes[edge.to].x - x2) + Math.abs(nodes[edge.to].y - y2);
+            pq.push({ idx: edge.to, f: newDist + h });
+          }
         }
+      }
+
+      // Reconstruct path
+      if (dist[endIdx] < INF) {
+        const path = [];
+        let cur = endIdx;
+        while (cur !== -1) {
+          path.unshift(nodes[cur]);
+          cur = prev[cur];
+        }
+        // Simplify: remove collinear points
+        const simplified = [path[0]];
+        for (let i = 1; i < path.length - 1; i++) {
+          const p = path[i - 1], c = path[i], n = path[i + 1];
+          if (!((p.x === c.x && c.x === n.x) || (p.y === c.y && c.y === n.y))) {
+            simplified.push(c);
+          }
+        }
+        simplified.push(path[path.length - 1]);
+        return "M " + simplified.map(p => `${p.x} ${p.y}`).join(" L ");
       }
 
       // Fallback: simple L-shape
-      return `M ${x1} ${y1} L ${x1} ${y2} L ${x2} ${y2}`;
+      const midX = snap((x1 + x2) / 2);
+      return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
     }
 
     // ── Reset ────────────────────────────────────────────────
