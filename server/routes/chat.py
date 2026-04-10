@@ -2,6 +2,7 @@
 
 import json
 import logging
+import uuid
 from typing import AsyncGenerator, Dict
 
 from fastapi import APIRouter, HTTPException
@@ -10,7 +11,7 @@ from sse_starlette.sse import EventSourceResponse
 from server.dependencies.session import get_session_manager
 from server.dependencies.task_registry import get_task_registry
 from server.dependencies.uma import get_uma_instance as get_uma
-from server.schemas.chat import ChatRequest, ExecuteRequest
+from server.schemas.chat import ChatRequest, ExecuteRequest, TitleSummaryRequest
 from server.services.chat_service import process_chat
 
 logger = logging.getLogger("MCP_Server.Chat")
@@ -36,6 +37,68 @@ def _get_active_task_for_session(session_id: str) -> Dict:
 @router.post("/chat")
 async def chat(req: ChatRequest):
     return await process_chat(req)
+
+
+@router.post("/chat/title-summary")
+def summarize_chat_title(req: TitleSummaryRequest):
+    provider = (req.provider or "").strip().lower()
+    if not provider:
+        model_name = (req.model or "").lower()
+        if model_name.startswith("gpt-"):
+            provider = "openai"
+        elif model_name.startswith("gemini-"):
+            provider = "gemini"
+        elif model_name.startswith("claude-"):
+            provider = "claude"
+        else:
+            provider = "openai"
+
+    from server.adapters.factory import create_adapter
+
+    uma = get_uma()
+    adapter = create_adapter(provider=provider, uma=uma, model=req.model)
+    if not adapter.is_available:
+        raise HTTPException(status_code=503, detail=f"{provider.capitalize()} adapter is not available")
+
+    language = (req.language or "繁體中文").strip() or "繁體中文"
+    system_prompt = (
+        f"你是一個只負責產生對話標題的助理。請使用{language}。"
+        "請根據提供的使用者問題與助手回覆，產生 10 字以內的簡短標題。"
+        "只回傳標題文字，不要加引號、說明、標點或多餘句子。"
+    )
+    user_prompt = (
+        "請根據這段問答內容，產生一個 10 字以內的對話標題，只回傳標題文字。\n"
+        f"使用者：{req.user_input}\n"
+        f"助手：{req.assistant_output}"
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    final_content = ""
+    for chunk in adapter.chat(
+        messages=messages,
+        user_query=user_prompt,
+        session_id=f"title-summary-{uuid.uuid4().hex}",
+        temperature=0.2,
+        tools_enabled=False,
+    ):
+        status = chunk.get("status")
+        if status == "streaming":
+            final_content += chunk.get("content", "")
+        elif status == "success":
+            final_content = chunk.get("content", final_content) or final_content
+            break
+        elif status == "error":
+            message = chunk.get("message", "Title summary failed")
+            raise HTTPException(status_code=502, detail=message)
+
+    clean_title = final_content.replace("'", "").replace('"', "").replace(".", "").replace("!", "").replace("?", "").strip()[:10]
+    if not clean_title:
+        raise HTTPException(status_code=502, detail="Failed to generate title")
+
+    return {"status": "success", "title": clean_title}
 
 
 @router.post("/chat/flush/{session_id}")

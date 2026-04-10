@@ -25,3 +25,11 @@ class ChatRequest(BaseModel):
 class ExecuteRequest(BaseModel):
     skill_name: str
     arguments: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TitleSummaryRequest(BaseModel):
+    user_input: str
+    assistant_output: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    language: Optional[str] = "繁體中文"

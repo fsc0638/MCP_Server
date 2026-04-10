@@ -143,7 +143,8 @@ class ClaudeAdapter:
         if not user_query:
             return {"status": "error", "message": "No user query provided"}
 
-        tools = self.get_tools(user_query=user_query)
+        tools_enabled = kwargs.get("tools_enabled", True)
+        tools = self.get_tools(user_query=user_query) if tools_enabled else []
 
         # Extract system prompt from messages (router.py sets messages[0] = system with build_system_prompt)
         agent_system = ""

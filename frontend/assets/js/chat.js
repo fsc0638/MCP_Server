@@ -702,46 +702,21 @@
 
     try {
       const model = getCurrentModel();
-      const res = await fetch("/chat", {
+      const res = await fetch("/chat/title-summary", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_input: "請根據這段問答內容，產生一個 10 字以內的對話標題，只回傳標題文字。\n使用者：" + userInput + "\n助手：" + aiResponse,
-          session_id: "temp-title-" + Date.now(),
+          user_input: userInput,
+          assistant_output: aiResponse,
           provider: model.provider || "openai",
           model: model.model || "gpt-4o",
           language: "繁體中文",
-          detail_level: "簡潔",
         }),
       });
-      if (!res.ok || !res.body) return;
+      if (!res.ok) return;
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-      let summary = "";
-
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        buffer += decoder.decode(chunk.value, { stream: true });
-        const events = buffer.split("\r\n\r\n");
-        buffer = events.pop() || "";
-        events.forEach((event) => {
-          event.split(/\r?\n/).forEach((line) => {
-            if (!line.startsWith("data: ")) return;
-            try {
-              const payload = JSON.parse(line.slice(6));
-              if (payload.status === "streaming") summary += payload.content || "";
-              if (payload.status === "success") summary = payload.content || summary;
-            } catch (_err) {
-              // ignore
-            }
-          });
-        });
-      }
-
-      const cleanTitle = summary.replace(/['".!?]/g, "").trim().slice(0, 10);
+      const data = await res.json();
+      const cleanTitle = String((data && data.title) || "").replace(/['".!?]/g, "").trim().slice(0, 10);
       if (!cleanTitle) return;
       session.title = cleanTitle;
       saveSessions();
