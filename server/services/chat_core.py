@@ -1,5 +1,4 @@
 """Native chat service implementation with task-scoped streaming state."""
-
 import json
 import logging
 import uuid
@@ -13,6 +12,7 @@ from server.dependencies.session import get_session_manager
 from server.dependencies.task_registry import get_task_registry
 from server.dependencies.uma import get_uma_instance as get_uma
 from server.schemas.chat import ChatRequest
+from server.services.async_bridge import iterate_blocking_generator
 
 logger = logging.getLogger("MCP_Server.ChatCore")
 
@@ -209,16 +209,16 @@ async def process_chat_native(req: ChatRequest):
         last_status = None
 
         try:
-            chunk_iter = adapter.chat(
-                messages=outbound_history,
-                user_query=user_content,
-                session_id=session_id,
-                attached_file=req.attached_file,
-                temperature=req.temperature or 0.7,
-                visual_docs=req.selected_docs or [],
-            )
-
-            for chunk in chunk_iter:
+            async for chunk in iterate_blocking_generator(
+                lambda: adapter.chat(
+                    messages=outbound_history,
+                    user_query=user_content,
+                    session_id=session_id,
+                    attached_file=req.attached_file,
+                    temperature=req.temperature or 0.7,
+                    visual_docs=req.selected_docs or [],
+                )
+            ):
                 status = chunk.get("status")
                 last_status = status
 

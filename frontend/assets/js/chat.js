@@ -1203,10 +1203,15 @@
             task.status = "requires_approval";
             task.completed = false;
             task.toolName = parsed.tool_name || task.toolName || "";
+            task.toolMessage = parsed.message || task.toolMessage || "";
             task.riskDescription = parsed.risk_description || task.riskDescription || "";
             task.pendingArgs = parsed.pending_args || task.pendingArgs || {};
             task.firstChunkReceived = true;
+            task.text =
+              task.toolMessage ||
+              ("等待授權以執行「" + (task.toolName || "tool") + "」。");
             removeTyping(task.sessionId);
+            showTaskBubble(task, false);
             try {
               reader.cancel();
             } catch (_err) {
@@ -1581,9 +1586,18 @@
         renderConversationPlaceholder(sid, "正在載入對話", "正在同步這個對話的歷史訊息...");
       }
     } else if (!forceReload && state.sessionHistoryLoaded[sid]) {
-      // 已載入過,直接捲到底就好
-      scrollSessionToBottom(sid);
-      return;
+      // 已載入過的 session 仍可能在背景任務中改變狀態
+      // 先重建本地 task UI；若沒有 active task 再直接返回
+      restoreSessionTaskUI(sid);
+      if (sid === state.sessionId) {
+        maybePromptApprovalForCurrentSession(sid);
+      }
+
+      const hasActiveTask = listActiveTasksForSession(sid).length > 0;
+      if (!hasActiveTask) {
+        scrollSessionToBottom(sid);
+        return;
+      }
     }
 
     // 5. 背景載入歷史和任務狀態 — 不會清空 container,只在必要時重繪

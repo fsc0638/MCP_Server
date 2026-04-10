@@ -1,5 +1,6 @@
 """Chat routes."""
 
+import asyncio
 import json
 import logging
 import uuid
@@ -12,6 +13,7 @@ from server.dependencies.session import get_session_manager
 from server.dependencies.task_registry import get_task_registry
 from server.dependencies.uma import get_uma_instance as get_uma
 from server.schemas.chat import ChatRequest, ExecuteRequest, TitleSummaryRequest
+from server.services.async_bridge import iterate_blocking_generator
 from server.services.chat_service import process_chat
 
 logger = logging.getLogger("MCP_Server.Chat")
@@ -202,7 +204,13 @@ async def approve_tool_call_by_task(task_id: str):
             if script_path.exists():
                 skill_data = uma.registry.get_skill(tool_name)
                 exec_timeout = skill_data.get("metadata", {}).get("execution_timeout", 30) if skill_data else 30
-                result = executor.run_script(tool_name, "main.py", tool_args, timeout=exec_timeout)
+                result = await asyncio.to_thread(
+                    executor.run_script,
+                    tool_name,
+                    "main.py",
+                    tool_args,
+                    timeout=exec_timeout,
+                )
             else:
                 result = {"status": "error", "message": f"Skill '{tool_name}' has no executable script."}
 
@@ -232,7 +240,9 @@ async def approve_tool_call_by_task(task_id: str):
             outbound.append({"role": "user", "content": follow_up_msg})
 
             final_content = ""
-            for chunk in adapter.chat(messages=outbound, session_id=session_id, tools_enabled=False):
+            async for chunk in iterate_blocking_generator(
+                lambda: adapter.chat(messages=outbound, session_id=session_id, tools_enabled=False)
+            ):
                 status = chunk.get("status")
                 if status == "streaming":
                     text = chunk.get("content", "")
