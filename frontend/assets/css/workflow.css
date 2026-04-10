@@ -42,6 +42,11 @@
   color: var(--text-tertiary); letter-spacing: 0.05em;
   padding: 4px 6px; margin-bottom: 4px;
 }
+.wf-palette-scope-title {
+  font-size: 0.7rem; font-weight: 700;
+  color: var(--text-secondary); padding: 6px 6px 4px;
+  border-top: 1px solid var(--border-subtle); margin-top: 4px;
+}
 
 .wf-palette-item {
   display: flex; align-items: center; gap: 8px;

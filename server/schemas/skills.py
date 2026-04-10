@@ -17,9 +17,11 @@ class SkillDeleteRequest(BaseModel):
 
 class CreateSkillRequest(BaseModel):
     name: str
-    display_name: str
-    description: str
+    display_name: str = ""
+    description: str = ""
     version: str = "1.0.0"
     category: str = ""
     no_script: bool = False
+    scope: str = "system"   # "system" | "department" | "personal"
+    owner: str = ""         # dept_code or user_id (required for department/personal)
 

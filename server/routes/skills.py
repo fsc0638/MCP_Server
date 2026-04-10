@@ -85,6 +85,8 @@ def list_skills():
             "ready": meta.get("_env_ready", False),
             "missing_deps": meta.get("_missing_deps", []),
             "path": str(data["path"]),
+            "scope": meta.get("_scope", "system"),
+            "short_name": meta.get("_short_name", name),
         }
     return {"total": len(skills), "skills": skills}
 
@@ -422,7 +424,6 @@ def rescan_skills():
 @router.post("/skills/create")
 def create_skill(req: CreateSkillRequest):
     uma = get_uma()
-    skills_home = uma.registry.skills_home
 
     name = req.name.strip().lower().replace("_", "-")
     if not name.startswith("mcp-"):
@@ -432,13 +433,28 @@ def create_skill(req: CreateSkillRequest):
     if len(name) < 5 or len(name) > 60:
         raise HTTPException(status_code=422, detail="Skill name length must be between 5 and 60")
 
-    skill_path = (skills_home / name).resolve()
-    try:
-        skill_path.relative_to(skills_home.resolve())
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Invalid target path")
+    # Resolve target directory based on scope
+    scope = (req.scope or "system").lower()
+    if scope == "department":
+        if not req.owner:
+            raise HTTPException(status_code=422, detail="owner (department_code) is required for department scope")
+        base_dir = uma.registry.dept_skills_home
+        if not base_dir:
+            raise HTTPException(status_code=500, detail="DEPT_SKILLS_HOME not configured")
+        target_dir = base_dir / req.owner
+    elif scope == "personal":
+        if not req.owner:
+            raise HTTPException(status_code=422, detail="owner (user_id) is required for personal scope")
+        base_dir = uma.registry.user_skills_home
+        if not base_dir:
+            raise HTTPException(status_code=500, detail="USER_SKILLS_HOME not configured")
+        target_dir = base_dir / req.owner
+    else:
+        target_dir = uma.registry.skills_home
+
+    skill_path = (target_dir / name).resolve()
     if skill_path.exists():
-        raise HTTPException(status_code=409, detail=f"Skill '{name}' already exists")
+        raise HTTPException(status_code=409, detail=f"Skill '{name}' already exists in {scope} scope")
 
     try:
         skill_path.mkdir(parents=True)
@@ -455,18 +471,62 @@ runtime_requirements: []
 risk_level: "low"
 ---
 
-# {req.display_name}
+# {req.display_name or name}
 
 {req.description}
 """
         (skill_path / "SKILL.md").write_text(skill_md, encoding="utf-8")
         uma.registry.scan_skills()
         invalidate_prompt_cache()
-        sync_res = sync_skills_git(f"Created new skill {name}")
-        return {"status": "success", "skill_name": name, "path": str(skill_path), "git_sync": sync_res}
+        sync_res = sync_skills_git(f"Created {scope} skill {name}")
+        return {"status": "success", "skill_name": name, "scope": scope, "path": str(skill_path), "git_sync": sync_res}
     except Exception as e:
         if skill_path.exists():
             shutil.rmtree(skill_path, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Skill Promote (scope migration) ────────────────────────────────────────
+
+@router.post("/skills/{skill_name}/promote")
+def promote_skill(skill_name: str, target_scope: str = "department", target_owner: str = ""):
+    """
+    Promote a skill to a higher scope:
+    personal → department, department → system.
+    Copies the entire skill directory to the target location.
+    """
+    uma = get_uma()
+    skill = uma.registry.get_skill(skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    src_path = skill["path"].resolve()
+    short_name = skill["metadata"].get("_short_name", skill_name)
+
+    # Resolve target directory
+    if target_scope == "system":
+        dest_base = uma.registry.skills_home
+    elif target_scope == "department":
+        if not target_owner:
+            raise HTTPException(status_code=422, detail="target_owner (dept_code) required for department scope")
+        if not uma.registry.dept_skills_home:
+            raise HTTPException(status_code=500, detail="DEPT_SKILLS_HOME not configured")
+        dest_base = uma.registry.dept_skills_home / target_owner
+    else:
+        raise HTTPException(status_code=422, detail="target_scope must be 'department' or 'system'")
+
+    dest_path = dest_base / short_name
+    if dest_path.exists():
+        raise HTTPException(status_code=409, detail=f"Skill '{short_name}' already exists in {target_scope} scope")
+
+    try:
+        dest_base.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src_path, dest_path)
+        uma.registry.scan_skills()
+        invalidate_prompt_cache()
+        sync_res = sync_skills_git(f"Promoted skill {short_name} to {target_scope}")
+        return {"status": "success", "skill_name": short_name, "target_scope": target_scope, "path": str(dest_path), "git_sync": sync_res}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 

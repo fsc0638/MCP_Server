@@ -12,16 +12,19 @@ from server.adapters.claude_adapter import ClaudeAdapter
 logger = logging.getLogger("MCP_Server.Adapters.Factory")
 
 
-def create_adapter(provider: str, uma, model: str | None = None, **kwargs):
-    """Create an adapter for the given provider."""
+def create_adapter(provider: str, uma, model: str | None = None, user_context: dict = None, **kwargs):
+    """Create an adapter for the given provider. user_context enables three-tier skill filtering."""
     p = (provider or "").strip().lower()
     if p == "openai":
-        return OpenAIAdapter(uma, model=model, **kwargs)
-    if p == "gemini":
-        return GeminiAdapter(uma, model=model)
-    if p == "claude":
-        return ClaudeAdapter(uma, model=model)
-    raise ValueError(f"Unknown provider: {provider}")
+        adapter = OpenAIAdapter(uma, model=model, **kwargs)
+    elif p == "gemini":
+        adapter = GeminiAdapter(uma, model=model)
+    elif p == "claude":
+        adapter = ClaudeAdapter(uma, model=model)
+    else:
+        raise ValueError(f"Unknown provider: {provider}")
+    adapter.user_context = user_context
+    return adapter
 
 
 def create_adapter_with_fallback(

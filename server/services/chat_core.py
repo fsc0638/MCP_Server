@@ -35,10 +35,24 @@ async def process_chat_native(req: ChatRequest):
     from server.adapters.factory import create_adapter
 
     uma = get_uma()
+
+    # Load user context for three-tier skill filtering
+    _user_context = None
+    _sid = req.session_id or "default"
+    try:
+        import json as _json
+        from pathlib import Path as _P
+        _uc_path = _P(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{_sid}.json"
+        if _uc_path.exists():
+            _user_context = _json.loads(_uc_path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+
     adapter = create_adapter(
         provider=provider,
         uma=uma,
         model=req.model,
+        user_context=_user_context,
         api_base=req.api_base,
         api_key=req.api_key,
     )

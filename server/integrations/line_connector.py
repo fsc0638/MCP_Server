@@ -1507,6 +1507,13 @@ def _process_line_message(
                 logger.debug(f"[LINE Router] Skill-aware model check skipped: {_mse}")
 
             adapter = OpenAIAdapter(uma=uma, model=_routed_model)
+            # Inject user_context for three-tier skill filtering
+            try:
+                _uc_path = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
+                if _uc_path.exists():
+                    adapter.user_context = json.loads(_uc_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
             # Tier-aware max_output_tokens:
             # - nano/mini: 2048 節省 TPM（閒聊、單工具任務輸出短）
             # - full/file : 8192 支援複雜任務

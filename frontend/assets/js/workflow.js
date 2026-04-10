@@ -962,7 +962,7 @@
           // Update label from API display_name if available
           BLOCK_DEFS[shortName].label = apiDisplayName;
         }
-        _dynamicSkills[name] = { ready: info.ready !== false, description: info.description || "" };
+        _dynamicSkills[name] = { ready: info.ready !== false, description: info.description || "", scope: info.scope || "system", short_name: info.short_name || name };
       });
       _skillsLoaded = true;
     } catch (e) {
@@ -1204,23 +1204,48 @@
       <button class="wf-palette-header-btn" onclick="toggleSkillEditMode()">編輯節點</button>
     </div><div class="wf-palette-body">`;
 
-    Object.entries(CATEGORIES).forEach(([catKey, cat]) => {
-      const items = Object.entries(BLOCK_DEFS).filter(([, d]) => d.category === catKey);
-      if (!items.length) return;
-      html += `<div class="wf-palette-category"><div class="wf-palette-category-title">${cat.label}</div>`;
-      items.forEach(([type, def]) => {
-        const isControl = catKey === "control";
-        const skillName = type.startsWith("mcp-") ? type : "mcp-" + type;
-        const cls = isControl ? "wf-palette-item wf-palette-item--disabled" : "wf-palette-item wf-palette-item--clickable";
-        const onclick = isControl ? "" : `onclick="window._wfSkillEditor&&window._wfSkillEditor.loadSkill('${skillName}')"`;
-        html += `<div class="${cls}" data-type="${type}" ${onclick}>
+    // Group skills by scope for three-tier display
+    const SCOPE_LABELS = { "system": "📌 系統技能", "dept": "🏢 部門技能", "user": "👤 個人技能" };
+    const scopeGroups = { system: [], dept: [], user: [] };
+
+    // 1. Control blocks (always greyed out)
+    const controlItems = Object.entries(BLOCK_DEFS).filter(([, d]) => d.category === "control");
+
+    // 2. Classify skills by scope
+    Object.entries(BLOCK_DEFS).forEach(([type, def]) => {
+      if (def.category === "control") return;
+      const skillName = type.startsWith("mcp-") ? type : "mcp-" + type;
+      const info = _dynamicSkills[skillName] || {};
+      const scope = (info.scope || "system").split(":")[0]; // "dept:A100" → "dept"
+      (scopeGroups[scope] || scopeGroups.system).push([type, def, skillName]);
+    });
+
+    // 3. Render control (disabled)
+    if (controlItems.length) {
+      html += `<div class="wf-palette-category"><div class="wf-palette-category-title">${CATEGORIES.control?.label || "控制"}</div>`;
+      controlItems.forEach(([type, def]) => {
+        html += `<div class="wf-palette-item wf-palette-item--disabled" data-type="${type}">
           <div class="wf-palette-item-accent" style="background:${def.color}"></div>
           <div class="wf-palette-item-icon" style="background:${def.color}">${def.icon}</div>
-          <span>${def.label}</span>
-        </div>`;
+          <span>${def.label}</span></div>`;
       });
       html += `</div>`;
-    });
+    }
+
+    // 4. Render each scope group
+    for (const [scopeKey, label] of Object.entries(SCOPE_LABELS)) {
+      const items = scopeGroups[scopeKey];
+      if (!items.length) continue;
+      html += `<div class="wf-palette-category"><div class="wf-palette-scope-title">${label}</div>`;
+      items.forEach(([type, def, skillName]) => {
+        html += `<div class="wf-palette-item wf-palette-item--clickable" data-type="${type}"
+          onclick="window._wfSkillEditor&&window._wfSkillEditor.loadSkill('${skillName}')">
+          <div class="wf-palette-item-accent" style="background:${def.color}"></div>
+          <div class="wf-palette-item-icon" style="background:${def.color}">${def.icon}</div>
+          <span>${def.label}</span></div>`;
+      });
+      html += `</div>`;
+    }
     html += `</div>`;
     container.innerHTML = html;
   }

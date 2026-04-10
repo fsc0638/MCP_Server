@@ -84,7 +84,7 @@ class OpenAIAdapter:
 
         from server.adapters import select_relevant_tools
 
-        all_tools = self.uma.get_tools_for_model("openai")
+        all_tools = self.uma.get_tools_for_model("openai", user_context=getattr(self, "user_context", None))
 
         if user_query:
             all_tools = select_relevant_tools(user_query, all_tools, max_tools)

@@ -15,8 +15,8 @@ class UMA:
     The main interface for Unified Model Adapter.
     Integrates Registry, Converter, and Executor.
     """
-    def __init__(self, skills_home: str, project_root: str = None):
-        self.registry = SkillRegistry(skills_home)
+    def __init__(self, skills_home: str, dept_skills_home: str = None, user_skills_home: str = None, project_root: str = None):
+        self.registry = SkillRegistry(skills_home, dept_skills_home, user_skills_home)
         self.executor = ExecutionEngine(skills_home)
         self.converter = SchemaConverter()
         self.project_root = project_root or str(Path(skills_home).resolve().parents[1])
@@ -24,19 +24,36 @@ class UMA:
     def initialize(self):
         self.registry.scan_skills()
 
-    def get_tools_for_model(self, model_type: str) -> List[Dict[str, Any]]:
+    def get_tools_for_model(self, model_type: str, user_context: dict = None) -> List[Dict[str, Any]]:
         """
         Returns only name + description per skill for LLM tool selection.
-        Full SKILL.md + references layer are injected on-demand via execute_tool_call()
-        when the LLM actually decides to invoke a specific skill.
-        This applies to all platforms (LINE Bot, Web UI, etc.).
+        Full SKILL.md + references layer are injected on-demand via execute_tool_call().
+
+        Three-tier visibility filtering via user_context:
+        - user_context=None → return ALL skills (backward compatible, Phase 1)
+        - user_context provided → system + user's dept + user's personal (Phase 2)
         """
         tools = []
-        # Open schema — LLM passes args based on description; full spec arrives via execute_tool_call
         _open_params = {"type": "object", "properties": {}, "additionalProperties": True}
 
-        for skill_name, data in self.registry.skills.items():
+        for skill_key, data in self.registry.skills.items():
             meta = data["metadata"]
+            scope = meta.get("_scope", "system")
+
+            # Phase 2: user_context-based visibility filtering
+            if user_context is not None:
+                if scope.startswith("dept:"):
+                    dept_code = scope.split(":")[1]
+                    if dept_code != user_context.get("department_code", ""):
+                        continue
+                elif scope.startswith("user:"):
+                    owner_id = scope.split(":")[1]
+                    if owner_id != user_context.get("user_id", ""):
+                        continue
+                # system scope → always visible
+
+            # Use the short name for LLM tool calls (LLM calls "mcp-web-search", not "system:mcp-web-search")
+            tool_name = meta.get("_short_name", skill_key)
             desc = meta.get("description", "")
             if not meta.get("_env_ready", False):
                 desc += " [UNAVAILABLE: Missing dependencies]"
@@ -45,20 +62,20 @@ class UMA:
                 tools.append({
                     "type": "function",
                     "function": {
-                        "name": skill_name,
+                        "name": tool_name,
                         "description": desc,
                         "parameters": _open_params
                     }
                 })
             elif model_type.lower() == "gemini":
                 tools.append({
-                    "name": skill_name,
+                    "name": tool_name,
                     "description": desc,
                     "parameters": {"type": "object", "properties": {}}
                 })
             elif model_type.lower() == "claude":
                 tools.append({
-                    "name": skill_name,
+                    "name": tool_name,
                     "description": desc,
                     "input_schema": _open_params
                 })
@@ -283,34 +300,56 @@ class SkillRegistry:
     """
     Manages discovery, metadata parsing, and caching of GitHub Skills.
     """
-    def __init__(self, skills_home: str):
+    def __init__(self, skills_home: str, dept_skills_home: str = None, user_skills_home: str = None):
         self.skills_home = Path(skills_home).resolve()
+        self.dept_skills_home = Path(dept_skills_home).resolve() if dept_skills_home else None
+        self.user_skills_home = Path(user_skills_home).resolve() if user_skills_home else None
         self.skills: Dict[str, Dict[str, Any]] = {}
         self.schema_cache: Dict[str, Dict[str, Any]] = {}
         self.validation_cache: Dict[str, bool] = {}
 
     def scan_skills(self):
         """
-        Scans the skills_home directory for valid Skill Bundles.
+        Scans three-tier skill directories for valid Skill Bundles:
+        1. skills_home (system) — available to all users
+        2. dept_skills_home/{dept_code}/ (department) — available to department members
+        3. user_skills_home/{user_id}/ (personal) — available to owner only
         D-01/D-13: Auto-regenerates skills_manifest.json after scanning.
         """
-        if not self.skills_home.exists():
-            return
+        # 1. System skills
+        if self.skills_home.exists():
+            self._scan_directory(self.skills_home, scope="system")
 
-        for skill_dir in self.skills_home.iterdir():
-            if skill_dir.is_dir():
-                skill_md = skill_dir / "SKILL.md"
-                if skill_md.exists():
-                    self._register_skill(skill_dir)
+        # 2. Department skills (two-level: dept_code/skill_name)
+        if self.dept_skills_home and self.dept_skills_home.exists():
+            for dept_dir in self.dept_skills_home.iterdir():
+                if dept_dir.is_dir() and dept_dir.name != ".gitkeep":
+                    self._scan_directory(dept_dir, scope=f"dept:{dept_dir.name}")
+
+        # 3. Personal skills (two-level: user_id/skill_name)
+        if self.user_skills_home and self.user_skills_home.exists():
+            for user_dir in self.user_skills_home.iterdir():
+                if user_dir.is_dir() and user_dir.name != ".gitkeep":
+                    self._scan_directory(user_dir, scope=f"user:{user_dir.name}")
 
         # D-01/D-13: Keep manifest in sync as SSOT
         self._regenerate_manifest()
 
-    def _register_skill(self, skill_dir: Path):
+    def _scan_directory(self, directory: Path, scope: str = "system"):
+        """Scan a single directory for skill bundles, tagging each with scope."""
+        for skill_dir in directory.iterdir():
+            if skill_dir.is_dir():
+                skill_md = skill_dir / "SKILL.md"
+                if skill_md.exists():
+                    self._register_skill(skill_dir, scope=scope)
+
+    def _register_skill(self, skill_dir: Path, scope: str = "system"):
         """
         Parses SKILL.md and registers it into the registry.
+        Key format: scope:skill_name (e.g. "system:mcp-web-search", "dept:A100:mcp-custom")
         """
         skill_name = skill_dir.name.lower()  # Case-insensitive: cross-platform consistency
+        registry_key = f"{scope}:{skill_name}" if scope != "system" else skill_name
         skill_md_path = skill_dir / "SKILL.md"
 
         try:
@@ -324,24 +363,23 @@ class SkillRegistry:
                     return
 
                 metadata = yaml.safe_load(parts[1])
-                
+
                 # 1. Version Pinning (Simulated: in real GitHub scenario, we'd record Git Hash)
-                # Here we generate a hash of the directory content as a Version ID
                 metadata["_internal_hash"] = self._generate_dir_hash(skill_dir)
-                
+
                 # 2. Dependency Validation (Python + File dependencies)
                 env_ready, missing_reqs = self._check_dependencies(
                     metadata.get("runtime_requirements", [])
                 )
-                
+
                 # Check file dependencies defined in 'dependencies' tag
                 file_ready, missing_files = self._check_file_dependencies(
                     skill_dir, metadata.get("dependencies", {})
                 )
-                
+
                 metadata["_env_ready"] = env_ready and file_ready
                 metadata["_missing_deps"] = missing_reqs + missing_files
-                
+
                 # 3. Tag Extraction for dynamic tool selection (multilingual + weighted)
                 from server.adapters import extract_tags
                 metadata["_tags"] = extract_tags(
@@ -350,17 +388,21 @@ class SkillRegistry:
                 )
                 metadata["_description_raw"] = metadata.get("description", "")
 
-                self.skills[skill_name] = {
+                # 4. Scope metadata for three-tier classification
+                metadata["_scope"] = scope
+                metadata["_short_name"] = skill_name
+
+                self.skills[registry_key] = {
                     "path": skill_dir,
                     "metadata": metadata,
                     "raw_md": parts[2].strip()
                 }
-                
+
                 # Mark as validated
-                self.validation_cache[skill_name] = True
-                
+                self.validation_cache[registry_key] = True
+
         except Exception as e:
-            print(f"Error registering skill {skill_name}: {e}")
+            print(f"Error registering skill {registry_key}: {e}")
 
     def _check_dependencies(self, requirements: List[Optional[str]]) -> (bool, List[str]):
         """
@@ -442,7 +484,22 @@ class SkillRegistry:
             pass  # Non-critical: don't crash startup if manifest write fails
 
     def get_skill(self, skill_name: str) -> Optional[Dict[str, Any]]:
-        return self.skills.get(skill_name.lower())
+        """
+        Look up a skill by name. Supports both scoped keys and short names.
+        Priority for short name: system → dept → user (first match wins).
+        """
+        key = skill_name.lower()
+        # 1. Exact match (scoped key like "dept:A100:mcp-custom" or system short name)
+        if key in self.skills:
+            return self.skills[key]
+        # 2. Short name fallback — search all scopes with priority
+        for prefix in ("", "dept:", "user:"):
+            for k, v in self.skills.items():
+                if prefix and not k.startswith(prefix):
+                    continue
+                if v["metadata"].get("_short_name", "") == key:
+                    return v
+        return None
 
     def list_tools_for_model(self, model_type: str) -> List[Dict[str, Any]]:
         """

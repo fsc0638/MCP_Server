@@ -54,7 +54,7 @@ class ClaudeAdapter:
     def get_tools(self, user_query: Optional[str] = None, max_tools: int = 10) -> List[Dict[str, Any]]:
         """Get tool definitions in Claude format."""
         from server.adapters import select_relevant_tools
-        all_tools = self.uma.get_tools_for_model("openai")  # Claude uses similar format
+        all_tools = self.uma.get_tools_for_model("openai", user_context=getattr(self, "user_context", None))  # Claude uses similar format
 
         if user_query and len(all_tools) > max_tools:
             all_tools = select_relevant_tools(user_query, all_tools, max_tools)

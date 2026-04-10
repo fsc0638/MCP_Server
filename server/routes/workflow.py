@@ -14,9 +14,20 @@ router = APIRouter(tags=["Workflow"])
 logger = logging.getLogger("MCP_Server.Workflow")
 
 
-def _workflows_dir() -> Path:
+def _workflows_base() -> Path:
     pr = os.getenv("PROJECT_ROOT", str(Path(__file__).resolve().parents[2]))
-    d = Path(pr) / "workspace" / "workflows"
+    return Path(pr) / "workspace" / "workflows"
+
+
+def _workflows_dir(scope: str = "personal", owner: str = "default") -> Path:
+    """Resolve workflow directory based on scope: system / department / personal."""
+    base = _workflows_base()
+    if scope == "system":
+        d = base / "system"
+    elif scope == "department":
+        d = base / "department" / (owner or "default")
+    else:
+        d = base / "personal" / (owner or "default")
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -27,37 +38,71 @@ class WorkflowSaveRequest(BaseModel):
     connections: list = []
     trigger: dict = {}
     context: dict = {}
+    scope: str = "personal"
+    owner: str = ""
 
 
 # ── CRUD ────────────────────────────────────────────────────────────────────
 
 @router.get("/api/workflows")
-def list_workflows():
-    """List all saved workflows."""
+def list_workflows(scope: str = "", owner: str = ""):
+    """List workflows. If scope is empty, list across all accessible scopes."""
     workflows = []
-    for f in sorted(_workflows_dir().glob("*.json")):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            workflows.append({
-                "id": f.stem,
-                "name": data.get("name", f.stem),
-                "block_count": len(data.get("blocks", [])),
-                "connection_count": len(data.get("connections", [])),
-                "updated_at": data.get("updated_at", ""),
-            })
-        except Exception:
-            pass
+
+    def _scan_dir(directory: Path, wf_scope: str):
+        if not directory.exists():
+            return
+        for f in sorted(directory.glob("*.json")):
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                workflows.append({
+                    "id": f.stem,
+                    "name": data.get("name", f.stem),
+                    "block_count": len(data.get("blocks", [])),
+                    "connection_count": len(data.get("connections", [])),
+                    "updated_at": data.get("updated_at", ""),
+                    "scope": wf_scope,
+                })
+            except Exception:
+                pass
+
+    base = _workflows_base()
+
+    if scope:
+        # List a specific scope
+        _scan_dir(_workflows_dir(scope, owner), scope)
+    else:
+        # List all scopes: system + department (if owner has dept) + personal
+        _scan_dir(base / "system", "system")
+        if owner:
+            # Scan department workflows for owner's department
+            dept_dir = base / "department" / owner
+            if dept_dir.exists():
+                _scan_dir(dept_dir, "department")
+            # Scan personal workflows
+            _scan_dir(base / "personal" / owner, "personal")
+        else:
+            # Legacy: scan flat root for backward compatibility
+            _scan_dir(base, "personal")
+
     return {"total": len(workflows), "workflows": workflows}
 
 
 @router.get("/api/workflows/{workflow_id}")
-def get_workflow(workflow_id: str):
+def get_workflow(workflow_id: str, scope: str = "personal", owner: str = "default"):
     """Get a specific workflow."""
-    path = _workflows_dir() / f"{workflow_id}.json"
+    path = _workflows_dir(scope, owner) / f"{workflow_id}.json"
     if not path.exists():
-        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+        # Fallback: try legacy flat path
+        legacy = _workflows_base() / f"{workflow_id}.json"
+        if legacy.exists():
+            path = legacy
+        else:
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["scope"] = scope
+        return data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -65,7 +110,7 @@ def get_workflow(workflow_id: str):
 @router.post("/api/workflows/{workflow_id}")
 def save_workflow(workflow_id: str, req: WorkflowSaveRequest):
     """Create or update a workflow."""
-    path = _workflows_dir() / f"{workflow_id}.json"
+    path = _workflows_dir(req.scope, req.owner) / f"{workflow_id}.json"
     data = {
         "id": workflow_id,
         "name": req.name,
@@ -73,9 +118,10 @@ def save_workflow(workflow_id: str, req: WorkflowSaveRequest):
         "connections": req.connections,
         "trigger": req.trigger,
         "context": req.context,
+        "scope": req.scope,
+        "owner": req.owner,
         "updated_at": datetime.now().isoformat(),
     }
-    # Preserve created_at if updating
     if path.exists():
         try:
             old = json.loads(path.read_text(encoding="utf-8"))
@@ -86,19 +132,50 @@ def save_workflow(workflow_id: str, req: WorkflowSaveRequest):
         data["created_at"] = data["updated_at"]
 
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info(f"[Workflow] Saved: {workflow_id} ({len(req.blocks)} blocks, {len(req.connections)} connections)")
-    return {"status": "success", "id": workflow_id, "updated_at": data["updated_at"]}
+    logger.info(f"[Workflow] Saved: {workflow_id} (scope={req.scope}, {len(req.blocks)} blocks)")
+    return {"status": "success", "id": workflow_id, "scope": req.scope, "updated_at": data["updated_at"]}
 
 
 @router.delete("/api/workflows/{workflow_id}")
-def delete_workflow(workflow_id: str):
+def delete_workflow(workflow_id: str, scope: str = "personal", owner: str = "default"):
     """Delete a workflow."""
-    path = _workflows_dir() / f"{workflow_id}.json"
+    path = _workflows_dir(scope, owner) / f"{workflow_id}.json"
     if not path.exists():
-        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+        legacy = _workflows_base() / f"{workflow_id}.json"
+        if legacy.exists():
+            path = legacy
+        else:
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
     path.unlink()
-    logger.info(f"[Workflow] Deleted: {workflow_id}")
+    logger.info(f"[Workflow] Deleted: {workflow_id} (scope={scope})")
     return {"status": "success", "id": workflow_id}
+
+
+@router.post("/api/workflows/{workflow_id}/clone")
+def clone_workflow(workflow_id: str, scope: str = "system", owner: str = "", target_scope: str = "personal", target_owner: str = ""):
+    """Clone a workflow from one scope to another (e.g. system template → personal copy)."""
+    src_path = _workflows_dir(scope, owner) / f"{workflow_id}.json"
+    if not src_path.exists():
+        legacy = _workflows_base() / f"{workflow_id}.json"
+        if legacy.exists():
+            src_path = legacy
+        else:
+            raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found")
+
+    data = json.loads(src_path.read_text(encoding="utf-8"))
+    new_id = f"{workflow_id}-copy-{datetime.now().strftime('%H%M%S')}"
+    data["id"] = new_id
+    data["name"] = data.get("name", workflow_id) + " (副本)"
+    data["scope"] = target_scope
+    data["owner"] = target_owner
+    data["created_at"] = datetime.now().isoformat()
+    data["updated_at"] = data["created_at"]
+
+    dest_dir = _workflows_dir(target_scope, target_owner)
+    dest_path = dest_dir / f"{new_id}.json"
+    dest_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info(f"[Workflow] Cloned: {workflow_id} → {new_id} (scope={target_scope})")
+    return {"status": "success", "id": new_id, "scope": target_scope, "path": str(dest_path)}
 
 
 # ── Execution ───────────────────────────────────────────────────────────────
