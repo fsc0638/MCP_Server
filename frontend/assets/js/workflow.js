@@ -28,8 +28,9 @@
     analysis:   { label: "分析",   color: "#6200ea" },
   };
 
-  const BLOCK_W = 160, BLOCK_H = 68, GRID = 24;  // Snap to dot grid (24px)
-  const snap = v => Math.round(v / GRID) * GRID;
+  const BLOCK_W = 160, BLOCK_H = 70, GRID = 10, GRID_L = 50;  // Small grid 10px, large grid 50px
+  const snap = v => Math.round(v / GRID) * GRID;  // Snap to small grid
+  const snapL = v => Math.round(v / GRID_L) * GRID_L;  // Snap to large grid
 
   // ── FlowDesigner ──────────────────────────────────────────────
   class FlowDesigner {
@@ -265,14 +266,14 @@
     }
 
     _getPortPos(block, side) {
-      // Return position OUTSIDE the block's margin zone so routing starts clean
-      const M = GRID; // must match _routePath margin
+      // Return position OUTSIDE block, snapped to grid
+      const M = GRID_L; // one large grid cell away
       switch (side) {
-        case "right":  return { x: block.x + BLOCK_W + M, y: block.y + BLOCK_H / 2 };
-        case "left":   return { x: block.x - M,           y: block.y + BLOCK_H / 2 };
-        case "bottom": return { x: block.x + BLOCK_W / 2, y: block.y + BLOCK_H + M };
-        case "top":    return { x: block.x + BLOCK_W / 2, y: block.y - M };
-        default:       return { x: block.x + BLOCK_W + M, y: block.y + BLOCK_H / 2 };
+        case "right":  return { x: snap(block.x + BLOCK_W + M), y: snap(block.y + BLOCK_H / 2) };
+        case "left":   return { x: snap(block.x - M),           y: snap(block.y + BLOCK_H / 2) };
+        case "bottom": return { x: snap(block.x + BLOCK_W / 2), y: snap(block.y + BLOCK_H + M) };
+        case "top":    return { x: snap(block.x + BLOCK_W / 2), y: snap(block.y - M) };
+        default:       return { x: snap(block.x + BLOCK_W + M), y: snap(block.y + BLOCK_H / 2) };
       }
     }
 
@@ -310,7 +311,7 @@
     _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
       // Strict orthogonal routing — lines NEVER enter any block's bounding box
 
-      const M = GRID; // 24px margin around blocks (keep tight for close blocks)
+      const M = GRID_L; // 50px margin (one large grid cell)
 
       // Build expanded bounding boxes for ALL blocks (including connected ones for collision)
       const boxes = [];
@@ -334,17 +335,17 @@
         return false;
       };
 
-      // Collect safe corridor positions (block edges + margins)
+      // Collect safe corridor positions — snapped to large grid
       const safeXs = new Set();
       const safeYs = new Set();
       this.blocks.forEach(b => {
-        safeXs.add(snap(b.x - M));
-        safeXs.add(snap(b.x + BLOCK_W + M));
-        safeYs.add(snap(b.y - M));
-        safeYs.add(snap(b.y + BLOCK_H + M));
+        safeXs.add(snapL(b.x - M));
+        safeXs.add(snapL(b.x + BLOCK_W + M));
+        safeYs.add(snapL(b.y - M));
+        safeYs.add(snapL(b.y + BLOCK_H + M));
       });
-      safeXs.add(snap((x1 + x2) / 2));
-      safeYs.add(snap((y1 + y2) / 2));
+      safeXs.add(snapL((x1 + x2) / 2));
+      safeYs.add(snapL((y1 + y2) / 2));
 
       // Score a candidate path (lower = better): total manhattan length
       const pathLen = (pts) => {

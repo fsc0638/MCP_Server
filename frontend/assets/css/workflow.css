@@ -110,10 +110,13 @@
   width: 3000px; height: 2000px;
   position: relative;
   background-color: var(--bg-main, #F8F9FB);
+  /* Small grid: 10px cells, Large grid: 50px (5x5 small cells) */
   background-image:
-    linear-gradient(rgba(0,0,0,0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,0,0,0.04) 1px, transparent 1px);
-  background-size: 24px 24px;
+    linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px),
+    linear-gradient(rgba(0,0,0,0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,0.08) 1px, transparent 1px);
+  background-size: 10px 10px, 10px 10px, 50px 50px, 50px 50px;
   transform-origin: 0 0;
 }
 
