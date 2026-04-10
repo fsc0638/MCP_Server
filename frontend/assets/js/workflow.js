@@ -284,54 +284,122 @@
     }
 
     _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
-      // Draw.io style routing: exit port direction → route to target → enter target direction
-      const GAP = GRID * 2; // 48px extension from port before first turn
+      // Orthogonal routing with obstacle avoidance
+      // Strategy: exit port → extend in port direction → find safe corridor → enter target
 
-      // Exit and enter directions as vectors
-      const exitDir = { right: [1,0], left: [-1,0], bottom: [0,1], top: [0,-1] };
-      const enterDir = { left: [-1,0], right: [1,0], top: [0,-1], bottom: [0,1] };
-      const ed = exitDir[fromSide || "right"] || [1, 0];
-      const nd = enterDir[toSide || "left"] || [-1, 0];
+      const GAP = GRID * 2; // 48px clearance
 
-      // Extension points: first step away from port
-      const ex1 = x1 + ed[0] * GAP;
-      const ey1 = y1 + ed[1] * GAP;
-      const ex2 = x2 + nd[0] * GAP;
-      const ey2 = y2 + nd[1] * GAP;
+      // Collect all block rects as obstacles (exclude connected blocks)
+      const rects = [];
+      this.blocks.forEach(b => {
+        if (b.id === fromBlockId || b.id === toBlockId) return;
+        rects.push({ l: b.x, t: b.y, r: b.x + BLOCK_W, b: b.y + BLOCK_H });
+      });
 
-      // Case 1: Horizontal exit → Horizontal enter (most common: right → left)
-      if (ed[1] === 0 && nd[1] === 0) {
-        if (Math.abs(ey1 - ey2) < 2 && Math.abs(ex1 - ex2) < 2) {
-          // Nearly aligned — straight line
-          return `M ${x1} ${y1} L ${x2} ${y2}`;
+      // Check if horizontal segment hits any obstacle
+      const hClear = (y, xA, xB) => {
+        const lo = Math.min(xA, xB), hi = Math.max(xA, xB);
+        for (const r of rects) {
+          if (y > r.t && y < r.b && hi > r.l && lo < r.r) return false;
         }
-        // Both horizontal: exit → extend → vertical jog → extend → enter
-        const midX = snap((ex1 + ex2) / 2);
-        return `M ${x1} ${y1} L ${ex1} ${ey1} L ${midX} ${ey1} L ${midX} ${ey2} L ${ex2} ${ey2} L ${x2} ${y2}`;
-      }
-
-      // Case 2: Vertical exit → Vertical enter (bottom → top)
-      if (ed[0] === 0 && nd[0] === 0) {
-        if (Math.abs(ex1 - ex2) < 2 && Math.abs(ey1 - ey2) < 2) {
-          return `M ${x1} ${y1} L ${x2} ${y2}`;
+        return true;
+      };
+      // Check if vertical segment hits any obstacle
+      const vClear = (x, yA, yB) => {
+        const lo = Math.min(yA, yB), hi = Math.max(yA, yB);
+        for (const r of rects) {
+          if (x > r.l && x < r.r && hi > r.t && lo < r.b) return false;
         }
-        const midY = snap((ey1 + ey2) / 2);
-        return `M ${x1} ${y1} L ${ex1} ${ey1} L ${ex1} ${midY} L ${ex2} ${midY} L ${ex2} ${ey2} L ${x2} ${y2}`;
+        return true;
+      };
+
+      // Get all block edges for routing corridors
+      const allEdges = { xs: new Set(), ys: new Set() };
+      this.blocks.forEach(b => {
+        allEdges.xs.add(b.x - GAP);
+        allEdges.xs.add(b.x + BLOCK_W + GAP);
+        allEdges.ys.add(b.y - GAP);
+        allEdges.ys.add(b.y + BLOCK_H + GAP);
+      });
+
+      // Simple 3-segment routing: horizontal → vertical → horizontal
+      // Try multiple midX candidates and pick the first clear one
+      const tryHVH = () => {
+        // Candidates for vertical segment X position
+        const candidates = [
+          snap((x1 + x2) / 2),             // midpoint
+          ...([...allEdges.xs].sort((a, b) => Math.abs(a - (x1+x2)/2) - Math.abs(b - (x1+x2)/2))), // nearest block edges
+        ];
+        for (const mx of candidates) {
+          if (hClear(y1, x1, mx) && vClear(mx, y1, y2) && hClear(y2, mx, x2)) {
+            return `M ${x1} ${y1} L ${mx} ${y1} L ${mx} ${y2} L ${x2} ${y2}`;
+          }
+        }
+        return null;
+      };
+
+      // 3-segment: vertical → horizontal → vertical
+      const tryVHV = () => {
+        const candidates = [
+          snap((y1 + y2) / 2),
+          ...([...allEdges.ys].sort((a, b) => Math.abs(a - (y1+y2)/2) - Math.abs(b - (y1+y2)/2))),
+        ];
+        for (const my of candidates) {
+          if (vClear(x1, y1, my) && hClear(my, x1, x2) && vClear(x2, my, y2)) {
+            return `M ${x1} ${y1} L ${x1} ${my} L ${x2} ${my} L ${x2} ${y2}`;
+          }
+        }
+        return null;
+      };
+
+      // 5-segment detour: H → V → H → V → H
+      const tryDetour = () => {
+        const yOptions = [...allEdges.ys].sort((a, b) => a - b);
+        const xMid = snap((x1 + x2) / 2);
+        for (const dy of yOptions) {
+          if (hClear(y1, x1, xMid) && vClear(xMid, y1, dy) && hClear(dy, xMid, x2) && vClear(x2, dy, y2)) {
+            return `M ${x1} ${y1} L ${xMid} ${y1} L ${xMid} ${dy} L ${x2} ${dy} L ${x2} ${y2}`;
+          }
+        }
+        return null;
+      };
+
+      // Determine primary routing direction from port sides
+      const isHExit = fromSide === "right" || fromSide === "left";
+      const isHEnter = toSide === "left" || toSide === "right";
+
+      let path = null;
+
+      if (isHExit && isHEnter) {
+        // Both horizontal: prefer H-V-H
+        path = tryHVH() || tryDetour();
+      } else if (!isHExit && !isHEnter) {
+        // Both vertical: prefer V-H-V
+        path = tryVHV() || tryDetour();
+      } else if (isHExit && !isHEnter) {
+        // H exit, V enter: L-shape
+        if (hClear(y1, x1, x2) && vClear(x2, y1, y2)) {
+          path = `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2}`;
+        }
+      } else {
+        // V exit, H enter: L-shape
+        if (vClear(x1, y1, y2) && hClear(y2, x1, x2)) {
+          path = `M ${x1} ${y1} L ${x1} ${y2} L ${x2} ${y2}`;
+        }
       }
 
-      // Case 3: Horizontal exit → Vertical enter (right → top/bottom)
-      if (ed[1] === 0 && nd[0] === 0) {
-        // L-shape: go horizontal to target X, then vertical
-        return `M ${x1} ${y1} L ${ex1} ${ey1} L ${ex2} ${ey1} L ${ex2} ${ey2} L ${x2} ${y2}`;
+      // Fallback cascade
+      if (!path) path = tryHVH();
+      if (!path) path = tryVHV();
+      if (!path) path = tryDetour();
+
+      // Ultimate fallback (no collision check)
+      if (!path) {
+        const mx = snap((x1 + x2) / 2);
+        path = `M ${x1} ${y1} L ${mx} ${y1} L ${mx} ${y2} L ${x2} ${y2}`;
       }
 
-      // Case 4: Vertical exit → Horizontal enter (bottom/top → left/right)
-      if (ed[0] === 0 && nd[1] === 0) {
-        return `M ${x1} ${y1} L ${ex1} ${ey1} L ${ex1} ${ey2} L ${ex2} ${ey2} L ${x2} ${y2}`;
-      }
-
-      // Fallback
-      return `M ${x1} ${y1} L ${ex1} ${ey1} L ${ex2} ${ey2} L ${x2} ${y2}`;
+      return path;
     }
 
     // ── Reset ────────────────────────────────────────────────
