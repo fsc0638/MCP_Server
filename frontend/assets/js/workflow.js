@@ -28,9 +28,10 @@
     analysis:   { label: "分析",   color: "#6200ea" },
   };
 
-  const BLOCK_W = 160, BLOCK_H = 70, GRID = 10, GRID_L = 50;  // Small grid 10px, large grid 50px
-  const snap = v => Math.round(v / GRID) * GRID;  // Snap to small grid
-  const snapL = v => Math.round(v / GRID_L) * GRID_L;  // Snap to large grid
+  const GRID = 10, GRID_L = 40;  // Small grid 10px, large grid 40px (4x4=16 small cells)
+  const BLOCK_W = GRID * 12, BLOCK_H = GRID * 8;  // 120×80px = 12×8 small cells
+  const snap = v => Math.round(v / GRID) * GRID;
+  const snapL = v => Math.round(v / GRID_L) * GRID_L;
 
   // ── FlowDesigner ──────────────────────────────────────────────
   class FlowDesigner {
@@ -311,7 +312,7 @@
     _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
       // Strict orthogonal routing — lines NEVER enter any block's bounding box
 
-      const M = GRID_L; // 50px margin (one large grid cell)
+      const M = GRID_L; // 40px margin (one large grid cell)
 
       // Build expanded bounding boxes for ALL blocks (including connected ones for collision)
       const boxes = [];

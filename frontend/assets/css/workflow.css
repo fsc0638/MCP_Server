@@ -110,13 +110,13 @@
   width: 3000px; height: 2000px;
   position: relative;
   background-color: var(--bg-main, #F8F9FB);
-  /* Small grid: 10px cells, Large grid: 50px (5x5 small cells) */
+  /* Small grid: 10px cells, Large grid: 40px (4x4 small = 16 cells per large) */
   background-image:
     linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px),
     linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px),
-    linear-gradient(rgba(0,0,0,0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0,0,0,0.08) 1px, transparent 1px);
-  background-size: 10px 10px, 10px 10px, 50px 50px, 50px 50px;
+    linear-gradient(rgba(0,0,0,0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0,0,0,0.1) 1px, transparent 1px);
+  background-size: 10px 10px, 10px 10px, 40px 40px, 40px 40px;
   transform-origin: 0 0;
 }
 
@@ -131,7 +131,7 @@
 
 /* ── Flow Block ──────────────────────────────────────────────── */
 .wf-block {
-  position: absolute; width: 160px;
+  position: absolute; width: 120px;
   background: var(--bg-surface, #fff);
   border: 2px solid var(--border-subtle, #E2E8F0);
   border-radius: 10px;
