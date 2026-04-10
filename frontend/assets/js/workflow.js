@@ -62,7 +62,7 @@
         marker.setAttribute("orient", "auto-start-reverse");
         const arrowPath = document.createElementNS(NS, "path");
         arrowPath.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-        arrowPath.setAttribute("fill", "#94a3b8");
+        arrowPath.setAttribute("fill", "#6b7280");
         marker.appendChild(arrowPath);
         defs.appendChild(marker);
       }
@@ -284,122 +284,107 @@
     }
 
     _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
-      // Orthogonal routing with obstacle avoidance
-      // Strategy: exit port → extend in port direction → find safe corridor → enter target
+      // Strict orthogonal routing — lines NEVER enter any block's bounding box
+      // Approach: extend from ports → route via safe corridors outside ALL blocks
 
-      const GAP = GRID * 2; // 48px clearance
+      const M = GRID * 2; // 48px margin around blocks
 
-      // Collect all block rects as obstacles (exclude connected blocks)
-      const rects = [];
+      // Build expanded bounding boxes for ALL blocks (including connected ones for collision)
+      const boxes = [];
       this.blocks.forEach(b => {
-        if (b.id === fromBlockId || b.id === toBlockId) return;
-        rects.push({ l: b.x, t: b.y, r: b.x + BLOCK_W, b: b.y + BLOCK_H });
+        boxes.push({ l: b.x - M, t: b.y - M, r: b.x + BLOCK_W + M, b: b.y + BLOCK_H + M, id: b.id });
       });
 
-      // Check if horizontal segment hits any obstacle
-      const hClear = (y, xA, xB) => {
+      // Segment collision: does a horizontal line at y from xA to xB cross any block?
+      // Exclude the two connected blocks only at their port positions
+      const hHits = (y, xA, xB) => {
         const lo = Math.min(xA, xB), hi = Math.max(xA, xB);
-        for (const r of rects) {
-          if (y > r.t && y < r.b && hi > r.l && lo < r.r) return false;
+        for (const box of boxes) {
+          if (box.id === fromBlockId || box.id === toBlockId) continue;
+          if (y > box.t && y < box.b && hi > box.l && lo < box.r) return true;
         }
-        return true;
+        return false;
       };
-      // Check if vertical segment hits any obstacle
-      const vClear = (x, yA, yB) => {
+      const vHits = (x, yA, yB) => {
         const lo = Math.min(yA, yB), hi = Math.max(yA, yB);
-        for (const r of rects) {
-          if (x > r.l && x < r.r && hi > r.t && lo < r.b) return false;
+        for (const box of boxes) {
+          if (box.id === fromBlockId || box.id === toBlockId) continue;
+          if (x > box.l && x < box.r && hi > box.t && lo < box.b) return true;
         }
-        return true;
+        return false;
       };
 
-      // Get all block edges for routing corridors
-      const allEdges = { xs: new Set(), ys: new Set() };
+      // Collect safe corridor positions (block edges + margins)
+      const safeXs = new Set();
+      const safeYs = new Set();
       this.blocks.forEach(b => {
-        allEdges.xs.add(b.x - GAP);
-        allEdges.xs.add(b.x + BLOCK_W + GAP);
-        allEdges.ys.add(b.y - GAP);
-        allEdges.ys.add(b.y + BLOCK_H + GAP);
+        safeXs.add(snap(b.x - M));
+        safeXs.add(snap(b.x + BLOCK_W + M));
+        safeYs.add(snap(b.y - M));
+        safeYs.add(snap(b.y + BLOCK_H + M));
       });
+      safeXs.add(snap((x1 + x2) / 2));
+      safeYs.add(snap((y1 + y2) / 2));
 
-      // Simple 3-segment routing: horizontal → vertical → horizontal
-      // Try multiple midX candidates and pick the first clear one
-      const tryHVH = () => {
-        // Candidates for vertical segment X position
-        const candidates = [
-          snap((x1 + x2) / 2),             // midpoint
-          ...([...allEdges.xs].sort((a, b) => Math.abs(a - (x1+x2)/2) - Math.abs(b - (x1+x2)/2))), // nearest block edges
-        ];
-        for (const mx of candidates) {
-          if (hClear(y1, x1, mx) && vClear(mx, y1, y2) && hClear(y2, mx, x2)) {
-            return `M ${x1} ${y1} L ${mx} ${y1} L ${mx} ${y2} L ${x2} ${y2}`;
-          }
+      // Score a candidate path (lower = better): total manhattan length
+      const pathLen = (pts) => {
+        let len = 0;
+        for (let i = 1; i < pts.length; i++) {
+          len += Math.abs(pts[i][0] - pts[i-1][0]) + Math.abs(pts[i][1] - pts[i-1][1]);
         }
-        return null;
+        return len;
       };
 
-      // 3-segment: vertical → horizontal → vertical
-      const tryVHV = () => {
-        const candidates = [
-          snap((y1 + y2) / 2),
-          ...([...allEdges.ys].sort((a, b) => Math.abs(a - (y1+y2)/2) - Math.abs(b - (y1+y2)/2))),
-        ];
-        for (const my of candidates) {
-          if (vClear(x1, y1, my) && hClear(my, x1, x2) && vClear(x2, my, y2)) {
-            return `M ${x1} ${y1} L ${x1} ${my} L ${x2} ${my} L ${x2} ${y2}`;
-          }
-        }
-        return null;
-      };
+      // Try H-V-H routing with different midX values
+      const candidates = [];
 
-      // 5-segment detour: H → V → H → V → H
-      const tryDetour = () => {
-        const yOptions = [...allEdges.ys].sort((a, b) => a - b);
-        const xMid = snap((x1 + x2) / 2);
-        for (const dy of yOptions) {
-          if (hClear(y1, x1, xMid) && vClear(xMid, y1, dy) && hClear(dy, xMid, x2) && vClear(x2, dy, y2)) {
-            return `M ${x1} ${y1} L ${xMid} ${y1} L ${xMid} ${dy} L ${x2} ${dy} L ${x2} ${y2}`;
-          }
-        }
-        return null;
-      };
+      // Sort safe corridors by distance to midpoint
+      const sortedXs = [...safeXs].sort((a, b) => Math.abs(a - (x1+x2)/2) - Math.abs(b - (x1+x2)/2));
+      const sortedYs = [...safeYs].sort((a, b) => Math.abs(a - (y1+y2)/2) - Math.abs(b - (y1+y2)/2));
 
-      // Determine primary routing direction from port sides
-      const isHExit = fromSide === "right" || fromSide === "left";
-      const isHEnter = toSide === "left" || toSide === "right";
-
-      let path = null;
-
-      if (isHExit && isHEnter) {
-        // Both horizontal: prefer H-V-H
-        path = tryHVH() || tryDetour();
-      } else if (!isHExit && !isHEnter) {
-        // Both vertical: prefer V-H-V
-        path = tryVHV() || tryDetour();
-      } else if (isHExit && !isHEnter) {
-        // H exit, V enter: L-shape
-        if (hClear(y1, x1, x2) && vClear(x2, y1, y2)) {
-          path = `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2}`;
-        }
-      } else {
-        // V exit, H enter: L-shape
-        if (vClear(x1, y1, y2) && hClear(y2, x1, x2)) {
-          path = `M ${x1} ${y1} L ${x1} ${y2} L ${x2} ${y2}`;
+      // H-V-H: try each safe X corridor
+      for (const mx of sortedXs) {
+        if (!hHits(y1, x1, mx) && !vHits(mx, y1, y2) && !hHits(y2, mx, x2)) {
+          candidates.push({ pts: [[x1,y1],[mx,y1],[mx,y2],[x2,y2]], len: pathLen([[x1,y1],[mx,y1],[mx,y2],[x2,y2]]) });
         }
       }
 
-      // Fallback cascade
-      if (!path) path = tryHVH();
-      if (!path) path = tryVHV();
-      if (!path) path = tryDetour();
-
-      // Ultimate fallback (no collision check)
-      if (!path) {
-        const mx = snap((x1 + x2) / 2);
-        path = `M ${x1} ${y1} L ${mx} ${y1} L ${mx} ${y2} L ${x2} ${y2}`;
+      // V-H-V: try each safe Y corridor
+      for (const my of sortedYs) {
+        if (!vHits(x1, y1, my) && !hHits(my, x1, x2) && !vHits(x2, my, y2)) {
+          candidates.push({ pts: [[x1,y1],[x1,my],[x2,my],[x2,y2]], len: pathLen([[x1,y1],[x1,my],[x2,my],[x2,y2]]) });
+        }
       }
 
-      return path;
+      // 5-segment: H-V-H-V-H (detour via safe corridors)
+      for (const mx of sortedXs.slice(0, 3)) {
+        for (const my of sortedYs.slice(0, 3)) {
+          if (!hHits(y1, x1, mx) && !vHits(mx, y1, my) && !hHits(my, mx, x2) && !vHits(x2, my, y2)) {
+            const pts = [[x1,y1],[mx,y1],[mx,my],[x2,my],[x2,y2]];
+            candidates.push({ pts, len: pathLen(pts) });
+          }
+        }
+      }
+
+      // Pick shortest valid path
+      if (candidates.length > 0) {
+        candidates.sort((a, b) => a.len - b.len);
+        const best = candidates[0].pts;
+        // Simplify collinear points
+        const simplified = [best[0]];
+        for (let i = 1; i < best.length - 1; i++) {
+          const p = best[i-1], c = best[i], n = best[i+1];
+          if (!((p[0]===c[0] && c[0]===n[0]) || (p[1]===c[1] && c[1]===n[1]))) {
+            simplified.push(c);
+          }
+        }
+        simplified.push(best[best.length - 1]);
+        return "M " + simplified.map(p => `${p[0]} ${p[1]}`).join(" L ");
+      }
+
+      // Ultimate fallback
+      const mx = snap((x1 + x2) / 2);
+      return `M ${x1} ${y1} L ${mx} ${y1} L ${mx} ${y2} L ${x2} ${y2}`;
     }
 
     // ── Reset ────────────────────────────────────────────────
