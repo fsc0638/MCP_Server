@@ -207,7 +207,7 @@
         const my = (e.clientY - rect.top) / this.scale;
         const from = this.blocks.get(this.connecting.fromId);
         if (!from) return;
-        const fp = this._getPortPos(from, this.connecting.fromSide);
+        const fp = this._getPortEdge(from, this.connecting.fromSide);
         this.connecting.tempPath.setAttribute("d", this._routePath(fp.x, fp.y, mx, my, this.connecting.fromSide, "left", this.connecting.fromId, -1));
       }
     }
@@ -306,15 +306,14 @@
       });
     }
 
-    _getPortPos(block, side) {
-      // Return position 2 small grids (20px) outside block edge, snapped
-      const EXT = GRID * 2;
+    _getPortEdge(block, side) {
+      // Return exact port position on block edge
       switch (side) {
-        case "right":  return { x: snap(block.x + BLOCK_W + EXT), y: snap(block.y + BLOCK_H / 2) };
-        case "left":   return { x: snap(block.x - EXT),           y: snap(block.y + BLOCK_H / 2) };
-        case "bottom": return { x: snap(block.x + BLOCK_W / 2),  y: snap(block.y + BLOCK_H + EXT) };
-        case "top":    return { x: snap(block.x + BLOCK_W / 2),  y: snap(block.y - EXT) };
-        default:       return { x: snap(block.x + BLOCK_W + EXT), y: snap(block.y + BLOCK_H / 2) };
+        case "right":  return { x: block.x + BLOCK_W, y: snap(block.y + BLOCK_H / 2) };
+        case "left":   return { x: block.x,           y: snap(block.y + BLOCK_H / 2) };
+        case "bottom": return { x: snap(block.x + BLOCK_W / 2), y: block.y + BLOCK_H };
+        case "top":    return { x: snap(block.x + BLOCK_W / 2), y: block.y };
+        default:       return { x: block.x + BLOCK_W, y: snap(block.y + BLOCK_H / 2) };
       }
     }
 
@@ -323,30 +322,11 @@
       const tb = this.blocks.get(conn.to);
       if (!fb || !tb) return;
 
-      // Actual port on block edge (for visual start/end)
-      const _portEdge = (block, side) => {
-        switch (side) {
-          case "right":  return { x: block.x + BLOCK_W, y: block.y + BLOCK_H / 2 };
-          case "left":   return { x: block.x,           y: block.y + BLOCK_H / 2 };
-          case "bottom": return { x: block.x + BLOCK_W / 2, y: block.y + BLOCK_H };
-          case "top":    return { x: block.x + BLOCK_W / 2, y: block.y };
-          default:       return { x: block.x + BLOCK_W, y: block.y + BLOCK_H / 2 };
-        }
-      };
+      const p1 = this._getPortEdge(fb, conn.fromSide || "right");
+      const p2 = this._getPortEdge(tb, conn.toSide || "left");
 
-      const edge1 = _portEdge(fb, conn.fromSide || "right");
-      const edge2 = _portEdge(tb, conn.toSide || "left");
-      const p1 = this._getPortPos(fb, conn.fromSide || "right"); // outside margin
-      const p2 = this._getPortPos(tb, conn.toSide || "left");
-
-      // Route between margin-outside points
-      const routedPath = this._routePath(p1.x, p1.y, p2.x, p2.y, conn.fromSide, conn.toSide, conn.from, conn.to);
-
-      // Prepend edge→margin start, append margin→edge end
-      const fullPath = `M ${edge1.x} ${edge1.y} L ${p1.x} ${p1.y} ` +
-        routedPath.replace(/^M\s*[\d.]+\s+[\d.]+\s*/, "") +
-        ` L ${edge2.x} ${edge2.y}`;
-      conn.el.setAttribute("d", fullPath);
+      // Route directly from port edge to port edge
+      conn.el.setAttribute("d", this._routePath(p1.x, p1.y, p2.x, p2.y, conn.fromSide, conn.toSide, conn.from, conn.to));
     }
 
     _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
@@ -375,8 +355,8 @@
         return false;
       };
 
-      // Collect safe corridor positions — 20px outside each block, snapped
-      const CORR = GRID * 2; // 20px corridor distance
+      // Collect safe corridor positions — 1 small grid (10px) outside each block
+      const CORR = GRID; // 10px corridor distance
       const safeXs = new Set();
       const safeYs = new Set();
       this.blocks.forEach(b => {
