@@ -59,6 +59,13 @@
   const sendBtn = document.getElementById("sendBtn");
   const modelName = document.getElementById("modelName");
   const chatTitleText = document.getElementById("chatTitleText");
+  const initialWelcomeMarkup = (() => {
+    const staticWelcome = document.getElementById("chatWelcome");
+    if (!staticWelcome) return "";
+    const markup = staticWelcome.innerHTML;
+    staticWelcome.remove();
+    return markup;
+  })();
 
   async function hydrateAuthFromServer() {
     try {
@@ -370,6 +377,10 @@
     setCachedHistory(sessionId, current);
   }
 
+  function getSessionDomSafeId(sessionId) {
+    return String(sessionId || "default").replace(/[^a-zA-Z0-9_-]/g, "_");
+  }
+
   // ── Per-session DOM container management ──
   // 每個 session 有自己的 <div class="page-chat-session-container"> 放在 #chatMessages 底下
   // 切換只改 display,不清空內容,讓背景 task 的 DOM 更新永遠指向正確的容器
@@ -429,11 +440,29 @@
     const container = getSessionContainer(sessionId);
     if (!container) return;
     container.innerHTML =
-      '<div class="page-chat-welcome" id="chatWelcome-' + String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "_") + '">' +
+      '<div class="page-chat-welcome" id="chatWelcome-' + getSessionDomSafeId(sessionId) + '">' +
       '<div class="page-chat-welcome-logo"><img src="../assets/images/kw_logo.png" width="56" alt="Logo"></div>' +
       '<h2>' + escapeHtml(title) + '</h2>' +
       '<p>' + escapeHtml(body) + '</p>' +
       '</div>';
+    state.sessionMsgCounts[sessionId] = 0;
+    state.sessionTokenCounts[sessionId] = 0;
+    state.sessionMeetingText[sessionId] = "";
+  }
+
+  function renderDraftWelcome(sessionId) {
+    const container = getSessionContainer(sessionId);
+    if (!container) return;
+
+    if (!initialWelcomeMarkup) {
+      renderConversationPlaceholder(sessionId, "開始新的對話", "輸入任何問題，或上傳音檔讓助手協助處理。");
+      return;
+    }
+
+    container.innerHTML =
+      '<div class="page-chat-welcome" id="chatWelcome-' + getSessionDomSafeId(sessionId) + '">' +
+      initialWelcomeMarkup +
+      "</div>";
     state.sessionMsgCounts[sessionId] = 0;
     state.sessionTokenCounts[sessionId] = 0;
     state.sessionMeetingText[sessionId] = "";
@@ -1434,7 +1463,7 @@
       delete state.sessionHistoryCache[previousSessionId];
     }
     resetSession();
-    renderConversationPlaceholder(state.sessionId, "開始新的對話", "輸入任何問題，或上傳音檔讓助手協助處理。");
+    renderDraftWelcome(state.sessionId);
     if (chatTitleText) chatTitleText.textContent = "新對話";
     if (chatInput) {
       chatInput.value = "";
@@ -1531,7 +1560,7 @@
       } else if (listTasksForSession(sid).length > 0) {
         restoreSessionTaskUI(sid);
       } else {
-        renderConversationPlaceholder(sid, "開始新的對話", "輸入任何問題，或上傳音檔讓助手協助處理。");
+        renderDraftWelcome(sid);
       }
       state.sessionHistoryLoaded[sid] = true;
       return;
