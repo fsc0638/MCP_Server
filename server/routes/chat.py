@@ -2,13 +2,14 @@
 
 import json
 import logging
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Dict
 
 from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
-from server.dependencies.uma import get_uma_instance as get_uma
 from server.dependencies.session import get_session_manager
+from server.dependencies.task_registry import get_task_registry
+from server.dependencies.uma import get_uma_instance as get_uma
 from server.schemas.chat import ChatRequest, ExecuteRequest
 from server.services.chat_service import process_chat
 
@@ -16,9 +17,23 @@ logger = logging.getLogger("MCP_Server.Chat")
 router = APIRouter(tags=["Chat"])
 
 
+def _wrap_task_payload(task_id: str, session_id: str, payload: Dict) -> Dict:
+    enriched = dict(payload)
+    enriched.setdefault("task_id", task_id)
+    enriched.setdefault("session_id", session_id)
+    return enriched
+
+
+def _get_active_task_for_session(session_id: str) -> Dict:
+    task_registry = get_task_registry()
+    task = task_registry.get_active_task_for_session(session_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="No active task found for this session")
+    return task
+
+
 @router.post("/chat")
 async def chat(req: ChatRequest):
-    # Keep routing through chat_service (migration bridge), which currently points to the native pipeline.
     return await process_chat(req)
 
 
@@ -42,8 +57,24 @@ def clear_session(session_id: str):
 def get_session_history(session_id: str):
     session_mgr = get_session_manager()
     history = session_mgr.get_or_create_conversation(session_id)
-    chat_history = [m for m in history if m.get("role") != "system"]
+    chat_history = [msg for msg in history if msg.get("role") != "system"]
     return {"status": "success", "history": chat_history}
+
+
+@router.get("/chat/tasks/session/{session_id}")
+def get_session_tasks(session_id: str):
+    task_registry = get_task_registry()
+    tasks = task_registry.list_tasks_for_session(session_id, include_terminal=True, limit=20)
+    return {"status": "success", "tasks": tasks}
+
+
+@router.get("/chat/tasks/{task_id}")
+def get_task(task_id: str):
+    task_registry = get_task_registry()
+    task = task_registry.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return {"status": "success", "task": task}
 
 
 @router.post("/execute")
@@ -57,41 +88,45 @@ def execute_tool(request: ExecuteRequest):
     try:
         result = uma.execute_tool_call(request.skill_name, request.arguments)
         return {"status": "success", "result": result}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
 
 
-# ─── Phase 3: Approve / Reject pending high-risk tool calls ───────────────────
-
-@router.post("/chat/approve/{session_id}")
-async def approve_tool_call(session_id: str):
-    """
-    Phase 3-B: Resume endpoint.
-    Called by the frontend after the user approves a high-risk tool call.
-    Executes the stored pending call (bypassing the risk gate),
-    then streams the LLM's second-analysis response via SSE.
-    """
+@router.post("/chat/tasks/{task_id}/approve")
+async def approve_tool_call_by_task(task_id: str):
+    task_registry = get_task_registry()
     session_mgr = get_session_manager()
-    pending = session_mgr.get_pending_approval(session_id)
-    if not pending:
-        raise HTTPException(status_code=404, detail="No pending approval found for this session")
+    task = task_registry.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.get("status") != "requires_approval":
+        raise HTTPException(status_code=409, detail="Task is not waiting for approval")
 
-    tool_name = pending["tool_name"]
-    tool_args = pending["args"]
+    session_id = task.get("session_id") or "default"
+    tool_name = task.get("tool_name") or ""
+    tool_args = dict(task.get("pending_args") or {})
+    provider = task.get("provider") or "openai"
+    model = task.get("model") or "gpt-4o"
     uma = get_uma()
 
-    # For meeting-analyzer: if transcript missing, pull from last user message in session
     if tool_name == "mcp-meeting-analyzer" and not tool_args.get("transcript"):
         history = session_mgr.get_or_create_conversation(session_id)
         for msg in reversed(history):
             if msg.get("role") == "user" and msg.get("content"):
                 tool_args["transcript"] = msg["content"]
-                logger.info(f"[Approve] Injected transcript from session history ({len(tool_args['transcript'])} chars)")
+                logger.info(
+                    "[Approve] Injected transcript from session history (%s chars)",
+                    len(tool_args["transcript"]),
+                )
                 break
+
+    task_registry.mark_approved(task_id)
 
     async def resume_generator() -> AsyncGenerator[dict, None]:
         try:
-            # 1. Execute the tool (bypass risk gate — user already approved)
+            yield {"data": json.dumps(_wrap_task_payload(task_id, session_id, {"status": "task_resumed"}), ensure_ascii=False)}
+            task_registry.mark_tool_call(task_id, tool_name, f"Approved tool running: {tool_name}")
+
             executor = uma.executor
             script_path = executor.skills_home / tool_name / "scripts" / "main.py"
             if script_path.exists():
@@ -103,30 +138,28 @@ async def approve_tool_call(session_id: str):
 
             result_summary = json.dumps(result, ensure_ascii=False)
 
-            # 2. Clear pending approval
-            session_mgr.clear_pending_approval(session_id)
-
-            # 3. Let the LLM summarize the result via a new conversation turn
             from server.adapters.factory import create_adapter
 
-            provider = pending.get("provider", "openai")
-            model = pending.get("model", "gpt-4o")
             adapter = create_adapter(provider=provider, uma=uma, model=model)
-
             if not adapter.is_available:
-                yield {"data": json.dumps({"status": "error", "message": f"{provider} adapter not available"}, ensure_ascii=False)}
+                message = f"{provider} adapter not available"
+                task_registry.mark_error(task_id, message)
+                yield {
+                    "data": json.dumps(
+                        _wrap_task_payload(task_id, session_id, {"status": "error", "message": message}),
+                        ensure_ascii=False,
+                    )
+                }
                 return
 
             history = session_mgr.get_or_create_conversation(session_id)
             follow_up_msg = (
-                f"[使用者已授權執行高風險技能「{tool_name}」]\n"
-                f"執行結果如下，請根據結果給使用者一個清晰的總結：\n\n"
+                f"[Tool Approved and Executed: {tool_name}]\n"
+                "Please summarize the result for the user in a clear and concise way.\n\n"
                 f"```json\n{result_summary}\n```"
             )
-            outbound = [
-                {k: v for k, v in m.items() if k != "created_at"}
-                for m in history
-            ] + [{"role": "user", "content": follow_up_msg}]
+            outbound = [{k: v for k, v in msg.items() if k != "created_at"} for msg in history]
+            outbound.append({"role": "user", "content": follow_up_msg})
 
             final_content = ""
             for chunk in adapter.chat(messages=outbound, session_id=session_id, tools_enabled=False):
@@ -134,36 +167,93 @@ async def approve_tool_call(session_id: str):
                 if status == "streaming":
                     text = chunk.get("content", "")
                     final_content += text
-                    yield {"data": json.dumps({"status": "streaming", "content": text}, ensure_ascii=False)}
+                    task_registry.append_partial_text(task_id, text)
+                    yield {
+                        "data": json.dumps(
+                            _wrap_task_payload(task_id, session_id, {"status": "streaming", "content": text}),
+                            ensure_ascii=False,
+                        )
+                    }
                 elif status == "provider_meta":
-                    yield {"data": json.dumps(chunk, ensure_ascii=False)}
-                    continue
+                    yield {
+                        "data": json.dumps(
+                            _wrap_task_payload(task_id, session_id, chunk),
+                            ensure_ascii=False,
+                        )
+                    }
                 elif status == "success":
                     final = chunk.get("content", final_content) or final_content
                     session_mgr.append_message(session_id, "assistant", final)
-                    yield {"data": json.dumps({"status": "success", "content": final}, ensure_ascii=False)}
-                    break
+                    task_registry.mark_completed(
+                        task_id,
+                        final_text=final,
+                        assistant_message_persisted=True,
+                    )
+                    yield {
+                        "data": json.dumps(
+                            _wrap_task_payload(task_id, session_id, {"status": "success", "content": final}),
+                            ensure_ascii=False,
+                        )
+                    }
+                    return
+                elif status == "error":
+                    message = chunk.get("message", "Unknown error")
+                    task_registry.mark_error(task_id, message)
+                    yield {
+                        "data": json.dumps(
+                            _wrap_task_payload(task_id, session_id, {"status": "error", "message": message}),
+                            ensure_ascii=False,
+                        )
+                    }
+                    return
                 else:
-                    yield {"data": json.dumps(chunk, ensure_ascii=False)}
-                    break
-
-        except Exception as e:
-            logger.error(f"[Approve] Error resuming tool call for session={session_id}: {e}")
-            yield {"data": json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)}
+                    yield {
+                        "data": json.dumps(
+                            _wrap_task_payload(task_id, session_id, chunk),
+                            ensure_ascii=False,
+                        )
+                    }
+                    return
+        except Exception as exc:
+            logger.error(f"[Approve] Error resuming tool call for task={task_id}: {exc}")
+            task_registry.mark_error(task_id, str(exc))
+            yield {
+                "data": json.dumps(
+                    _wrap_task_payload(task_id, session_id, {"status": "error", "message": str(exc)}),
+                    ensure_ascii=False,
+                )
+            }
 
     return EventSourceResponse(resume_generator())
 
 
+@router.post("/chat/tasks/{task_id}/reject")
+def reject_tool_call_by_task(task_id: str):
+    task_registry = get_task_registry()
+    task = task_registry.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    tool_name = task.get("tool_name", "unknown")
+    session_id = task.get("session_id", "")
+    task_registry.mark_rejected(task_id, f"User rejected tool '{tool_name}'")
+    logger.info(f"[Reject] User rejected tool call '{tool_name}' for task={task_id} session={session_id}")
+    return {
+        "status": "rejected",
+        "task_id": task_id,
+        "session_id": session_id,
+        "tool_name": tool_name,
+        "message": f"Rejected '{tool_name}'",
+    }
+
+
+@router.post("/chat/approve/{session_id}")
+async def approve_tool_call(session_id: str):
+    task = _get_active_task_for_session(session_id)
+    return await approve_tool_call_by_task(task["task_id"])
+
+
 @router.post("/chat/reject/{session_id}")
 def reject_tool_call(session_id: str):
-    """
-    Phase 3-B: Reject endpoint.
-    Called by the frontend when the user declines a high-risk tool call.
-    Clears the pending approval store.
-    """
-    session_mgr = get_session_manager()
-    pending = session_mgr.get_pending_approval(session_id)
-    tool_name = pending.get("tool_name", "unknown") if pending else "unknown"
-    session_mgr.clear_pending_approval(session_id)
-    logger.info(f"[Reject] User rejected tool call '{tool_name}' for session={session_id}")
-    return {"status": "rejected", "tool_name": tool_name, "message": "使用者已拒絕執行此高風險操作。"}
+    task = _get_active_task_for_session(session_id)
+    return reject_tool_call_by_task(task["task_id"])

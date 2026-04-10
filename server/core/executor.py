@@ -117,7 +117,10 @@ class ExecutionEngine:
 
             # Channel 1: Environment variables (backward compatible, simple values only)
             for key, val in args.items():
-                current_env[f"SKILL_PARAM_{key.upper()}"] = str(val)
+                if isinstance(val, (dict, list)):
+                    current_env[f"SKILL_PARAM_{key.upper()}"] = _json.dumps(val, ensure_ascii=False)
+                else:
+                    current_env[f"SKILL_PARAM_{key.upper()}"] = str(val)
 
             # Channel 3: Temp JSON file (for scripts that prefer file I/O)
             temp_param_file = tempfile.NamedTemporaryFile(

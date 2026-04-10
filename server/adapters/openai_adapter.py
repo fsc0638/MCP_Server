@@ -461,20 +461,13 @@ class OpenAIAdapter:
                                 _knowledge_guide_skills_called.add(fn_name)
 
                         if result.get("status") == "requires_approval":
-                            # Phase 3-B: Store pending approval in session for resume endpoint
-                            if session_id:
-                                _session_mgr.set_pending_approval(session_id, {
-                                    "tool_name": fn_name,
-                                    "call_id": call_id,
-                                    "args": fn_args,
-                                    "current_response_id": current_response_id,
-                                    "model": self.model,
-                                })
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
                                 "risk_description": result.get("risk_description", "High-risk operation"),
                                 "pending_args": fn_args,
+                                "provider": "openai",
+                                "model": self.model,
                             }
                             return
 

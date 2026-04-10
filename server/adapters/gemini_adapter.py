@@ -447,21 +447,13 @@ class GeminiAdapter:
 
                         # Check for approval requirement
                         if result.get("status") == "requires_approval":
-                            # Phase 3-B: Store pending approval in session for resume endpoint
-                            from server.dependencies.session import get_session_manager
-                            _session_mgr = get_session_manager()
-                            if session_id:
-                                _session_mgr.set_pending_approval(session_id, {
-                                    "tool_name": fn_name,
-                                    "args": fn_args,
-                                    "provider": "gemini",
-                                    "model": self.model_name,
-                                })
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
                                 "risk_description": result.get("risk_description", "高風險操作，需要使用者授權"),
                                 "pending_args": fn_args,
+                                "provider": "gemini",
+                                "model": self.model_name,
                             }
                             return
 
