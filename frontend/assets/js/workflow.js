@@ -284,56 +284,98 @@
     }
 
     _routePath(x1, y1, x2, y2, fromSide, toSide) {
-      // Smart orthogonal routing that avoids overlapping blocks
-      const GAP = 24; // clearance around blocks
+      const GAP = GRID * 2; // 48px clearance
 
-      // Same axis (horizontal → horizontal)
-      if ((fromSide === "right" && toSide === "left") || (!fromSide && !toSide)) {
-        if (x2 > x1 + GAP) {
-          // Normal: right → left, go straight with mid bend
-          const midX = snap((x1 + x2) / 2);
-          return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
-        } else {
-          // Target is to the left — route around
-          const detourY = snap(Math.min(y1, y2) - BLOCK_H - GAP);
-          return `M ${x1} ${y1} L ${x1 + GAP} ${y1} L ${x1 + GAP} ${detourY} L ${x2 - GAP} ${detourY} L ${x2 - GAP} ${y2} L ${x2} ${y2}`;
+      // Get all block bounding boxes for collision detection
+      const boxes = [];
+      this.blocks.forEach(b => {
+        boxes.push({ x: b.x - GAP/2, y: b.y - GAP/2, w: BLOCK_W + GAP, h: BLOCK_H + GAP });
+      });
+
+      // Check if a horizontal or vertical segment intersects any block
+      const hitsBlock = (ax, ay, bx, by) => {
+        const minX = Math.min(ax, bx), maxX = Math.max(ax, bx);
+        const minY = Math.min(ay, by), maxY = Math.max(ay, by);
+        for (const box of boxes) {
+          if (maxX > box.x && minX < box.x + box.w && maxY > box.y && minY < box.y + box.h) {
+            return true;
+          }
         }
-      }
+        return false;
+      };
 
-      // Vertical connections (top/bottom)
-      if (fromSide === "bottom" && toSide === "top") {
-        if (y2 > y1 + GAP) {
-          const midY = snap((y1 + y2) / 2);
-          return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
-        } else {
-          const detourX = snap(Math.max(x1, x2) + BLOCK_W + GAP);
-          return `M ${x1} ${y1} L ${x1} ${y1 + GAP} L ${detourX} ${y1 + GAP} L ${detourX} ${y2 - GAP} L ${x2} ${y2 - GAP} L ${x2} ${y2}`;
-        }
-      }
-
-      // Mixed: right → top
-      if (fromSide === "right" && toSide === "top") {
-        return `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2}`;
-      }
-
-      // Mixed: bottom → left
-      if (fromSide === "bottom" && toSide === "left") {
-        return `M ${x1} ${y1} L ${x1} ${y2} L ${x2} ${y2}`;
-      }
-
-      // Mixed: right → bottom
-      if (fromSide === "right" && toSide === "bottom") {
-        return `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2}`;
-      }
-
-      // Fallback: generic orthogonal with midpoint
-      const midX = snap((x1 + x2) / 2);
-      const midY = snap((y1 + y2) / 2);
+      // Horizontal exit direction
       if (fromSide === "right" || fromSide === "left") {
-        return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
-      } else {
-        return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+        const dir = fromSide === "right" ? 1 : -1;
+        const exitX = x1 + dir * GAP;
+
+        if (toSide === "left" || toSide === "right") {
+          const enterX = toSide === "left" ? x2 - GAP : x2 + GAP;
+
+          // Direct horizontal path (same Y or close)
+          if (Math.abs(y1 - y2) < GRID && !hitsBlock(x1, y1, x2, y2)) {
+            return `M ${x1} ${y1} L ${x2} ${y2}`;
+          }
+
+          // Normal L-shape: horizontal → vertical → horizontal
+          const midX = snap((exitX + enterX) / 2);
+          if (!hitsBlock(exitX, y1, midX, y1) && !hitsBlock(midX, y1, midX, y2) && !hitsBlock(midX, y2, enterX, y2)) {
+            return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+          }
+
+          // Mid path blocked — try going around (choose shorter detour: up or down)
+          const detourUp = snap(Math.min(y1, y2) - BLOCK_H - GAP);
+          const detourDown = snap(Math.max(y1, y2) + BLOCK_H + GAP);
+          // Pick whichever is closer to the midpoint (shorter path)
+          const midY = (y1 + y2) / 2;
+          const detourY = Math.abs(detourUp - midY) < Math.abs(detourDown - midY) ? detourUp : detourDown;
+
+          return `M ${x1} ${y1} L ${exitX} ${y1} L ${exitX} ${detourY} L ${enterX} ${detourY} L ${enterX} ${y2} L ${x2} ${y2}`;
+        }
+
+        // Horizontal → Vertical target (top/bottom)
+        if (toSide === "top" || toSide === "bottom") {
+          const enterY = toSide === "top" ? y2 - GAP : y2 + GAP;
+          return `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2}`;
+        }
       }
+
+      // Vertical exit direction
+      if (fromSide === "bottom" || fromSide === "top") {
+        const dir = fromSide === "bottom" ? 1 : -1;
+        const exitY = y1 + dir * GAP;
+
+        if (toSide === "top" || toSide === "bottom") {
+          const enterY = toSide === "top" ? y2 - GAP : y2 + GAP;
+
+          // Direct vertical
+          if (Math.abs(x1 - x2) < GRID && !hitsBlock(x1, y1, x2, y2)) {
+            return `M ${x1} ${y1} L ${x2} ${y2}`;
+          }
+
+          // Normal: vertical → horizontal → vertical
+          const midY = snap((exitY + enterY) / 2);
+          if (!hitsBlock(x1, exitY, x1, midY) && !hitsBlock(x1, midY, x2, midY) && !hitsBlock(x2, midY, x2, enterY)) {
+            return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+          }
+
+          // Detour left or right
+          const detourLeft = snap(Math.min(x1, x2) - BLOCK_W - GAP);
+          const detourRight = snap(Math.max(x1, x2) + BLOCK_W + GAP);
+          const midX = (x1 + x2) / 2;
+          const detourX = Math.abs(detourLeft - midX) < Math.abs(detourRight - midX) ? detourLeft : detourRight;
+
+          return `M ${x1} ${y1} L ${x1} ${exitY} L ${detourX} ${exitY} L ${detourX} ${enterY} L ${x2} ${enterY} L ${x2} ${y2}`;
+        }
+
+        // Vertical → Horizontal target
+        if (toSide === "left" || toSide === "right") {
+          return `M ${x1} ${y1} L ${x1} ${y2} L ${x2} ${y2}`;
+        }
+      }
+
+      // Fallback: simple L-shape
+      return `M ${x1} ${y1} L ${x1} ${y2} L ${x2} ${y2}`;
     }
 
     // ── Reset ────────────────────────────────────────────────
