@@ -265,12 +265,14 @@
     }
 
     _getPortPos(block, side) {
+      // Return position OUTSIDE the block's margin zone so routing starts clean
+      const M = GRID * 2; // must match _routePath margin
       switch (side) {
-        case "right":  return { x: block.x + BLOCK_W + 1, y: block.y + BLOCK_H / 2 };
-        case "left":   return { x: block.x - 1,           y: block.y + BLOCK_H / 2 };
-        case "bottom": return { x: block.x + BLOCK_W / 2, y: block.y + BLOCK_H + 1 };
-        case "top":    return { x: block.x + BLOCK_W / 2, y: block.y - 1 };
-        default:       return { x: block.x + BLOCK_W + 1, y: block.y + BLOCK_H / 2 };
+        case "right":  return { x: block.x + BLOCK_W + M, y: block.y + BLOCK_H / 2 };
+        case "left":   return { x: block.x - M,           y: block.y + BLOCK_H / 2 };
+        case "bottom": return { x: block.x + BLOCK_W / 2, y: block.y + BLOCK_H + M };
+        case "top":    return { x: block.x + BLOCK_W / 2, y: block.y - M };
+        default:       return { x: block.x + BLOCK_W + M, y: block.y + BLOCK_H / 2 };
       }
     }
 
@@ -278,9 +280,31 @@
       const fb = this.blocks.get(conn.from);
       const tb = this.blocks.get(conn.to);
       if (!fb || !tb) return;
-      const p1 = this._getPortPos(fb, conn.fromSide || "right");
+
+      // Actual port on block edge (for visual start/end)
+      const _portEdge = (block, side) => {
+        switch (side) {
+          case "right":  return { x: block.x + BLOCK_W, y: block.y + BLOCK_H / 2 };
+          case "left":   return { x: block.x,           y: block.y + BLOCK_H / 2 };
+          case "bottom": return { x: block.x + BLOCK_W / 2, y: block.y + BLOCK_H };
+          case "top":    return { x: block.x + BLOCK_W / 2, y: block.y };
+          default:       return { x: block.x + BLOCK_W, y: block.y + BLOCK_H / 2 };
+        }
+      };
+
+      const edge1 = _portEdge(fb, conn.fromSide || "right");
+      const edge2 = _portEdge(tb, conn.toSide || "left");
+      const p1 = this._getPortPos(fb, conn.fromSide || "right"); // outside margin
       const p2 = this._getPortPos(tb, conn.toSide || "left");
-      conn.el.setAttribute("d", this._routePath(p1.x, p1.y, p2.x, p2.y, conn.fromSide, conn.toSide, conn.from, conn.to));
+
+      // Route between margin-outside points
+      const routedPath = this._routePath(p1.x, p1.y, p2.x, p2.y, conn.fromSide, conn.toSide, conn.from, conn.to);
+
+      // Prepend edge→margin start, append margin→edge end
+      const fullPath = `M ${edge1.x} ${edge1.y} L ${p1.x} ${p1.y} ` +
+        routedPath.replace(/^M\s*[\d.]+\s+[\d.]+\s*/, "") +
+        ` L ${edge2.x} ${edge2.y}`;
+      conn.el.setAttribute("d", fullPath);
     }
 
     _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
@@ -295,12 +319,10 @@
         boxes.push({ l: b.x - M, t: b.y - M, r: b.x + BLOCK_W + M, b: b.y + BLOCK_H + M, id: b.id });
       });
 
-      // Segment collision: does a horizontal line at y from xA to xB cross any block?
-      // Exclude the two connected blocks only at their port positions
+      // Segment collision — checks ALL blocks, no exclusions
       const hHits = (y, xA, xB) => {
         const lo = Math.min(xA, xB), hi = Math.max(xA, xB);
         for (const box of boxes) {
-          if (box.id === fromBlockId || box.id === toBlockId) continue;
           if (y > box.t && y < box.b && hi > box.l && lo < box.r) return true;
         }
         return false;
@@ -308,7 +330,6 @@
       const vHits = (x, yA, yB) => {
         const lo = Math.min(yA, yB), hi = Math.max(yA, yB);
         for (const box of boxes) {
-          if (box.id === fromBlockId || box.id === toBlockId) continue;
           if (x > box.l && x < box.r && hi > box.t && lo < box.b) return true;
         }
         return false;
