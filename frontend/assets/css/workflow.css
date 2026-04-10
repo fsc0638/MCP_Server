@@ -131,7 +131,8 @@
 
 /* ── Flow Block ──────────────────────────────────────────────── */
 .wf-block {
-  position: absolute; width: 120px;
+  position: absolute; width: 120px; height: 80px;
+  display: flex; flex-direction: column;
   background: var(--bg-surface, #fff);
   border: 2px solid var(--border-subtle, #E2E8F0);
   border-radius: 10px;
@@ -161,7 +162,7 @@
 }
 .wf-block-body {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 6px 10px;
+  flex: 1; padding: 6px 10px;
   font-size: 0.65rem; color: var(--text-tertiary, #94A3B8);
 }
 

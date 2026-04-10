@@ -372,11 +372,6 @@
         return true;
       };
 
-      // Build path: always start with port→extension, end with extension→port
-      // Middle: connect sx,sy → ex,ey
-      const prefix = `M ${x1} ${y1} L ${sx} ${sy}`;
-      const suffix = `L ${ex} ${ey} L ${x2} ${y2}`;
-
       // Candidate corridor positions (1 grid outside every block edge)
       const cxs = new Set();
       const cys = new Set();
@@ -393,25 +388,40 @@
         return l;
       };
 
+      // Remove consecutive duplicates, then collinear intermediate points
       const simplify = (pts) => {
         if (pts.length <= 2) return pts;
-        const s = [pts[0]];
-        for (let i = 1; i < pts.length - 1; i++) {
-          const p = pts[i-1], c = pts[i], n = pts[i+1];
+        // Step 1: dedup consecutive identical points
+        const d = [pts[0]];
+        for (let i = 1; i < pts.length; i++) {
+          if (pts[i][0] !== d[d.length-1][0] || pts[i][1] !== d[d.length-1][1]) d.push(pts[i]);
+        }
+        if (d.length <= 2) return d;
+        // Step 2: remove collinear intermediate points
+        const s = [d[0]];
+        for (let i = 1; i < d.length - 1; i++) {
+          const p = d[i-1], c = d[i], n = d[i+1];
           if (!((p[0]===c[0]&&c[0]===n[0]) || (p[1]===c[1]&&c[1]===n[1]))) s.push(c);
         }
-        s.push(pts[pts.length-1]);
+        s.push(d[d.length-1]);
         return s;
       };
 
+      // Build clean SVG path from waypoint array:
+      //   [port1] → [ext1] → [mid waypoints] → [ext2] → [port2]
+      // simplify() removes collinear points (e.g. ext merges into straight segments)
+      const toSvg = (midPts) => {
+        const all = [[x1,y1], ...midPts, [x2,y2]];
+        const s = simplify(all);
+        return "M " + s.map(p => `${p[0]} ${p[1]}`).join(" L ");
+      };
+
       // Try direct connection (straight line if aligned)
-      if (Math.abs(sx - ex) < 2) {
-        // Vertical straight
-        if (vOK(sx, sy, ey)) return `${prefix} L ${ex} ${ey} ${suffix.replace(/^L\s*[\d.-]+\s+[\d.-]+\s*/, "")}`;
+      if (Math.abs(sx - ex) < 2 && vOK(sx, sy, ey)) {
+        return toSvg([[sx,sy],[ex,ey]]);
       }
-      if (Math.abs(sy - ey) < 2) {
-        // Horizontal straight
-        if (hOK(sy, sx, ex)) return `${prefix} L ${ex} ${ey} ${suffix.replace(/^L\s*[\d.-]+\s+[\d.-]+\s*/, "")}`;
+      if (Math.abs(sy - ey) < 2 && hOK(sy, sx, ex)) {
+        return toSvg([[sx,sy],[ex,ey]]);
       }
 
       // Try 3-segment paths
@@ -421,7 +431,7 @@
       for (const mx of [...cxs].sort((a,b) => Math.abs(a-(sx+ex)/2) - Math.abs(b-(sx+ex)/2))) {
         if (hOK(sy, sx, mx) && vOK(mx, sy, ey) && hOK(ey, mx, ex)) {
           const pts = [[sx,sy],[mx,sy],[mx,ey],[ex,ey]];
-          results.push({ pts: simplify(pts), len: pathLen(pts) });
+          results.push({ pts, len: pathLen(pts) });
         }
       }
 
@@ -429,7 +439,7 @@
       for (const my of [...cys].sort((a,b) => Math.abs(a-(sy+ey)/2) - Math.abs(b-(sy+ey)/2))) {
         if (vOK(sx, sy, my) && hOK(my, sx, ex) && vOK(ex, my, ey)) {
           const pts = [[sx,sy],[sx,my],[ex,my],[ex,ey]];
-          results.push({ pts: simplify(pts), len: pathLen(pts) });
+          results.push({ pts, len: pathLen(pts) });
         }
       }
 
@@ -439,12 +449,12 @@
           // H-V-H-V-H
           if (hOK(sy,sx,mx) && vOK(mx,sy,my) && hOK(my,mx,ex) && vOK(ex,my,ey)) {
             const pts = [[sx,sy],[mx,sy],[mx,my],[ex,my],[ex,ey]];
-            results.push({ pts: simplify(pts), len: pathLen(pts) });
+            results.push({ pts, len: pathLen(pts) });
           }
           // V-H-V-H-V
           if (vOK(sx,sy,my) && hOK(my,sx,mx) && vOK(mx,my,ey) && hOK(ey,mx,ex)) {
             const pts = [[sx,sy],[sx,my],[mx,my],[mx,ey],[ex,ey]];
-            results.push({ pts: simplify(pts), len: pathLen(pts) });
+            results.push({ pts, len: pathLen(pts) });
           }
         }
       }
@@ -452,8 +462,7 @@
       // Pick shortest
       if (results.length > 0) {
         results.sort((a, b) => a.len - b.len);
-        const mid = results[0].pts;
-        return prefix + " L " + mid.map(p => `${p[0]} ${p[1]}`).join(" L ") + " " + suffix;
+        return toSvg(results[0].pts);
       }
 
       // Fallback: route via extreme outer edge
@@ -469,7 +478,7 @@
       ];
       fbs.forEach(f => f.len = pathLen(f.pts));
       fbs.sort((a,b) => a.len - b.len);
-      return prefix + " L " + fbs[0].pts.map(p=>`${p[0]} ${p[1]}`).join(" L ") + " " + suffix;
+      return toSvg(fbs[0].pts);
     }
 
     // ── Reset ────────────────────────────────────────────────
