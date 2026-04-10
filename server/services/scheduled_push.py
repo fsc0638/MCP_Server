@@ -526,7 +526,7 @@ class ScheduledPushService:
         return cleaned if len(cleaned) >= 2 else "綜合"
 
     @classmethod
-    def _infer_news_config_from_text(cls, text: str) -> dict | None:
+    def _infer_news_config_from_text(cls, text: Optional[str]) -> Optional[dict]:
         """
         If text looks like a news request, extract structured config.
         Inspired by AutoScan's field-mapping approach:
@@ -873,7 +873,7 @@ class ScheduledPushService:
     # Tools that MUST be available for scheduled push tasks
     _REQUIRED_TOOLS_IN_PUSH = {"mcp-web-search", "mcp-python-executor"}
 
-    def _run_via_adapter(self, prompt: str, session_id: str, needs_file: bool = False) -> str | None:
+    def _run_via_adapter(self, prompt: str, session_id: str, needs_file: bool = False) -> Optional[str]:
         """Run prompt through full OpenAI Adapter with tool calling enabled.
 
         Args:
