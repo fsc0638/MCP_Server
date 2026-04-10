@@ -1463,11 +1463,49 @@ def _process_line_message(
                 recent_history=_recent_history,
             )
 
+            # Skill-aware model upgrade: if input strongly suggests a specific skill,
+            # check that skill's recommended_models and upgrade if needed
+            try:
+                from server.services.model_selector import select_model_for_skill, detect_provider
+                from server.adapters import select_relevant_tools
+                _all_tools = uma.get_tools_for_model("openai")
+                _input_lower = (user_input or "").lower()
+
+                # Quick skill detection from keywords
+                _likely_skill = None
+                _skill_keywords = {
+                    "mcp-groovenauts-meeting-analyst": ["groovenauts", "會議記錄", "會議紀錄", "日方會議"],
+                    "mcp-google-calendar": ["行程", "日曆", "calendar"],
+                    "mcp-web-search": ["搜尋", "新聞", "查詢"],
+                    "mcp-image-generator": ["畫", "圖片", "插圖"],
+                    "mcp-schedule-manager": ["排程", "推送", "提醒"],
+                    "mcp-gai-worksheet-facilitator": ["學習單", "worksheet", "GAI"],
+                }
+                for _sname, _kws in _skill_keywords.items():
+                    if any(kw in _input_lower for kw in _kws):
+                        _likely_skill = _sname
+                        break
+
+                if _likely_skill:
+                    _skill_info = uma.registry.get_skill(_likely_skill)
+                    if _skill_info:
+                        _skill_rec_model = select_model_for_skill(
+                            _likely_skill,
+                            _skill_info.get("metadata", {}),
+                            user_default_model=_routed_model,
+                            estimated_input_tokens=len(user_input or "") // 3,
+                        )
+                        if _skill_rec_model != _routed_model:
+                            logger.info(f"[LINE Router] Skill-aware upgrade: {_routed_model} → {_skill_rec_model} (for {_likely_skill})")
+                            _routed_model = _skill_rec_model
+            except Exception as _mse:
+                logger.debug(f"[LINE Router] Skill-aware model check skipped: {_mse}")
+
             adapter = OpenAIAdapter(uma=uma, model=_routed_model)
             # Tier-aware max_output_tokens:
             # - nano/mini: 2048 節省 TPM（閒聊、單工具任務輸出短）
-            # - full/file : 8192 支援複合任務（e.g. Groovenauts 7 節分析 + python-executor）
-            if _routed_tier in ("full", "file"):
+            # - full/file : 8192 支援複雜任務
+            if _routed_tier in ("full", "file") or _routed_model in ("gpt-4.1", "gpt-4o"):
                 adapter.max_output_tokens = 8192
             else:
                 adapter.max_output_tokens = 2048

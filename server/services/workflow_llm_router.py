@@ -122,35 +122,16 @@ class WorkflowLLMRouter:
 
     def select_model(self, skill_name: str, recommended_models: dict = None,
                      block_override: str = None, input_size: int = 0) -> str:
-        """Select the best model for a block.
-
-        Priority:
-        1. Block-level override (user set on specific block)
-        2. Skill's recommended_models.{provider}
-        3. Default model
-        + TPM safety downgrade
-        """
-        # Block override takes highest priority
-        if block_override:
-            model = block_override
-        elif recommended_models:
-            provider = _detect_provider(self.default_model)
-            model = recommended_models.get(provider, self.default_model)
-        else:
-            model = self.default_model
-
-        # TPM safety: if estimated input is too large, downgrade
-        budget = MODEL_BUDGETS.get(model, 20000)
-        estimated = input_size + 500  # +500 for system prompt overhead
-        while estimated > budget * 0.8:  # 80% threshold
-            downgraded = _downgrade_model(model)
-            if not downgraded:
-                break
-            logger.info(f"[WF Router] Downgrading {model} → {downgraded} (est={estimated} > budget={budget})")
-            model = downgraded
-            budget = MODEL_BUDGETS.get(model, 20000)
-
-        return model
+        """Select the best model for a block using unified model_selector."""
+        from server.services.model_selector import select_model_for_skill
+        skill_metadata = {"recommended_models": recommended_models} if recommended_models else {}
+        return select_model_for_skill(
+            skill_name=skill_name,
+            skill_metadata=skill_metadata,
+            user_default_model=self.default_model,
+            override_model=block_override,
+            estimated_input_tokens=input_size,
+        )
 
     async def route_params(self, context: Dict[str, Any], model: str = None) -> Dict[str, Any]:
         """Use LLM to generate parameters for the next skill.
