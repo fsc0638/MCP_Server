@@ -266,7 +266,7 @@
 
     _getPortPos(block, side) {
       // Return position OUTSIDE the block's margin zone so routing starts clean
-      const M = GRID * 2; // must match _routePath margin
+      const M = GRID; // must match _routePath margin
       switch (side) {
         case "right":  return { x: block.x + BLOCK_W + M, y: block.y + BLOCK_H / 2 };
         case "left":   return { x: block.x - M,           y: block.y + BLOCK_H / 2 };
@@ -309,9 +309,8 @@
 
     _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
       // Strict orthogonal routing — lines NEVER enter any block's bounding box
-      // Approach: extend from ports → route via safe corridors outside ALL blocks
 
-      const M = GRID * 2; // 48px margin around blocks
+      const M = GRID; // 24px margin around blocks (keep tight for close blocks)
 
       // Build expanded bounding boxes for ALL blocks (including connected ones for collision)
       const boxes = [];
@@ -403,9 +402,21 @@
         return "M " + simplified.map(p => `${p[0]} ${p[1]}`).join(" L ");
       }
 
-      // Ultimate fallback
-      const mx = snap((x1 + x2) / 2);
-      return `M ${x1} ${y1} L ${mx} ${y1} L ${mx} ${y2} L ${x2} ${y2}`;
+      // Ultimate fallback — go around via outermost edge
+      const farRight = snap(Math.max(...[...safeXs]) + M * 2);
+      const farLeft  = snap(Math.min(...[...safeXs]) - M * 2);
+      const farTop   = snap(Math.min(...[...safeYs]) - M * 2);
+      const farBot   = snap(Math.max(...[...safeYs]) + M * 2);
+
+      // Pick the shortest detour around everything
+      const fallbacks = [
+        [[x1,y1],[farRight,y1],[farRight,y2],[x2,y2]],
+        [[x1,y1],[farLeft,y1],[farLeft,y2],[x2,y2]],
+        [[x1,y1],[x1,farTop],[x2,farTop],[x2,y2]],
+        [[x1,y1],[x1,farBot],[x2,farBot],[x2,y2]],
+      ];
+      fallbacks.sort((a, b) => pathLen(a) - pathLen(b));
+      return "M " + fallbacks[0].map(p => `${p[0]} ${p[1]}`).join(" L ");
     }
 
     // ── Reset ────────────────────────────────────────────────
