@@ -41,8 +41,6 @@ class SessionManager:
         # P-03: Responses API Memory Map (session_id → response.id)
         self._latest_response_ids: Dict[str, str] = {}
 
-        # Phase 3: Pending approval store (session_id → approval payload)
-        self._pending_approvals: Dict[str, Dict[str, Any]] = {}
 
         # Ensure directories exist
         self.memory_dir.mkdir(exist_ok=True)
@@ -371,19 +369,6 @@ class SessionManager:
         return self._latest_response_ids.get(session_id)
 
     # ─── Phase 3: Pending Approval Store ──────────────────────────────────────
-
-    def set_pending_approval(self, session_id: str, payload: Dict[str, Any]):
-        """Store a pending high-risk tool call awaiting user approval."""
-        self._pending_approvals[session_id] = payload
-        logger.info(f"[Session] Pending approval stored for session={session_id}, tool={payload.get('tool_name')}")
-
-    def get_pending_approval(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve the pending approval payload for a session."""
-        return self._pending_approvals.get(session_id)
-
-    def clear_pending_approval(self, session_id: str):
-        """Clear the pending approval after it has been resolved."""
-        self._pending_approvals.pop(session_id, None)
 
     # ─── Per-session Metadata (Key-Value, disk-persisted) ─────────────────────
 

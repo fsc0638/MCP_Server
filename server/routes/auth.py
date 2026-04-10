@@ -63,6 +63,55 @@ async def google_login(req: GoogleLoginRequest):
         raise HTTPException(status_code=500, detail=f"Authentication failed: {str(e)}")
 
 
+# ── Google Workspace OAuth (personal account binding) ─────────────────────
+
+@router.get("/google/workspace/login")
+def google_workspace_login(session_id: str = ""):
+    """Redirect user to Google OAuth consent screen for personal binding."""
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    try:
+        from server.services.google_auth import build_authorize_url
+        url = build_authorize_url(session_id)
+        return RedirectResponse(url=url, status_code=302)
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/google/workspace/callback")
+def google_workspace_callback(code: str = "", state: str = "", error: str = ""):
+    """Google OAuth callback — exchange code for tokens, store credentials."""
+    if error:
+        raise HTTPException(status_code=401, detail=f"Google auth error: {error}")
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing code or state parameter")
+    try:
+        from server.services.google_auth import handle_callback
+        result = handle_callback(code=code, session_id=state)
+        # Return a simple success page that can be closed
+        return {
+            "status": "success",
+            "message": "Google 帳號綁定成功！你可以關閉此頁面，回到 LINE 繼續使用。",
+            "session_id": state,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Google OAuth callback failed: {str(e)}")
+
+
+@router.get("/google/workspace/status")
+def google_workspace_status(session_id: str = ""):
+    """Check if a session has Google credentials bound."""
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    from server.services.google_auth import has_credentials, has_service_account
+    return {
+        "personal_oauth": has_credentials(session_id),
+        "service_account": has_service_account(),
+    }
+
+
+# ── LINE Login ────────────────────────────────────────────────────────────
+
 @router.get("/line/login")
 def line_login():
     """Start LINE Login (web) by redirecting to LINE authorize endpoint."""
@@ -128,12 +177,51 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
     if not sess:
         return {"status": "error", "message": "session_expired"}
 
-    # UI wants: name / picture / user id
+    # Load extended user context if available
+    # Try multiple session_id formats to find the user context file
+    _ctx = None
+    try:
+        from server.services.employee_lookup import get_user_context
+        # sess.user_id could be:
+        #   "line_U09e..." (from LINE Login canonical_line_session_id)
+        #   "U09e..." (raw LINE userId)
+        #   "google_xxx" (from Google login)
+        _uid = sess.user_id
+        _candidates = [_uid]  # Try as-is first
+        if _uid.startswith("line_"):
+            pass  # Already has prefix, as-is is correct
+        elif _uid.startswith("U"):
+            _candidates.append(f"line_{_uid}")  # Add line_ prefix
+        for _cand in _candidates:
+            _ctx = get_user_context(_cand)
+            if _ctx:
+                break
+    except Exception:
+        _ctx = None
+
     user = {
         "id": sess.user_id,
-        "name": sess.name or "LINE User",
+        "session_id": _uid,
+        "name": (_ctx.get("name") if _ctx else None) or sess.name or "LINE User",
         "picture": sess.picture or "",
-        "initials": (sess.name or "L")[:2].upper(),
+        "initials": ((_ctx.get("name") if _ctx else None) or sess.name or "L")[:2].upper(),
         "provider": "line",
     }
+
+    # Merge extended profile fields if available
+    if _ctx:
+        user["employee_id"] = _ctx.get("employee_id", "")
+        user["email"] = _ctx.get("email", "")
+        user["department"] = _ctx.get("department", "")
+        user["department_code"] = _ctx.get("department_code", "")
+        user["department_name"] = _ctx.get("department_name", "")
+        user["title"] = _ctx.get("title", "")
+        user["extension"] = _ctx.get("extension", "")
+        user["role"] = _ctx.get("role", "editor")
+        user["preferences"] = _ctx.get("preferences", {})
+        user["onboarding_completed"] = _ctx.get("onboarding_completed", False)
+
+    # Temporary debug: include raw session info
+    user["_debug_sess_user_id"] = sess.user_id
+    user["_debug_ctx_found"] = _ctx is not None
     return {"status": "success", "user": user}

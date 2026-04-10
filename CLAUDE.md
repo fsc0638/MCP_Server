@@ -36,7 +36,7 @@ LINE_ROUTER_ENABLED=true
 LINE_MODEL_ROUTER=gpt-4.1-nano           # Cheapest model for tier classification
 LINE_MODEL_MINI=gpt-4.1-mini
 LINE_MODEL_FULL=gpt-4.1
-NOTION_TOKEN=...                         # For mcp-meeting-to-notion skill
+NOTION_TOKEN=...                         # For mcp-notion-crud skill
 NOTION_DATABASE_ID=...
 ```
 
@@ -99,7 +99,7 @@ Skills with `risk_level: high` are intercepted in `UMA.execute_tool_call()` — 
 - `.docx` / `.xlsx` / `.pdf` files → listed as absolute template paths for python-executor to load
 - Applies to **Code** and **Semantic** modes only (Executable mode uses subprocess I/O)
 
-**Per-Skill Timeout**: `execution_timeout` in SKILL.md frontmatter overrides the default 30s. Read in `uma_core.py`, passed to `executor.run_script(timeout=...)`. Use for any skill making external API calls (e.g. `mcp-meeting-to-notion` uses 120s for 3 sequential LLM calls + Notion upload).
+**Per-Skill Timeout**: `execution_timeout` in SKILL.md frontmatter overrides the default 30s. Read in `uma_core.py`, passed to `executor.run_script(timeout=...)`. Use for any skill making external API calls (e.g. `mcp-notion-crud` uses 120s for batch Schema Mapping + Notion upload).
 
 ### Session & Memory
 
@@ -191,7 +191,7 @@ All adapters in `server/adapters/` implement two methods:
 
 The OpenAI adapter uses the **Responses API** (`client.responses.create`), not Chat Completions, for tool calling. `simple_chat` uses `client.chat.completions.create`.
 
-**Original File Injection** (`openai_adapter.py`): When `mcp-meeting-to-notion` is called, the adapter checks `self._original_file_path`. If set and the file exists, it reads the full original text and overrides the `transcript` parameter (replacing any LLM-generated summary with the actual source content).
+**Original File Injection** (`openai_adapter.py`): When `mcp-meeting-analyzer` is called, the adapter checks `self._original_file_path`. If set and the file exists, it reads the full original text and overrides the `transcript` parameter (replacing any LLM-generated summary with the actual source content).
 
 ### LINE Bot Integration
 
@@ -288,7 +288,8 @@ Push commands: `git push origin fsc` / `git push origin AgentK_UAT`
 | `mcp-spreadsheet-llm-analyzer` | executable | 30s | Spreadsheet analysis |
 | `mcp-web-search` | executable | 30s | Web search |
 | `mcp-python-executor` | executable | 30s | Python code execution |
-| `mcp-meeting-to-notion` | executable | 120s | 4-phase pipeline → Notion DB upload |
+| `mcp-meeting-analyzer` | executable | 60s | 2-phase pipeline: transcript → cleaned text + org data |
+| `mcp-notion-crud` | executable | 120s | Notion CRUD: create/create_batch/list/summary/update/delete |
 | `mcp-groovenaust-meeting-analyst` | semantic | — | PMP/PgMP/PfMP meeting analysis |
 | `mcp-image-generator` | executable | 60s | AI image generation via gpt-image-1; returns base64 PNG saved to downloads/ |
 | `mcp-schedule-manager` | executable | 30s | Manage scheduled push tasks (add/list/remove/pause/resume/trigger) |

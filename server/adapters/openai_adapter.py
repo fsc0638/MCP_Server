@@ -84,7 +84,7 @@ class OpenAIAdapter:
 
         from server.adapters import select_relevant_tools
 
-        all_tools = self.uma.get_tools_for_model("openai")
+        all_tools = self.uma.get_tools_for_model("openai", user_context=getattr(self, "user_context", None))
 
         if user_query:
             all_tools = select_relevant_tools(user_query, all_tools, max_tools)
@@ -380,16 +380,54 @@ class OpenAIAdapter:
                                 fn_args.setdefault("_original_filename", _session_mgr.get_metadata(session_id, "last_original_filename") or "")
                                 if _orig_date:
                                     fn_args.setdefault("meeting_date", _orig_date)
-                                # For meeting-to-notion: inject full transcript text
-                                if fn_name == "mcp-meeting-to-notion":
+                                # For meeting-analyzer: inject full transcript text
+                                if fn_name == "mcp-meeting-analyzer":
                                     try:
                                         with open(_orig_path, "r", encoding="utf-8") as _f:
                                             _original_text = _f.read()
                                         if _original_text and len(_original_text) > len(fn_args.get("transcript", "")):
                                             fn_args["transcript"] = _original_text
-                                            logger.info(f"[Adapter] Injected original file ({len(_original_text)} chars) into mcp-meeting-to-notion transcript")
+                                            logger.info(f"[Adapter] Injected original file ({len(_original_text)} chars) into mcp-meeting-analyzer transcript")
                                     except Exception as _e:
                                         logger.warning(f"[Adapter] Failed to inject original file: {_e}")
+
+                        # For meeting-analyzer: fallback to user_query if transcript still empty
+                        if fn_name == "mcp-meeting-analyzer" and not fn_args.get("transcript") and user_query:
+                            fn_args["transcript"] = user_query
+                            logger.info(f"[Adapter] Injected user_query ({len(user_query)} chars) into mcp-meeting-analyzer transcript (no file path)")
+
+                        # Google Workspace skills: check credentials before execution
+                        if fn_name.startswith("mcp-google-") and session_id:
+                            try:
+                                from server.services.google_auth import (
+                                    get_credentials_env, needs_personal_oauth,
+                                    has_credentials, has_service_account, build_authorize_url,
+                                )
+                                _google_env = get_credentials_env(session_id)
+                                _need_personal = needs_personal_oauth(fn_name)
+
+                                if not _google_env or (_need_personal and not has_credentials(session_id)):
+                                    # No credentials available → return auth URL
+                                    try:
+                                        _auth_url = build_authorize_url(session_id)
+                                        _msg = (
+                                            f"此功能需要綁定你的 Google 帳號。\n"
+                                            f"請點擊以下連結完成授權：\n{_auth_url}\n\n"
+                                            f"授權完成後，再重新告訴我你的需求即可！"
+                                        )
+                                    except Exception:
+                                        _msg = "此功能需要 Google 授權，但系統尚未設定 OAuth。請聯絡管理員。"
+
+                                    result = {"status": "success", "output": json.dumps({
+                                        "status": "auth_required",
+                                        "message": _msg,
+                                    }, ensure_ascii=False)}
+                                    # Feed auth message back to LLM as tool result
+                                    tool_results.append({"type": "function_call_output", "call_id": call_id, "output": json.dumps(result, ensure_ascii=False)})
+                                    logger.info(f"[Adapter] Google auth required for {fn_name}, session={session_id}")
+                                    continue
+                            except Exception as _ge:
+                                logger.debug(f"[Adapter] Google auth check skipped: {_ge}")
 
                         # Inject session context for schedule-manager skill
                         if fn_name == "mcp-schedule-manager" and session_id:
@@ -423,20 +461,13 @@ class OpenAIAdapter:
                                 _knowledge_guide_skills_called.add(fn_name)
 
                         if result.get("status") == "requires_approval":
-                            # Phase 3-B: Store pending approval in session for resume endpoint
-                            if session_id:
-                                _session_mgr.set_pending_approval(session_id, {
-                                    "tool_name": fn_name,
-                                    "call_id": call_id,
-                                    "args": fn_args,
-                                    "current_response_id": current_response_id,
-                                    "model": self.model,
-                                })
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
                                 "risk_description": result.get("risk_description", "High-risk operation"),
                                 "pending_args": fn_args,
+                                "provider": "openai",
+                                "model": self.model,
                             }
                             return
 
@@ -581,21 +612,59 @@ class OpenAIAdapter:
                 clean_msg = {k: v for k, v in msg.items() if k != "created_at"}
                 clean_history.append(clean_msg)
 
+            import time as _time
+            _t0 = _time.time()
+            _session_id = kwargs.get("session_id", "")
+
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=clean_history,
                 temperature=temperature,
-                stream=True
+                stream=True,
+                stream_options={"include_usage": True},
                 # NOTE: No 'tools' or 'tool_choice' passed — strictly isolated
             )
             full_content = ""
+            _usage = {}
             for chunk in response:
+                # Capture usage from final chunk
+                if hasattr(chunk, "usage") and chunk.usage:
+                    _usage = {
+                        "input_tokens": getattr(chunk.usage, "prompt_tokens", 0),
+                        "output_tokens": getattr(chunk.usage, "completion_tokens", 0),
+                        "total_tokens": getattr(chunk.usage, "total_tokens", 0),
+                    }
                 choice = chunk.choices[0] if chunk.choices else None
-                if choice and choice.delta.content is not None:
+                if choice and choice.delta and choice.delta.content is not None:
                     text = choice.delta.content
                     full_content += text
                     yield {"status": "streaming", "content": text}
-                    
+
+            # Record token usage (D1)
+            try:
+                from server.services.token_tracker import TokenTracker
+                _elapsed = int((_time.time() - _t0) * 1000)
+                _tracker = TokenTracker(str(Path(__file__).resolve().parents[2]))
+                _tracker.record_usage(
+                    session_id=_session_id,
+                    user_id="",
+                    chat_type="web",
+                    chat_id="",
+                    skill="(chat)",
+                    model=self.model,
+                    tier="",
+                    response_id="",
+                    input_tokens=_usage.get("input_tokens", 0),
+                    output_tokens=_usage.get("output_tokens", 0),
+                    total_tokens=_usage.get("total_tokens", 0),
+                    skill_internal_tokens=0,
+                    duration_ms=_elapsed,
+                    status="success",
+                )
+                logger.info(f"[OpenAI D1] simple_chat usage: in={_usage.get('input_tokens',0)} out={_usage.get('output_tokens',0)} total={_usage.get('total_tokens',0)}")
+            except Exception as _te:
+                logger.debug(f"[OpenAI D1] simple_chat token tracking failed: {_te}")
+
             yield {"status": "success", "content": full_content}
         except Exception as e:
             err_str = str(e)

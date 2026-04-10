@@ -867,7 +867,7 @@ class ScheduledPushService:
         "mcp-txt-llm-analyzer",             # Read-only analyzer
         "mcp-spreadsheet-llm-analyzer",     # Read-only analyzer
         "mcp-groovenaust-meeting-analyst",  # Meeting-specific
-        "mcp-meeting-to-notion",            # Meeting-specific
+        "mcp-meeting-analyzer",              # Meeting-specific
         "mcp-high-risk-demo",               # Test only
     }
     # Tools that MUST be available for scheduled push tasks
@@ -1145,6 +1145,12 @@ class ScheduledPushService:
 
                     # Update last_run
                     task["last_run"] = now.isoformat()
+
+                    # Auto-disable one-time tasks after execution
+                    if task.get("once"):
+                        task["enabled"] = False
+                        logger.info(f"[ScheduledPush] One-time task '{task['name']}' auto-disabled after execution")
+
                     self.save_config(session_id, config)
 
                 except Exception as e:

@@ -16,10 +16,17 @@ def get_uma_instance():
         from server.core.uma_core import UMA
         from main import PROJECT_ROOT
 
-        # Use absolute path for SKILLS_HOME
+        # Three-tier skill directories: system / department / personal
         skills_home = os.getenv("SKILLS_HOME", str(PROJECT_ROOT / "Agent_skills" / "skills"))
+        dept_skills_home = os.getenv("DEPT_SKILLS_HOME", str(PROJECT_ROOT / "Agent_skills" / "department_skills"))
+        user_skills_home = os.getenv("USER_SKILLS_HOME", str(PROJECT_ROOT / "Agent_skills" / "user_skills"))
         logger.info(f"Initializing UMA with SKILLS_HOME: {skills_home}")
 
-        _uma_instance = UMA(skills_home=skills_home, project_root=str(PROJECT_ROOT))
+        _uma_instance = UMA(
+            skills_home=skills_home,
+            dept_skills_home=dept_skills_home,
+            user_skills_home=user_skills_home,
+            project_root=str(PROJECT_ROOT),
+        )
         _uma_instance.initialize()
     return _uma_instance

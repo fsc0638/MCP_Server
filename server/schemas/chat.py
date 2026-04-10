@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     user_input: str
     session_id: Optional[str] = "default"
+    turn_id: Optional[str] = None
     model: Optional[str] = "openai"
     provider: Optional[str] = None
     api_base: Optional[str] = None
@@ -24,3 +25,11 @@ class ChatRequest(BaseModel):
 class ExecuteRequest(BaseModel):
     skill_name: str
     arguments: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TitleSummaryRequest(BaseModel):
+    user_input: str
+    assistant_output: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    language: Optional[str] = "繁體中文"

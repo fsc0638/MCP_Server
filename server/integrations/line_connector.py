@@ -124,8 +124,15 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"[LINE] Event parse error: {e}")
         raise HTTPException(status_code=400, detail=f"Event parse error: {e}")
 
+    # C0. Handle FollowEvent (new friend added) — no action needed, welcome message set in LINE Manager
+    from linebot.v3.webhooks import MessageEvent, FollowEvent, TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
+    for event in events:
+        if isinstance(event, FollowEvent):
+            _user_id = getattr(event.source, "user_id", "")
+            logger.info(f"[LINE] New follower: {_user_id}")
+            continue
+
     # C. 逐一處理 TextMessage / ImageMessage / FileMessage / StickerMessage Event
-    from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
     for event in events:
         if isinstance(event, MessageEvent):
             if not isinstance(event.message, (TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent)):
@@ -163,6 +170,114 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                 session_id = f"line_{source.user_id}"
                 chat_id = session_id  # normalized key for analytics/user attribution
 
+            # Phase 0.5: Onboarding check for personal chats
+            if not is_group_or_room and isinstance(event.message, TextMessageContent):
+                try:
+                    from server.services.employee_lookup import has_completed_onboarding, lookup, build_user_context, save_user_context
+                    _line_user_id = source.user_id
+                    if not has_completed_onboarding(session_id):
+                        _user_text = user_input.strip()
+                        # Check if user is responding with email/employee ID/guest
+                        if _user_text.lower() == "訪客" or _user_text.lower() == "guest":
+                            # Guest mode — create minimal context
+                            from linebot.v3.messaging import TextMessage, ReplyMessageRequest
+                            _guest_ctx = {
+                                "user_id": session_id,
+                                "name": "訪客",
+                                "department": "",
+                                "department_code": "",
+                                "title": "",
+                                "email": "",
+                                "preferences": {"language": "繁體中文", "style": "適中", "primary_use": []},
+                                "role": "viewer",
+                                "groups": [],
+                                "skill_access": {"system": "all", "department": [], "personal": True},
+                                "onboarding_completed": True,
+                                "source": "line_bot",
+                            }
+                            save_user_context(_guest_ctx)
+                            line_api.reply_message(ReplyMessageRequest(
+                                reply_token=event.reply_token,
+                                messages=[TextMessage(text="歡迎！已為你建立訪客帳號 👋\n現在可以開始使用 AgentK 了！")]
+                            ))
+                            continue
+
+                        # Try to match employee
+                        _emp = lookup(_user_text)
+                        if _emp:
+                            _ctx = build_user_context(_emp, session_id)
+                            save_user_context(_ctx)
+                            _onboarding_attempts.pop(session_id, None)  # Clear attempts on success
+                            # Write to profile.md
+                            try:
+                                from server.dependencies.session import get_session_manager
+                                from server.services.runtime import get_universal_system_prompt
+                                _sm = get_session_manager()
+                                _sm.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
+                                # Update profile with employee info
+                                from server.services.profile_updater import ProfileUpdater
+                                _profile_content = (
+                                    f"# Profile — {session_id}\n\n"
+                                    f"### 身份資訊（由系統自動建立）\n\n"
+                                    f"- 姓名：{_emp['name']}\n"
+                                    f"- 部門：{_emp['department_full']}\n"
+                                    f"- 職稱：{_emp['title']}\n"
+                                    f"- 信箱：{_emp['email']}\n"
+                                    f"- 分機：{_emp['extension']}\n"
+                                    f"- 員編：{_emp['employee_id']}\n"
+                                )
+                                _profile_dir = Path(os.getenv("PROJECT_ROOT", Path(__file__).resolve().parents[2])) / "workspace" / "profiles"
+                                _profile_dir.mkdir(parents=True, exist_ok=True)
+                                (_profile_dir / f"{session_id}.profile.md").write_text(_profile_content, encoding="utf-8")
+                                logger.info(f"[LINE Onboarding] Profile created for {session_id}: {_emp['name']}")
+                            except Exception as _pe:
+                                logger.warning(f"[LINE Onboarding] Profile write failed: {_pe}")
+
+                            from linebot.v3.messaging import TextMessage, ReplyMessageRequest
+                            _reply = (
+                                f"身份驗證成功 ✅\n\n"
+                                f"👤 {_emp['name']}\n"
+                                f"🏢 {_emp['department_full']}\n"
+                                f"💼 {_emp['title'] or '—'}\n"
+                                f"📧 {_emp['email']}\n"
+                                f"📞 分機 {_emp['extension'] or '—'}\n\n"
+                                f"歡迎使用 AgentK！現在可以開始對話了 🚀"
+                            )
+                            line_api.reply_message(ReplyMessageRequest(
+                                reply_token=event.reply_token,
+                                messages=[TextMessage(text=_reply)]
+                            ))
+                            continue
+                        else:
+                            # No match — track attempts
+                            _attempts = _onboarding_attempts.get(session_id, 0) + 1
+                            _onboarding_attempts[session_id] = _attempts
+
+                            from linebot.v3.messaging import TextMessage, ReplyMessageRequest
+                            if _attempts >= 3:
+                                line_api.reply_message(ReplyMessageRequest(
+                                    reply_token=event.reply_token,
+                                    messages=[TextMessage(text=(
+                                        "身份驗證失敗次數過多 ⚠️\n\n"
+                                        "請聯繫資訊處同仁協助處理。\n"
+                                        "或輸入「訪客」以訪客身份使用。"
+                                    ))]
+                                ))
+                            else:
+                                line_api.reply_message(ReplyMessageRequest(
+                                    reply_token=event.reply_token,
+                                    messages=[TextMessage(text=(
+                                        "無法確認您的資料，請重新進行身份驗證 🔐\n\n"
+                                        "請輸入：\n"
+                                        "・公司信箱（如 xxx@mail.kway.com.tw）\n"
+                                        "・員工編號（如 0337）\n\n"
+                                        "或輸入「訪客」以訪客身份使用。"
+                                    ))]
+                                ))
+                            continue
+                except Exception as _oe:
+                    logger.warning(f"[LINE Onboarding] Check failed, continuing normally: {_oe}")
+
             # Phase 1: Group Mention Filter & Window
             if is_group_or_room:
                 if isinstance(event.message, TextMessageContent):
@@ -191,24 +306,23 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         import time
                         _last_request_time[f"mention_{chat_id}"] = time.time()
                     else:
-                        # 不是叫它，直接忽略 (bypass processing)
-                        logger.info(f"[LINE] Skipped group text (cached but no mention): chat={chat_id}")
+                        # 沒有 @Agent K — 快取 + 寫入 session history（背景記憶），但不觸發 LLM
+                        try:
+                            from server.dependencies.session import get_session_manager
+                            from server.services.runtime import get_universal_system_prompt
+                            _sm = get_session_manager()
+                            _sm.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+                            _sm.append_message(session_id, "user", f"[群組對話]{user_input}")
+                        except Exception as _e:
+                            logger.debug(f"[LINE] Failed to persist group bg message: {_e}")
+                        logger.info(f"[LINE] Skipped group text (cached + persisted, no mention): chat={chat_id}")
                         continue
                 else:
-                    # For Image/File/Sticker in groups, check if bot was mentioned recently (window of 120s for better UX)
-                    import time
-                    last_mention = _last_request_time.get(f"mention_{chat_id}", 0)
-
-                    # Phase 6: Proactive Cache
-                    # If mentioned within 120s, we process it as a direct command
-                    just_cache = (time.time() - last_mention > 120)
+                    # Non-text messages (Image/File/Sticker) in groups without @mention:
+                    # Download & cache the file for future quote references, but do NOT
+                    # trigger LLM processing or send any response (just_cache=True).
                     msg_type = type(event.message).__name__
-
-                    if just_cache:
-                        logger.info(f"[LINE] Group {msg_type} received without recent mention. Will only cache: chat={chat_id}")
-                    else:
-                        logger.info(f"[LINE] Group {msg_type} received with recent mention. Processing: chat={chat_id}")
-                    
+                    logger.info(f"[LINE] Group {msg_type} received without @mention. Download+cache only: chat={chat_id}")
                     background_tasks.add_task(
                         _process_line_message,
                         line_api=line_api,
@@ -220,7 +334,7 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         event_msg=event.message,
                         extracted_text="",
                         quoted_file_path=None,
-                        just_cache=just_cache
+                        just_cache=True,
                     )
                     continue
 
@@ -381,11 +495,37 @@ async def line_broadcast(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Dynamic Language Detection ────────────────────────────────────────────────
+
+def _detect_language(text: str):
+    """Lightweight language detection based on Unicode character ranges."""
+    if not text or len(text.strip()) < 2:
+        return None
+    # Japanese: Hiragana or Katakana present
+    if any('\u3040' <= c <= '\u309F' or '\u30A0' <= c <= '\u30FF' for c in text):
+        return "日本語"
+    # Vietnamese: unique diacritical characters
+    _vi_chars = set("ắằặẵẳấầậẩẫếềệểễốồộổỗứừựửữơưăđĂĐƠƯ")
+    if any(c in _vi_chars for c in text):
+        return "Tiếng Việt"
+    # Korean: Hangul syllables
+    if any('\uAC00' <= c <= '\uD7A3' for c in text):
+        return "한국어"
+    # English: mostly ASCII with spaces
+    ascii_count = sum(1 for c in text if c.isascii())
+    if ascii_count / max(len(text), 1) > 0.8 and ' ' in text:
+        return "English"
+    # Default: Traditional Chinese
+    return None  # None = don't inject, let system prompt default handle it
+
+
 # ── Session Locking & UX ──────────────────────────────────────────────────────
 
 _local_locks = {}
 _local_lock_mutex = threading.Lock()
 _last_request_time = {}  # 紀錄每個 session 的最後處理時間 (Debounce 用)
+_group_loading_sent = {}  # {chat_id: timestamp} — 群組文字 loading 去重 (60s cooldown)
+_onboarding_attempts = {}  # {session_id: int} — 身份驗證失敗次數
 
 # ── Message Caching (Phase 6 + Phase A1: Disk Persistence) ────────────────────
 _message_cache = {}  # {chat_id: {msg_id: {"text": str, "file_path": str, "created_at": str}}}
@@ -518,19 +658,30 @@ def _to_line_id(chat_id: str) -> str:
 
 
 def _send_loading_animation(line_api, chat_id: str, seconds: int = 20):
-    """呼叫 LINE Loading Animation API (使用官方 SDK)。可多次呼叫以延長動畫。"""
+    """呼叫 LINE Loading Animation API (使用官方 SDK)。可多次呼叫以延長動畫。
+    群組/房間不支援官方 loading animation，改為推送文字提示。
+    """
     from linebot.v3.messaging import ShowLoadingAnimationRequest
 
     try:
-        # chat_id 在系統內以 "line_U..." 格式儲存；LINE API 只接受裸 userId (U...)
-        # 同時也不支援群組/房間（groupId/roomId 以 C/R 開頭）
         _line_id = _to_line_id(chat_id)
         if _line_id.startswith("U"):
             req = ShowLoadingAnimationRequest(chatId=_line_id, loadingSeconds=min(seconds, 60))
             line_api.show_loading_animation(req)
             logger.info(f"[LINE] Loading animation started for chat={chat_id} ({seconds}s)")
+        elif _line_id.startswith(("C", "R")):
+            # 群組/房間：LINE API 不支援 loading animation，推送文字替代（60s 去重）
+            import time as _time
+            _now = _time.time()
+            _last_sent = _group_loading_sent.get(chat_id, 0)
+            if _now - _last_sent >= 60:
+                _send_status_push(line_api, chat_id, "⏳ 處理中...")
+                _group_loading_sent[chat_id] = _now
+                logger.info(f"[LINE] Sent text loading indicator for group/room chat={chat_id}")
+            else:
+                logger.debug(f"[LINE] Skipping duplicate loading text for group chat={chat_id} (cooldown)")
         else:
-            logger.info(f"[LINE] Skipping loading animation for non-user chat={chat_id}")
+            logger.info(f"[LINE] Skipping loading animation for unrecognized chat={chat_id}")
     except Exception as e:
         logger.warning(f"[LINE] Exception starting loading animation: {e}")
 
@@ -538,18 +689,23 @@ def _send_loading_animation(line_api, chat_id: str, seconds: int = 20):
 def _send_status_push(line_api, chat_id: str, text: str):
     """推送中間狀態訊息給使用者（不佔用 reply_token）。支援長訊息自動分段。
 
-    NOTE: push_message 只接受 userId ("U...")。我們內部的 chat_id 可能是
-    "line_U..." / "line_group_..." / "line_room_..."，因此需要轉成 LINE 原生 ID。
+    NOTE: push_message 接受 userId ("U...")、groupId ("C...")、roomId ("R...")。
+    我們內部的 chat_id 可能是 "line_U..." / "line_group_..." / "line_room_..."，
+    因此需要轉成 LINE 原生 ID。
     """
     try:
         # Normalize internal ids to LINE native ids
         to_id = chat_id
-        if to_id.startswith("line_"):
+        if to_id.startswith("line_group_"):
+            to_id = to_id[len("line_group_"):]
+        elif to_id.startswith("line_room_"):
+            to_id = to_id[len("line_room_"):]
+        elif to_id.startswith("line_"):
             to_id = to_id[len("line_"):]
 
-        # Only push to individual users
-        if not to_id.startswith("U"):
-            logger.info(f"[LINE] Skipping status push for non-user chat_id={chat_id}")
+        # Validate: must be a LINE native ID (U=user, C=group, R=room)
+        if not to_id or to_id[0] not in ("U", "C", "R"):
+            logger.info(f"[LINE] Skipping status push for unrecognized chat_id={chat_id}")
             return
 
         from linebot.v3.messaging import TextMessage, PushMessageRequest
@@ -823,8 +979,8 @@ def _handle_pending_state(
             from server.services.runtime import get_universal_system_prompt
 
             _session_mgr = get_session_manager()
-            _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
-            _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
+            _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+            _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
 
             uma = get_uma_instance()
             adapter = OpenAIAdapter(uma=uma)
@@ -931,8 +1087,8 @@ def _handle_pending_state(
 
         # 2. 把工具結果餵給 LLM，讓 AI 用自然語言回覆
         _session_mgr = get_session_manager()
-        _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
-        _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
+        _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+        _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
 
         adapter = OpenAIAdapter(uma=uma)
         if not adapter.is_available:
@@ -1013,7 +1169,9 @@ def _process_line_message(
 
         # 0.5 顯示 loading 動畫 (安撫使用者等待焦慮)，必須傳入 chat_id
         #     使用 60 秒以涵蓋檔案下載 + Tool Calling 耗時
-        _send_loading_animation(line_api, chat_id, 60)
+        #     just_cache 模式下不顯示（群組靜默下載快取）
+        if not just_cache:
+            _send_loading_animation(line_api, chat_id, 60)
 
         try:
             from linebot.v3.webhooks import TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
@@ -1209,7 +1367,7 @@ def _process_line_message(
                                     f"{extracted_text}\n\n"
                                     f"[請根據以上文件內容，直接進行分析、總結或處理使用者的需求。]"
                                 )
-                                # Store original file path for downstream skills (e.g. meeting-to-notion)
+                                # Store original file path for downstream skills (e.g. meeting-analyzer)
                                 # Use the already-saved line_uploads file directly — no temp copy needed.
                                 _session_mgr.set_metadata(session_id, "last_original_file", attached_file_path)
                                 _session_mgr.set_metadata(session_id, "last_original_filename", filename)
@@ -1254,7 +1412,7 @@ def _process_line_message(
                 _session_days[session_id] = today_str
 
             # ── Phase B1: Inject Profile into system prompt ─────────────────
-            _base_system_prompt = get_universal_system_prompt(platform="line")
+            _base_system_prompt = get_universal_system_prompt(platform="line", language="自動偵測")
             try:
                 from server.services.profile_updater import ProfileUpdater
                 _profile_updater = ProfileUpdater(str(Path(os.getcwd())))
@@ -1286,18 +1444,80 @@ def _process_line_message(
 
             # Route to optimal model tier based on task complexity
             _has_file = (attached_file_path is not None) or (_chunked_data is not None)
+
+            # Extract recent history for context-aware routing
+            # (enables short confirmations like "好的" to re-route with conversation context)
+            _recent_history = []
+            try:
+                _history_for_ctx = _session_mgr.get_or_create_conversation(session_id)
+                # Last 5 non-system messages
+                _recent_history = [m for m in _history_for_ctx if m.get("role") != "system"][-5:]
+            except Exception:
+                pass
+
             _routed_model, _routed_tier, _force_upgraded = route_model(
                 user_input=user_input or "",
                 openai_client=_openai_client,
                 has_file=_has_file,
                 is_chunked_final=False,
+                recent_history=_recent_history,
             )
 
+            # Skill-aware model upgrade: if input strongly suggests a specific skill,
+            # check that skill's recommended_models and upgrade if needed
+            try:
+                from server.services.model_selector import select_model_for_skill, detect_provider
+                from server.adapters import select_relevant_tools
+                _all_tools = uma.get_tools_for_model("openai")
+                _input_lower = (user_input or "").lower()
+
+                # Quick skill detection from keywords
+                _likely_skill = None
+                _skill_keywords = {
+                    "mcp-groovenauts-meeting-analyst": ["groovenauts", "會議記錄", "會議紀錄", "日方會議"],
+                    "mcp-google-calendar": ["行程", "日曆", "calendar"],
+                    "mcp-web-search": ["搜尋", "新聞", "查詢"],
+                    "mcp-image-generator": ["畫", "圖片", "插圖"],
+                    "mcp-schedule-manager": ["排程", "推送", "提醒"],
+                    "mcp-gai-worksheet-facilitator": ["學習單", "worksheet", "GAI"],
+                }
+                for _sname, _kws in _skill_keywords.items():
+                    if any(kw in _input_lower for kw in _kws):
+                        _likely_skill = _sname
+                        break
+
+                if _likely_skill:
+                    _skill_info = uma.registry.get_skill(_likely_skill)
+                    if _skill_info:
+                        _skill_meta = _skill_info.get("metadata", {})
+                        # Check if skill has scripts (executable mode)
+                        _skill_path = _skill_info.get("path")
+                        if _skill_path:
+                            _skill_meta["_has_scripts"] = (_skill_path / "scripts" / "main.py").exists()
+                        _skill_rec_model = select_model_for_skill(
+                            _likely_skill,
+                            _skill_meta,
+                            user_default_model=_routed_model,
+                            estimated_input_tokens=len(user_input or "") // 3,
+                        )
+                        if _skill_rec_model != _routed_model:
+                            logger.info(f"[LINE Router] Skill-aware upgrade: {_routed_model} → {_skill_rec_model} (for {_likely_skill})")
+                            _routed_model = _skill_rec_model
+            except Exception as _mse:
+                logger.debug(f"[LINE Router] Skill-aware model check skipped: {_mse}")
+
             adapter = OpenAIAdapter(uma=uma, model=_routed_model)
+            # Inject user_context for three-tier skill filtering
+            try:
+                _uc_path = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
+                if _uc_path.exists():
+                    adapter.user_context = json.loads(_uc_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
             # Tier-aware max_output_tokens:
             # - nano/mini: 2048 節省 TPM（閒聊、單工具任務輸出短）
-            # - full/file : 8192 支援複合任務（e.g. Groovenauts 7 節分析 + python-executor）
-            if _routed_tier in ("full", "file"):
+            # - full/file : 8192 支援複雜任務
+            if _routed_tier in ("full", "file") or _routed_model in ("gpt-4.1", "gpt-4o"):
                 adapter.max_output_tokens = 8192
             else:
                 adapter.max_output_tokens = 2048
@@ -1571,6 +1791,16 @@ def _process_line_message(
                     chat_type = "group"
                 elif session_id.startswith("line_room_"):
                     chat_type = "room"
+
+                # Dynamic language detection: inject hint so LLM responds in user's language
+                _detected_lang = _detect_language(actual_input)
+                if _detected_lang:
+                    _lang_hint = {
+                        "role": "system",
+                        "content": f"【語言切換】使用者此則訊息使用{_detected_lang}，請用{_detected_lang}回覆。"
+                    }
+                    # Insert before the last user message
+                    truncated_history.insert(-1, _lang_hint)
 
                 result_gen = adapter.chat(
                     messages=truncated_history,

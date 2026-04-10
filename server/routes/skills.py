@@ -13,7 +13,7 @@ import yaml
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from main import get_uma
-from server.schemas.skills import SkillUpdateRequest, CreateSkillRequest
+from server.schemas.skills import SkillUpdateRequest, SkillDeleteRequest, CreateSkillRequest
 from server.services.prompt_cache import invalidate_prompt_cache
 
 router = APIRouter(tags=["Skill Management"])
@@ -28,31 +28,44 @@ def sanitize_filename(filename: str) -> str:
     return filename or "uploaded_file"
 
 
-def sync_skills_git(message: str):
+def sync_skills_git(message: str, user_name: str = "", user_id: str = ""):
     """
     Synchronize the Agent_skills local repository with the remote.
     Performs: git add ., git commit -m message, git push origin main.
+    Commit message includes user info and timestamp for audit trail.
     """
     uma = get_uma()
     skills_home = uma.registry.skills_home.resolve()
-    
-    # We only sync if it's a git repo
-    if not (skills_home / ".git").exists():
-        logger.warning(f"Git sync skipped: {skills_home} is not a Git repository.")
+
+    # Find the git repo root — skills_home may be Agent_skills/skills/,
+    # but .git lives at Agent_skills/
+    git_root = skills_home
+    if not (git_root / ".git").exists() and (git_root.parent / ".git").exists():
+        git_root = git_root.parent
+    if not (git_root / ".git").exists():
+        logger.warning(f"Git sync skipped: {git_root} is not a Git repository.")
         return {"status": "skipped", "message": "Not a git repository"}
+
+    # Build commit message with user info and timestamp
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    commit_msg = f"[Skill Mgmt] {message}"
+    if user_name or user_id:
+        commit_msg += f"\n\nUser: {user_name} ({user_id}) | {now}"
+    else:
+        commit_msg += f"\n\nUser: system | {now}"
 
     try:
         # 1. git add .
-        subprocess.run(["git", "add", "."], cwd=skills_home, check=True, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=git_root, check=True, capture_output=True)
         # 2. git commit (allow failure if no changes)
-        proc = subprocess.run(["git", "commit", "-m", f"[Skill Mgmt] {message}"], cwd=skills_home, capture_output=True, text=True)
+        proc = subprocess.run(["git", "commit", "-m", commit_msg], cwd=git_root, capture_output=True, text=True)
         if proc.returncode != 0 and "nothing to commit" not in proc.stdout.lower():
              logger.error(f"Git commit failed: {proc.stderr}")
              return {"status": "error", "error": f"Commit failed: {proc.stderr}"}
-        
+
         # 3. git push
-        subprocess.run(["git", "push", "origin", "main"], cwd=skills_home, check=True, capture_output=True)
-        logger.info(f"Git sync successful for Agent_skills: {message}")
+        subprocess.run(["git", "push", "origin", "main"], cwd=git_root, check=True, capture_output=True)
+        logger.info(f"Git sync successful for Agent_skills: {message} (by {user_name})")
         return {"status": "success"}
     except Exception as e:
         logger.error(f"Git sync exception: {e}")
@@ -67,10 +80,13 @@ def list_skills():
         meta = data["metadata"]
         skills[name] = {
             "description": meta.get("description", ""),
+            "display_name": meta.get("display_name", ""),
             "version": meta.get("version", "unknown"),
             "ready": meta.get("_env_ready", False),
             "missing_deps": meta.get("_missing_deps", []),
             "path": str(data["path"]),
+            "scope": meta.get("_scope", "system"),
+            "short_name": meta.get("_short_name", name),
         }
     return {"total": len(skills), "skills": skills}
 
@@ -132,10 +148,36 @@ def update_skill(skill_name: str, req: SkillUpdateRequest):
     try:
         if skill_md_path.exists():
             shutil.copy2(skill_md_path, bak_path)
+
+        # Auto-analyze complexity and inject recommended_models
+        try:
+            from server.services.workflow_llm_router import analyze_skill_complexity
+            has_refs = (skill_path / "references").exists() or (skill_path / "assets").exists()
+            has_scripts = (skill_path / "scripts" / "main.py").exists()
+            rec_models = analyze_skill_complexity(new_content, has_references=has_refs, has_scripts=has_scripts)
+
+            # Inject recommended_models into YAML frontmatter if not already set by user
+            _parts = new_content.split("---")
+            if len(_parts) >= 3:
+                _meta = yaml.safe_load(_parts[1]) or {}
+                if "recommended_models" not in _meta:
+                    # Insert before closing ---
+                    _models_yaml = "recommended_models:\n"
+                    for _prov, _model in rec_models.items():
+                        _models_yaml += f"  {_prov}: {_model}\n"
+                    new_content = "---\n" + _parts[1].rstrip() + "\n" + _models_yaml + "---\n" + "---".join(_parts[2:])
+                    logger.info(f"[Skills] Auto-recommended models for {skill_name}: {rec_models}")
+        except Exception as _ae:
+            logger.debug(f"[Skills] Model recommendation skipped: {_ae}")
+
         skill_md_path.write_text(new_content, encoding="utf-8")
         uma.registry._register_skill(skill_path)
         invalidate_prompt_cache()
-        sync_res = sync_skills_git(f"Updated skill {skill_name}")
+        sync_res = sync_skills_git(
+            f"Updated skill {skill_name}",
+            user_name=req.user_name,
+            user_id=req.user_id,
+        )
         return {
             "status": "success",
             "message": f"Skill '{skill_name}' updated and backup created.",
@@ -147,7 +189,7 @@ def update_skill(skill_name: str, req: SkillUpdateRequest):
 
 
 @router.delete("/skills/{skill_name}")
-def delete_skill(skill_name: str):
+def delete_skill(skill_name: str, req: SkillDeleteRequest):
     from server.core.retriever import retriever
 
     uma = get_uma()
@@ -180,8 +222,59 @@ def delete_skill(skill_name: str):
         shutil.rmtree(skill_path, onerror=remove_readonly)
         uma.registry.skills.pop(skill_name.lower(), None)
         invalidate_prompt_cache()
-        sync_res = sync_skills_git(f"Deleted skill {skill_name}")
+        sync_res = sync_skills_git(
+            f"Deleted skill {skill_name} | Reason: {req.reason}",
+            user_name=req.user_name,
+            user_id=req.user_id,
+        )
         return {"status": "success", "message": f"Skill '{skill_name}' deleted.", "git_sync": sync_res}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/skills/{skill_name}/rename")
+def rename_skill(skill_name: str, body: dict):
+    """Rename a skill directory. Updates SKILL.md name field and git syncs."""
+    new_name = body.get("new_name", "").strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="new_name is required")
+    # Validate name format
+    import re as _re
+    if not _re.match(r'^mcp-[a-z0-9-]+$', new_name):
+        raise HTTPException(status_code=400, detail="Name must match pattern: mcp-{lowercase-ascii-hyphens}")
+    if new_name == skill_name:
+        return {"status": "success", "message": "Name unchanged"}
+
+    uma = get_uma()
+    skills_home = uma.registry.skills_home.resolve()
+    old_path = (skills_home / skill_name).resolve()
+    new_path = (skills_home / new_name).resolve()
+
+    if not old_path.exists():
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+    if new_path.exists():
+        raise HTTPException(status_code=409, detail=f"Skill '{new_name}' already exists")
+
+    try:
+        old_path.relative_to(skills_home)
+        new_path.relative_to(skills_home)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path traversal denied")
+
+    try:
+        old_path.rename(new_path)
+        # Update name in SKILL.md
+        skill_md_path = new_path / "SKILL.md"
+        if skill_md_path.exists():
+            content = skill_md_path.read_text(encoding="utf-8")
+            content = content.replace(f"name: {skill_name}", f"name: {new_name}", 1)
+            skill_md_path.write_text(content, encoding="utf-8")
+        # Git sync
+        sync_res = sync_skills_git(f"Renamed skill: {skill_name} → {new_name}")
+        # Re-register
+        uma.registry.scan_skills()
+        invalidate_prompt_cache()
+        return {"status": "success", "old_name": skill_name, "new_name": new_name, "git_sync": sync_res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -316,7 +409,7 @@ def rescan_skills():
     uma.registry.validation_cache.clear()
     uma.registry.scan_skills()
     summary = delta_index_skills(uma, retriever)
-    _try_invalidate_prompt_cache()
+    invalidate_prompt_cache()
     return {
         "status": "success",
         "total_skills": len(uma.registry.skills),
@@ -331,7 +424,6 @@ def rescan_skills():
 @router.post("/skills/create")
 def create_skill(req: CreateSkillRequest):
     uma = get_uma()
-    skills_home = uma.registry.skills_home
 
     name = req.name.strip().lower().replace("_", "-")
     if not name.startswith("mcp-"):
@@ -341,13 +433,28 @@ def create_skill(req: CreateSkillRequest):
     if len(name) < 5 or len(name) > 60:
         raise HTTPException(status_code=422, detail="Skill name length must be between 5 and 60")
 
-    skill_path = (skills_home / name).resolve()
-    try:
-        skill_path.relative_to(skills_home.resolve())
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Invalid target path")
+    # Resolve target directory based on scope
+    scope = (req.scope or "system").lower()
+    if scope == "department":
+        if not req.owner:
+            raise HTTPException(status_code=422, detail="owner (department_code) is required for department scope")
+        base_dir = uma.registry.dept_skills_home
+        if not base_dir:
+            raise HTTPException(status_code=500, detail="DEPT_SKILLS_HOME not configured")
+        target_dir = base_dir / req.owner
+    elif scope == "personal":
+        if not req.owner:
+            raise HTTPException(status_code=422, detail="owner (user_id) is required for personal scope")
+        base_dir = uma.registry.user_skills_home
+        if not base_dir:
+            raise HTTPException(status_code=500, detail="USER_SKILLS_HOME not configured")
+        target_dir = base_dir / req.owner
+    else:
+        target_dir = uma.registry.skills_home
+
+    skill_path = (target_dir / name).resolve()
     if skill_path.exists():
-        raise HTTPException(status_code=409, detail=f"Skill '{name}' already exists")
+        raise HTTPException(status_code=409, detail=f"Skill '{name}' already exists in {scope} scope")
 
     try:
         skill_path.mkdir(parents=True)
@@ -364,17 +471,83 @@ runtime_requirements: []
 risk_level: "low"
 ---
 
-# {req.display_name}
+# {req.display_name or name}
 
 {req.description}
 """
         (skill_path / "SKILL.md").write_text(skill_md, encoding="utf-8")
         uma.registry.scan_skills()
         invalidate_prompt_cache()
-        sync_res = sync_skills_git(f"Created new skill {name}")
-        return {"status": "success", "skill_name": name, "path": str(skill_path), "git_sync": sync_res}
+        sync_res = sync_skills_git(f"Created {scope} skill {name}")
+        return {"status": "success", "skill_name": name, "scope": scope, "path": str(skill_path), "git_sync": sync_res}
     except Exception as e:
         if skill_path.exists():
             shutil.rmtree(skill_path, ignore_errors=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Skill Promote (scope migration) ────────────────────────────────────────
+
+@router.post("/skills/{skill_name}/promote")
+def promote_skill(skill_name: str, target_scope: str = "department", target_owner: str = ""):
+    """
+    Promote a skill to a higher scope:
+    personal → department, department → system.
+    Copies the entire skill directory to the target location.
+    """
+    uma = get_uma()
+    skill = uma.registry.get_skill(skill_name)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
+
+    src_path = skill["path"].resolve()
+    short_name = skill["metadata"].get("_short_name", skill_name)
+
+    # Resolve target directory
+    if target_scope == "system":
+        dest_base = uma.registry.skills_home
+    elif target_scope == "department":
+        if not target_owner:
+            raise HTTPException(status_code=422, detail="target_owner (dept_code) required for department scope")
+        if not uma.registry.dept_skills_home:
+            raise HTTPException(status_code=500, detail="DEPT_SKILLS_HOME not configured")
+        dest_base = uma.registry.dept_skills_home / target_owner
+    else:
+        raise HTTPException(status_code=422, detail="target_scope must be 'department' or 'system'")
+
+    dest_path = dest_base / short_name
+    if dest_path.exists():
+        raise HTTPException(status_code=409, detail=f"Skill '{short_name}' already exists in {target_scope} scope")
+
+    try:
+        dest_base.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(src_path, dest_path)
+        uma.registry.scan_skills()
+        invalidate_prompt_cache()
+        sync_res = sync_skills_git(f"Promoted skill {short_name} to {target_scope}")
+        return {"status": "success", "skill_name": short_name, "target_scope": target_scope, "path": str(dest_path), "git_sync": sync_res}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Workflow Dashboard API ──────────────────────────────────────────────────
+
+@router.get("/skills/workflow/stats")
+async def workflow_stats():
+    """Return token analytics for workflow dashboard (by_skill + daily)."""
+    import json, os
+    # Resolve from project root (same as main.py CWD)
+    project_root = Path(os.getenv("PROJECT_ROOT", Path(__file__).resolve().parents[2]))
+    summary_path = project_root / "workspace" / "analytics" / "token_summary.json"
+    if not summary_path.exists():
+        return {"by_skill": {}, "daily": {}, "total": {}, "_debug": str(summary_path)}
+    try:
+        data = json.loads(summary_path.read_text(encoding="utf-8"))
+        return {
+            "by_skill": data.get("by_skill", {}),
+            "daily": data.get("daily", {}),
+            "total": data.get("total", {}),
+        }
+    except Exception as e:
+        return {"by_skill": {}, "daily": {}, "total": {}, "_error": str(e)}
 

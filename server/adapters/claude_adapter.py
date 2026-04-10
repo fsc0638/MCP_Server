@@ -54,7 +54,7 @@ class ClaudeAdapter:
     def get_tools(self, user_query: Optional[str] = None, max_tools: int = 10) -> List[Dict[str, Any]]:
         """Get tool definitions in Claude format."""
         from server.adapters import select_relevant_tools
-        all_tools = self.uma.get_tools_for_model("openai")  # Claude uses similar format
+        all_tools = self.uma.get_tools_for_model("openai", user_context=getattr(self, "user_context", None))  # Claude uses similar format
 
         if user_query and len(all_tools) > max_tools:
             all_tools = select_relevant_tools(user_query, all_tools, max_tools)
@@ -143,7 +143,8 @@ class ClaudeAdapter:
         if not user_query:
             return {"status": "error", "message": "No user query provided"}
 
-        tools = self.get_tools(user_query=user_query)
+        tools_enabled = kwargs.get("tools_enabled", True)
+        tools = self.get_tools(user_query=user_query) if tools_enabled else []
 
         # Extract system prompt from messages (router.py sets messages[0] = system with build_system_prompt)
         agent_system = ""
@@ -318,22 +319,13 @@ class ClaudeAdapter:
                             pass
 
                         if result.get("status") == "requires_approval":
-                            # Phase 3-B: Store pending approval in session for resume endpoint
-                            from server.dependencies.session import get_session_manager
-                            _session_mgr = get_session_manager()
-                            if session_id:
-                                _session_mgr.set_pending_approval(session_id, {
-                                    "tool_name": fn_name,
-                                    "call_id": tc["id"],
-                                    "args": fn_args,
-                                    "provider": "claude",
-                                    "model": self.model,
-                                })
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
                                 "risk_description": result.get("risk_description", "高風險操作，需要使用者授權"),
                                 "pending_args": fn_args,
+                                "provider": "claude",
+                                "model": self.model,
                             }
                             return
 

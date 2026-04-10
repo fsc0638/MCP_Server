@@ -23,7 +23,7 @@ class GeminiAdapter:
     def __init__(self, uma, model: Optional[str] = None):
         self.uma = uma
         # 1. Resolve Model: use passed model or fallback to env var
-        self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        self.model_name = model or os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
         self.model = None
         self._uploaded_files_cache = {}
 
@@ -143,12 +143,48 @@ class GeminiAdapter:
     def get_tools(self, user_query: Optional[str] = None, max_tools: int = 10) -> List[Dict[str, Any]]:
         """Get tool definitions in Gemini FunctionDeclaration format."""
         from server.adapters import select_relevant_tools
-        all_tools = self.uma.get_tools_for_model("gemini")
+        all_tools = self.uma.get_tools_for_model("gemini", user_context=getattr(self, "user_context", None))
 
         if user_query and len(all_tools) > max_tools:
             return select_relevant_tools(user_query, all_tools, max_tools)
 
         return all_tools
+
+    def _build_tool_fallback_text(self, tool_results: List[tuple]) -> str:
+        """Surface tool output when Gemini finishes a tool round without text."""
+        segments = []
+        for fn_name, result in tool_results:
+            if not isinstance(result, dict):
+                text = str(result).strip()
+                if text:
+                    segments.append(text)
+                continue
+
+            status = (result.get("status") or "").lower()
+            if status in ("error", "failed", "security_violation"):
+                message = result.get("message") or result.get("stderr") or json.dumps(result, ensure_ascii=False)
+                message = str(message).strip()
+                if message:
+                    segments.append(f"{fn_name}: {message}")
+                continue
+
+            transcript = result.get("transcript")
+            if isinstance(transcript, str) and transcript.strip():
+                segments.append(transcript.strip())
+                continue
+
+            for key in ("content", "message", "output"):
+                value = result.get(key)
+                if isinstance(value, str) and value.strip():
+                    segments.append(value.strip())
+                    break
+            else:
+                try:
+                    segments.append(json.dumps(result, ensure_ascii=False))
+                except Exception:
+                    pass
+
+        return "\n\n".join(s for s in segments if s).strip()
 
     def chat(
         self,
@@ -238,7 +274,8 @@ class GeminiAdapter:
         if visual_parts:
             augmented_query = visual_parts + [augmented_query]
 
-        tools = self.get_tools(user_query=user_query)
+        tools_enabled = kwargs.get("tools_enabled", True)
+        tools = self.get_tools(user_query=user_query) if tools_enabled else []
 
         def _normalize_json_schema_for_gemini(schema: dict) -> dict:
             """Gemini proto expects Schema enum types (e.g. OBJECT/STRING), not JSONSchema 'object'/'string'.
@@ -323,6 +360,7 @@ class GeminiAdapter:
 
             tool_calls_made = 0
             MAX_ITERATIONS = 10
+            last_tool_results = []
 
             full_content = ""
             for _ in range(MAX_ITERATIONS):
@@ -357,6 +395,9 @@ class GeminiAdapter:
 
                     # 2. If no function calls, we are done
                     if not has_function_call:
+                        if not full_content.strip() and tool_calls_made > 0:
+                            full_content = self._build_tool_fallback_text(last_tool_results)
+
                         # Ensure stable response_id for correlation
                         if not response_id:
                             import time
@@ -403,24 +444,17 @@ class GeminiAdapter:
                     tool_results_parts = []
                     for fn_name, fn_args in pending_calls:
                         result = self.uma.execute_tool_call(fn_name, fn_args)
+                        last_tool_results.append((fn_name, result))
 
                         # Check for approval requirement
                         if result.get("status") == "requires_approval":
-                            # Phase 3-B: Store pending approval in session for resume endpoint
-                            from server.dependencies.session import get_session_manager
-                            _session_mgr = get_session_manager()
-                            if session_id:
-                                _session_mgr.set_pending_approval(session_id, {
-                                    "tool_name": fn_name,
-                                    "args": fn_args,
-                                    "provider": "gemini",
-                                    "model": self.model,
-                                })
                             yield {
                                 "status": "requires_approval",
                                 "tool_name": fn_name,
                                 "risk_description": result.get("risk_description", "高風險操作，需要使用者授權"),
                                 "pending_args": fn_args,
+                                "provider": "gemini",
+                                "model": self.model_name,
                             }
                             return
 
@@ -464,7 +498,7 @@ class GeminiAdapter:
 
                     # 4. Send all results back in one go
                     response = chat.send_message(
-                        genai.protos.Content(parts=tool_results_parts),
+                        genai.protos.Content(role="user", parts=tool_results_parts),
                         stream=True
                     )
                     tool_calls_made += 1
