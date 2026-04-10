@@ -268,7 +268,7 @@
 
     _getPortPos(block, side) {
       // Return position OUTSIDE block, snapped to grid
-      const M = GRID_L; // one large grid cell away
+      const M = GRID; // one small grid cell away
       switch (side) {
         case "right":  return { x: snap(block.x + BLOCK_W + M), y: snap(block.y + BLOCK_H / 2) };
         case "left":   return { x: snap(block.x - M),           y: snap(block.y + BLOCK_H / 2) };
@@ -312,7 +312,7 @@
     _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
       // Strict orthogonal routing — lines NEVER enter any block's bounding box
 
-      const M = GRID_L; // 40px margin (one large grid cell)
+      const M = GRID; // 10px margin (one small grid cell)
 
       // Build expanded bounding boxes for ALL blocks (including connected ones for collision)
       const boxes = [];
