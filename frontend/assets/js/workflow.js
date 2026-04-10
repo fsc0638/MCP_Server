@@ -28,8 +28,10 @@
     analysis:   { label: "分析",   color: "#6200ea" },
   };
 
-  const BLOCK_W = 160, BLOCK_H = 68, GRID = 24;  // Snap to dot grid (24px)
+  const GRID = 10, GRID_L = 40;  // Small grid 10px, large grid 40px (4x4=16 small cells)
+  const BLOCK_W = GRID * 12, BLOCK_H = GRID * 8;  // 120×80px = 12×8 small cells
   const snap = v => Math.round(v / GRID) * GRID;
+  const snapL = v => Math.round(v / GRID_L) * GRID_L;
 
   // ── FlowDesigner ──────────────────────────────────────────────
   class FlowDesigner {
@@ -62,7 +64,7 @@
         marker.setAttribute("orient", "auto-start-reverse");
         const arrowPath = document.createElementNS(NS, "path");
         arrowPath.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-        arrowPath.setAttribute("fill", "#94a3b8");
+        arrowPath.setAttribute("fill", "#94A3B8");
         marker.appendChild(arrowPath);
         defs.appendChild(marker);
       }
@@ -118,8 +120,10 @@
           <span>${CATEGORIES[def.category]?.label || def.category}</span>
           <span class="wf-block-status"></span>
         </div>
-        ${type !== "start" ? '<div class="wf-port wf-port-in" data-port="in"></div>' : ""}
-        ${type !== "end" ? '<div class="wf-port wf-port-out" data-port="out"></div>' : ""}
+        ${type !== "start" ? '<div class="wf-port wf-port-left" data-port="in" data-side="left"></div>' : ""}
+        ${type !== "end" ? '<div class="wf-port wf-port-right" data-port="out" data-side="right"></div>' : ""}
+        <div class="wf-port wf-port-top" data-port="in" data-side="top"></div>
+        <div class="wf-port wf-port-bottom" data-port="out" data-side="bottom"></div>
       `;
 
       // Block mousedown → start drag
@@ -134,10 +138,10 @@
       el.querySelectorAll(".wf-port").forEach(port => {
         port.addEventListener("mousedown", e => {
           e.stopPropagation();
-          if (port.dataset.port === "out") this._startConnect(id, e);
+          if (port.dataset.port === "out") this._startConnect(id, port.dataset.side, e);
         });
         port.addEventListener("mouseup", e => {
-          if (this.connecting && port.dataset.port === "in") this._finishConnect(id);
+          if (this.connecting && port.dataset.port === "in") this._finishConnect(id, port.dataset.side);
         });
       });
 
@@ -203,49 +207,90 @@
         const my = (e.clientY - rect.top) / this.scale;
         const from = this.blocks.get(this.connecting.fromId);
         if (!from) return;
-        const fx = from.x + BLOCK_W + 1;
-        const fy = from.y + BLOCK_H / 2;
-        this.connecting.tempPath.setAttribute("d", this._bezier(fx, fy, mx, my));
+        const fp = this._getPortEdge(from, this.connecting.fromSide);
+        this.connecting.tempPath.setAttribute("d", this._routePath(fp.x, fp.y, mx, my, this.connecting.fromSide, "left", this.connecting.fromId, -1));
       }
     }
 
     _onMouseUp(e) {
-      if (this.dragging) this.dragging = null;
+      if (this.dragging) {
+        // Anti-overlap: push dragged block away if overlapping another
+        const dragId = this.dragging.id;
+        this._resolveOverlap(dragId);
+        this.dragging = null;
+        // Refresh all connections after move
+        this.connections.forEach(c => this._updateConnectionPath(c));
+      }
       if (this.connecting) {
         this.connecting.tempPath.remove();
         this.connecting = null;
       }
     }
 
+    _resolveOverlap(movedId) {
+      const GAP = 20; // minimum distance between blocks
+      const moved = this.blocks.get(movedId);
+      if (!moved) return;
+
+      this.blocks.forEach(other => {
+        if (other.id === movedId) return;
+        // Check overlap
+        const ol = moved.x < other.x + BLOCK_W + GAP &&
+                   moved.x + BLOCK_W + GAP > other.x &&
+                   moved.y < other.y + BLOCK_H + GAP &&
+                   moved.y + BLOCK_H + GAP > other.y;
+        if (!ol) return;
+
+        // Find nearest non-overlapping position
+        // Calculate push direction: move the dragged block to the nearest edge
+        const pushRight = (other.x + BLOCK_W + GAP) - moved.x;
+        const pushLeft  = moved.x - (other.x - BLOCK_W - GAP);
+        const pushDown  = (other.y + BLOCK_H + GAP) - moved.y;
+        const pushUp    = moved.y - (other.y - BLOCK_H - GAP);
+
+        // Pick smallest push
+        const min = Math.min(pushRight, pushLeft, pushDown, pushUp);
+        if (min === pushRight)     moved.x = snap(other.x + BLOCK_W + GAP);
+        else if (min === pushLeft) moved.x = snap(other.x - BLOCK_W - GAP);
+        else if (min === pushDown) moved.y = snap(other.y + BLOCK_H + GAP);
+        else                       moved.y = snap(other.y - BLOCK_H - GAP);
+
+        moved.el.style.left = moved.x + "px";
+        moved.el.style.top = moved.y + "px";
+      });
+    }
+
     // ── Connections ───────────────────────────────────────────
-    _startConnect(fromId, e) {
+    _startConnect(fromId, fromSide, e) {
       e.stopPropagation();
       const tempPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
       tempPath.classList.add("wf-conn-temp");
       this.svg.appendChild(tempPath);
-      this.connecting = { fromId, tempPath };
+      this.connecting = { fromId, fromSide: fromSide || "right", tempPath };
     }
 
-    _finishConnect(toId) {
+    _finishConnect(toId, toSide) {
       if (!this.connecting) return;
       const fromId = this.connecting.fromId;
       if (fromId === toId) return;
-      // Prevent duplicate
       if (this.connections.some(c => c.from === fromId && c.to === toId)) return;
-      this._addConnection(fromId, toId);
+      this._addConnection(fromId, toId, this.connecting.fromSide, toSide || "left");
     }
 
-    _addConnection(fromId, toId) {
+    _addConnection(fromId, toId, fromSide, toSide) {
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.classList.add("wf-conn-path");
       path.setAttribute("marker-end", "url(#wf-arrow)");
       this.svg.appendChild(path);
 
-      const conn = { id: this.nextConnId++, from: fromId, to: toId, el: path };
+      const conn = {
+        id: this.nextConnId++, from: fromId, to: toId,
+        fromSide: fromSide || "right", toSide: toSide || "left",
+        el: path,
+      };
       this.connections.push(conn);
       this._updateConnectionPath(conn);
 
-      // Click to delete
       path.addEventListener("click", () => {
         path.remove();
         this.connections = this.connections.filter(c => c.id !== conn.id);
@@ -261,19 +306,179 @@
       });
     }
 
+    _getPortEdge(block, side) {
+      switch (side) {
+        case "right":  return { x: block.x + BLOCK_W, y: block.y + BLOCK_H / 2 };
+        case "left":   return { x: block.x,           y: block.y + BLOCK_H / 2 };
+        case "bottom": return { x: block.x + BLOCK_W / 2, y: block.y + BLOCK_H };
+        case "top":    return { x: block.x + BLOCK_W / 2, y: block.y };
+        default:       return { x: block.x + BLOCK_W, y: block.y + BLOCK_H / 2 };
+      }
+    }
+
     _updateConnectionPath(conn) {
       const fb = this.blocks.get(conn.from);
       const tb = this.blocks.get(conn.to);
       if (!fb || !tb) return;
-      const x1 = fb.x + BLOCK_W + 1, y1 = fb.y + BLOCK_H / 2;
-      const x2 = tb.x - 1, y2 = tb.y + BLOCK_H / 2;
-      conn.el.setAttribute("d", this._bezier(x1, y1, x2, y2));
+
+      const p1 = this._getPortEdge(fb, conn.fromSide || "right");
+      const p2 = this._getPortEdge(tb, conn.toSide || "left");
+
+      // Route directly from port edge to port edge
+      conn.el.setAttribute("d", this._routePath(p1.x, p1.y, p2.x, p2.y, conn.fromSide, conn.toSide, conn.from, conn.to));
     }
 
-    _bezier(x1, y1, x2, y2) {
-      // Orthogonal (right-angle) routing snapped to grid
-      const midX = snap((x1 + x2) / 2);
-      return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+    _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
+      // Clean rewrite: draw.io style routing
+      //
+      // Step 1: From port edge, extend 1 grid cell in exit direction → "start point"
+      // Step 2: From port edge, extend 1 grid cell in entry direction → "end point"
+      // Step 3: Connect start→end with orthogonal segments that don't cross any block
+      //
+      // The extension segments (step 1 & 2) are always safe because they go
+      // AWAY from the block, so they can't cross any other block that's not
+      // overlapping (anti-overlap prevents that).
+
+      const G = GRID; // 10px = 1 small grid cell
+
+      // Extension vectors per side
+      const ext = { right: [G,0], left: [-G,0], bottom: [0,G], top: [0,-G] };
+      const fExt = ext[fromSide || "right"];
+      const tExt = ext[toSide || "left"];
+
+      // Extended start/end points (1 grid cell outside block)
+      const sx = x1 + fExt[0], sy = y1 + fExt[1];
+      const ex = x2 + tExt[0], ey = y2 + tExt[1];
+
+      // Build block rects for collision (ALL blocks, no exceptions)
+      const rects = [];
+      this.blocks.forEach(b => {
+        rects.push({ l: b.x, t: b.y, r: b.x + BLOCK_W, b: b.y + BLOCK_H });
+      });
+
+      // Collision checks for orthogonal segments
+      const hOK = (y, xa, xb) => {
+        const lo = Math.min(xa, xb), hi = Math.max(xa, xb);
+        for (const r of rects) {
+          if (y > r.t && y < r.b && hi > r.l && lo < r.r) return false;
+        }
+        return true;
+      };
+      const vOK = (x, ya, yb) => {
+        const lo = Math.min(ya, yb), hi = Math.max(ya, yb);
+        for (const r of rects) {
+          if (x > r.l && x < r.r && hi > r.t && lo < r.b) return false;
+        }
+        return true;
+      };
+
+      // Candidate corridor positions (1 grid outside every block edge)
+      const cxs = new Set();
+      const cys = new Set();
+      this.blocks.forEach(b => {
+        cxs.add(b.x - G); cxs.add(b.x + BLOCK_W + G);
+        cys.add(b.y - G); cys.add(b.y + BLOCK_H + G);
+      });
+      cxs.add(snap((sx + ex) / 2));
+      cys.add(snap((sy + ey) / 2));
+
+      const pathLen = (pts) => {
+        let l = 0;
+        for (let i = 1; i < pts.length; i++) l += Math.abs(pts[i][0]-pts[i-1][0]) + Math.abs(pts[i][1]-pts[i-1][1]);
+        return l;
+      };
+
+      // Remove consecutive duplicates, then collinear intermediate points
+      const simplify = (pts) => {
+        if (pts.length <= 2) return pts;
+        // Step 1: dedup consecutive identical points
+        const d = [pts[0]];
+        for (let i = 1; i < pts.length; i++) {
+          if (pts[i][0] !== d[d.length-1][0] || pts[i][1] !== d[d.length-1][1]) d.push(pts[i]);
+        }
+        if (d.length <= 2) return d;
+        // Step 2: remove collinear intermediate points
+        const s = [d[0]];
+        for (let i = 1; i < d.length - 1; i++) {
+          const p = d[i-1], c = d[i], n = d[i+1];
+          if (!((p[0]===c[0]&&c[0]===n[0]) || (p[1]===c[1]&&c[1]===n[1]))) s.push(c);
+        }
+        s.push(d[d.length-1]);
+        return s;
+      };
+
+      // Build clean SVG path from waypoint array:
+      //   [port1] → [ext1] → [mid waypoints] → [ext2] → [port2]
+      // simplify() removes collinear points (e.g. ext merges into straight segments)
+      const toSvg = (midPts) => {
+        const all = [[x1,y1], ...midPts, [x2,y2]];
+        const s = simplify(all);
+        return "M " + s.map(p => `${p[0]} ${p[1]}`).join(" L ");
+      };
+
+      // Try direct connection (straight line if aligned)
+      if (Math.abs(sx - ex) < 2 && vOK(sx, sy, ey)) {
+        return toSvg([[sx,sy],[ex,ey]]);
+      }
+      if (Math.abs(sy - ey) < 2 && hOK(sy, sx, ex)) {
+        return toSvg([[sx,sy],[ex,ey]]);
+      }
+
+      // Try 3-segment paths
+      const results = [];
+
+      // H-V-H: horizontal from sx → vertical → horizontal to ex
+      for (const mx of [...cxs].sort((a,b) => Math.abs(a-(sx+ex)/2) - Math.abs(b-(sx+ex)/2))) {
+        if (hOK(sy, sx, mx) && vOK(mx, sy, ey) && hOK(ey, mx, ex)) {
+          const pts = [[sx,sy],[mx,sy],[mx,ey],[ex,ey]];
+          results.push({ pts, len: pathLen(pts) });
+        }
+      }
+
+      // V-H-V: vertical from sy → horizontal → vertical to ey
+      for (const my of [...cys].sort((a,b) => Math.abs(a-(sy+ey)/2) - Math.abs(b-(sy+ey)/2))) {
+        if (vOK(sx, sy, my) && hOK(my, sx, ex) && vOK(ex, my, ey)) {
+          const pts = [[sx,sy],[sx,my],[ex,my],[ex,ey]];
+          results.push({ pts, len: pathLen(pts) });
+        }
+      }
+
+      // 5-segment detours
+      for (const mx of [...cxs].sort((a,b) => Math.abs(a-(sx+ex)/2) - Math.abs(b-(sx+ex)/2)).slice(0,4)) {
+        for (const my of [...cys].sort((a,b) => Math.abs(a-(sy+ey)/2) - Math.abs(b-(sy+ey)/2)).slice(0,4)) {
+          // H-V-H-V-H
+          if (hOK(sy,sx,mx) && vOK(mx,sy,my) && hOK(my,mx,ex) && vOK(ex,my,ey)) {
+            const pts = [[sx,sy],[mx,sy],[mx,my],[ex,my],[ex,ey]];
+            results.push({ pts, len: pathLen(pts) });
+          }
+          // V-H-V-H-V
+          if (vOK(sx,sy,my) && hOK(my,sx,mx) && vOK(mx,my,ey) && hOK(ey,mx,ex)) {
+            const pts = [[sx,sy],[sx,my],[mx,my],[mx,ey],[ex,ey]];
+            results.push({ pts, len: pathLen(pts) });
+          }
+        }
+      }
+
+      // Pick shortest
+      if (results.length > 0) {
+        results.sort((a, b) => a.len - b.len);
+        return toSvg(results[0].pts);
+      }
+
+      // Fallback: route via extreme outer edge
+      const farR = Math.max(...[...cxs]) + G * 3;
+      const farL = Math.min(...[...cxs]) - G * 3;
+      const farT = Math.min(...[...cys]) - G * 3;
+      const farB = Math.max(...[...cys]) + G * 3;
+      const fbs = [
+        { pts: [[sx,sy],[farR,sy],[farR,ey],[ex,ey]], len: 0 },
+        { pts: [[sx,sy],[farL,sy],[farL,ey],[ex,ey]], len: 0 },
+        { pts: [[sx,sy],[sx,farT],[ex,farT],[ex,ey]], len: 0 },
+        { pts: [[sx,sy],[sx,farB],[ex,farB],[ex,ey]], len: 0 },
+      ];
+      fbs.forEach(f => f.len = pathLen(f.pts));
+      fbs.sort((a,b) => a.len - b.len);
+      return toSvg(fbs[0].pts);
     }
 
     // ── Reset ────────────────────────────────────────────────
@@ -286,7 +491,8 @@
       this.nextId = 1;
       this.nextConnId = 1;
       this.select(null);
-      // Remove saved flow
+      // Remove saved flow (backend + localStorage)
+      fetch("/api/workflows/default", { method: "DELETE" }).catch(() => {});
       localStorage.removeItem("wf_flow_default");
       // Add default Start block
       this.addBlock("start", 200, 250);
@@ -310,27 +516,80 @@
       if (lbl) lbl.textContent = "100%";
     }
 
-    // ── Run Flow (Animation) ─────────────────────────────────
+    // ── Run Flow (Backend execution + Frontend animation) ────
     async runFlow() {
+      // Save first to ensure backend has latest
+      await this.save("default");
+
+      // Start frontend animation
       const order = this._topoSort();
       for (const id of order) {
         const b = this.blocks.get(id);
         if (!b) continue;
         b.el.classList.add("running");
         b.el.querySelector(".wf-block-status")?.classList.add("running");
-        // Animate incoming connections
         this.connections.filter(c => c.to === id).forEach(c => c.el.classList.add("active-flow"));
-        await sleep(400);
+        await sleep(300);
+      }
+
+      // Call backend execution
+      try {
+        const resp = await fetch("/api/workflows/default/execute", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ initial_prompt: "", model: null }),
+        });
+        const data = await resp.json();
+
+        // Update block statuses from results
+        if (data.results) {
+          data.results.forEach(r => {
+            // Find block by matching type
+            this.blocks.forEach(b => {
+              const skillName = b.type.startsWith("mcp-") ? b.type : `mcp-${b.type}`;
+              if (r.block_id === b.id || r.skill === skillName) {
+                const statusEl = b.el.querySelector(".wf-block-status");
+                if (statusEl) {
+                  statusEl.classList.remove("running");
+                  statusEl.classList.add(r.status === "success" ? "ok" : r.status === "error" ? "error" : "ok");
+                }
+              }
+            });
+          });
+        }
+
+        // Log results
+        if (window._wfDashboard) {
+          const success = data.results?.filter(r => r.status === "success").length || 0;
+          const errors = data.results?.filter(r => r.status === "error").length || 0;
+          window._wfDashboard.addLog(
+            `Flow 執行完成 (${success} 成功, ${errors} 錯誤)`,
+            errors > 0 ? "failed" : "success"
+          );
+        }
+
+        if (window.showToast) {
+          window.showToast(`執行完成：${data.blocks_executed} 個節點`, "success");
+        }
+      } catch (e) {
+        if (window.showToast) window.showToast("執行失敗: " + e.message, "error");
+        if (window._wfDashboard) window._wfDashboard.addLog("Flow 執行失敗", "failed");
+      }
+
+      // Clean up animations
+      this.blocks.forEach(b => {
         b.el.classList.remove("running");
         b.el.querySelector(".wf-block-status")?.classList.remove("running");
-        b.el.querySelector(".wf-block-status")?.classList.add("ok");
-        this.connections.filter(c => c.to === id).forEach(c => c.el.classList.remove("active-flow"));
-      }
-      // Reset status after 2s
+      });
+      this.connections.forEach(c => c.el.classList.remove("active-flow"));
+
+      // Reset status after 3s
       setTimeout(() => {
-        this.blocks.forEach(b => b.el.querySelector(".wf-block-status")?.classList.remove("ok"));
-      }, 2000);
-      if (window._wfDashboard) window._wfDashboard.addLog("Flow 執行完成", "success");
+        this.blocks.forEach(b => {
+          const s = b.el.querySelector(".wf-block-status");
+          if (s) { s.classList.remove("ok", "error"); }
+        });
+      }, 3000);
     }
 
     _topoSort() {
@@ -357,20 +616,48 @@
       if (window._wfDashboard) window._wfDashboard.updateStats(this.blocks.size, this.connections.length);
     }
 
-    // ── Persistence (localStorage) ───────────────────────────
-    save(name) {
+    // ── Persistence (Backend API with localStorage fallback) ──
+    async save(name) {
+      const flowId = name || "default";
       const data = {
+        name: flowId,
         blocks: Array.from(this.blocks.values()).map(b => ({ id: b.id, type: b.type, x: b.x, y: b.y, label: b.label })),
         connections: this.connections.map(c => ({ from: c.from, to: c.to })),
       };
-      localStorage.setItem("wf_flow_" + (name || "default"), JSON.stringify(data));
-      if (window.showToast) window.showToast("工作流已儲存", "success");
+      // Save to backend
+      try {
+        const resp = await fetch(`/api/workflows/${flowId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+        if (resp.ok) {
+          if (window.showToast) window.showToast("工作流已儲存", "success");
+        } else {
+          throw new Error("API save failed");
+        }
+      } catch (e) {
+        // Fallback to localStorage
+        localStorage.setItem("wf_flow_" + flowId, JSON.stringify(data));
+        if (window.showToast) window.showToast("工作流已儲存（本地）", "success");
+      }
     }
 
-    load(name) {
-      const raw = localStorage.getItem("wf_flow_" + (name || "default"));
-      if (!raw) return;
-      const data = JSON.parse(raw);
+    async load(name) {
+      const flowId = name || "default";
+      let data = null;
+      // Try backend first
+      try {
+        const resp = await fetch(`/api/workflows/${flowId}`);
+        if (resp.ok) data = await resp.json();
+      } catch (_) {}
+      // Fallback to localStorage
+      if (!data) {
+        const raw = localStorage.getItem("wf_flow_" + flowId);
+        if (raw) data = JSON.parse(raw);
+      }
+      if (!data || !data.blocks) return;
+
       // Clear
       this.blocks.forEach(b => b.el.remove());
       this.blocks.clear();
@@ -379,17 +666,15 @@
       this.nextId = 1;
       this.nextConnId = 1;
       // Restore blocks
-      let maxId = 0;
       data.blocks.forEach(b => {
         this.addBlock(b.type, b.x, b.y, b.label);
-        if (b.id > maxId) maxId = b.id;
       });
       // Map old IDs to new sequential IDs
       const idMap = new Map();
       let idx = 1;
       data.blocks.forEach(b => { idMap.set(b.id, idx++); });
       // Restore connections
-      data.connections.forEach(c => {
+      (data.connections || []).forEach(c => {
         const from = idMap.get(c.from);
         const to = idMap.get(c.to);
         if (from && to) this._addConnection(from, to);
@@ -431,7 +716,9 @@
           <div class="wf-section-title">技能分布</div>
           <div class="wf-chart-row">
             <div class="wf-chart-wrap wf-chart-sm"><canvas id="wfDistChart"></canvas></div>
-            <div class="wf-chart-legend" id="wfDistLegend"></div>
+            <div class="wf-chart-legend" id="wfDistLegend">
+              <div class="wf-legend-item" style="color:var(--text-tertiary);font-style:italic;">尚無技能節點</div>
+            </div>
           </div>
 
           <!-- Keywords -->
@@ -557,31 +844,49 @@
     }
 
     _updateDistChart() {
-      if (!this.distChart || !window._wfDesigner) return;
-      // Count blocks on canvas by type
+      const chartWrap = document.querySelector(".wf-chart-row");
+      if (!chartWrap || !window._wfDesigner) return;
+
+      // Count blocks on canvas by type (exclude control: start/end/branch)
       const counts = {};
       const colors = {};
       window._wfDesigner.blocks.forEach(bl => {
         const def = BLOCK_DEFS[bl.type];
-        if (!def) return;
+        if (!def || def.category === "control") return; // Skip control nodes
         const label = def.label;
         counts[label] = (counts[label] || 0) + 1;
         colors[label] = def.color;
       });
       const labels = Object.keys(counts);
-      this.distChart.data.labels = labels;
-      this.distChart.data.datasets[0].data = labels.map(l => counts[l]);
-      this.distChart.data.datasets[0].backgroundColor = labels.map(l => colors[l]);
-      this.distChart.update();
 
-      // Update legend
+      // No skill blocks → show placeholder
       const legend = document.getElementById("wfDistLegend");
+      if (!labels.length) {
+        if (this.distChart) {
+          this.distChart.data.labels = [];
+          this.distChart.data.datasets[0].data = [];
+          this.distChart.update();
+        }
+        if (legend) legend.innerHTML = '<div class="wf-legend-item" style="color:var(--text-tertiary);font-style:italic;">尚無技能節點</div>';
+        return;
+      }
+
+      if (this.distChart) {
+        this.distChart.data.labels = labels;
+        this.distChart.data.datasets[0].data = labels.map(l => counts[l]);
+        this.distChart.data.datasets[0].backgroundColor = labels.map(l => colors[l]);
+        this.distChart.update();
+      }
+
+      // Update legend with name + count + percentage
       if (legend) {
+        const total = labels.reduce((s, l) => s + counts[l], 0);
         legend.innerHTML = "";
         labels.forEach(l => {
+          const pct = total > 0 ? Math.round(counts[l] / total * 100) : 0;
           const item = document.createElement("div");
           item.className = "wf-legend-item";
-          item.innerHTML = `<span class="wf-legend-dot" style="background:${colors[l]}"></span>${l}`;
+          item.innerHTML = `<span class="wf-legend-dot" style="background:${colors[l]}"></span><span style="flex:1">${l}</span><span style="color:var(--text-tertiary);font-size:0.6rem;">${counts[l]}個 ${pct}%</span>`;
           legend.appendChild(item);
         });
       }
@@ -825,13 +1130,12 @@
     if (surface && svg && viewport) {
       window._wfDesigner = new FlowDesigner(surface, svg, viewport);
       // Load saved or add demo blocks
-      const saved = localStorage.getItem("wf_flow_default");
-      if (saved) {
-        window._wfDesigner.load("default");
-      } else {
-        // Default: only a Start block
-        window._wfDesigner.addBlock("start", 200, 250);
-      }
+      // Load saved flow (API first, then localStorage fallback)
+      window._wfDesigner.load("default").then(() => {
+        if (window._wfDesigner.blocks.size === 0) {
+          window._wfDesigner.addBlock("start", 200, 250);
+        }
+      });
     }
 
     // Init Dashboard — sync immediately with canvas state
@@ -1107,6 +1411,14 @@
           <div style="flex:1"><label>逾時等待 (Timeout)</label><input type="number" id="wfEditTimeout" value="${meta.execution_timeout || 30}" /></div>
         </div>
 
+        <div class="wf-editor-section-title">建議模型 (Recommended Models)</div>
+        <div class="wf-editor-field" style="display:flex;gap:10px;">
+          <div style="flex:1"><label>OpenAI</label><input type="text" id="wfEditModelOpenai" value="${(meta.recommended_models?.openai) || ''}" placeholder="自動評估" /></div>
+          <div style="flex:1"><label>Gemini</label><input type="text" id="wfEditModelGemini" value="${(meta.recommended_models?.gemini) || ''}" placeholder="自動評估" /></div>
+          <div style="flex:1"><label>Claude</label><input type="text" id="wfEditModelClaude" value="${(meta.recommended_models?.claude) || ''}" placeholder="自動評估" /></div>
+        </div>
+        <div style="font-size:0.6rem;color:var(--text-tertiary);margin:-6px 0 8px 2px;">儲存時自動評估，或手動指定具體模型名稱</div>
+
         <div class="wf-editor-section-title">提示詞 (Prompt)</div>
         <div class="wf-editor-field">
           <textarea id="wfEditBody" rows="12">${this._escapeHtml(mdBody.trim())}</textarea>
@@ -1182,12 +1494,82 @@
       yaml += `risk_level: ${risk}\n`;
       if (meta.risk_description) yaml += `risk_description: >\n  ${String(meta.risk_description).trim().replace(/\n/g, "\n  ")}\n`;
       if (parseInt(timeout) !== 30) yaml += `execution_timeout: ${timeout}\n`;
+
+      // Recommended models (user-specified override — if all empty, auto-evaluated on save)
+      const _rmOpenai = document.getElementById("wfEditModelOpenai")?.value?.trim();
+      const _rmGemini = document.getElementById("wfEditModelGemini")?.value?.trim();
+      const _rmClaude = document.getElementById("wfEditModelClaude")?.value?.trim();
+      if (_rmOpenai || _rmGemini || _rmClaude) {
+        yaml += `recommended_models:\n`;
+        if (_rmOpenai) yaml += `  openai: ${_rmOpenai}\n`;
+        if (_rmGemini) yaml += `  gemini: ${_rmGemini}\n`;
+        if (_rmClaude) yaml += `  claude: ${_rmClaude}\n`;
+      }
+      // If none specified, backend will auto-evaluate on save
+
       yaml += `---\n\n`;
       yaml += mdBody;
 
       return yaml;
     }
 
+    // ── Save Status Modal helpers ───────────────────────────
+    _showSaveModal() {
+      const ov = document.createElement("div");
+      ov.className = "wf-save-overlay";
+      ov.innerHTML = `
+        <div class="wf-save-modal">
+          <img src="../assets/images/kw_logo.png" alt="Agent K" />
+          <div class="wf-save-text" id="wfSaveStatus">
+            Saving<span class="wf-save-dots"><span>.</span><span>.</span><span>.</span></span>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(ov);
+      return ov;
+    }
+
+    _saveModalSuccess(overlay) {
+      const status = overlay.querySelector("#wfSaveStatus");
+      if (!status) return;
+      // Stop logo pulse
+      const img = overlay.querySelector("img");
+      if (img) img.style.animation = "none";
+      // Replace "Saving..." with a clickable success button
+      status.innerHTML = "";
+      const btn = document.createElement("button");
+      btn.className = "wf-save-ok";
+      btn.textContent = "Success";
+      btn.addEventListener("click", () => {
+        overlay.remove();
+        // Refresh editor + palette
+        this._postSaveRefresh();
+      });
+      status.parentElement.appendChild(btn);
+    }
+
+    _saveModalError(overlay, msg) {
+      const status = overlay.querySelector("#wfSaveStatus");
+      if (!status) return;
+      const img = overlay.querySelector("img");
+      if (img) img.style.animation = "none";
+      status.innerHTML = `
+        <div class="wf-save-error">
+          ${msg}
+          <br/><button onclick="this.closest('.wf-save-overlay').remove()">關閉</button>
+        </div>
+      `;
+    }
+
+    async _postSaveRefresh() {
+      await fetch("/skills/rescan", { method: "POST" });
+      _skillsLoaded = false;
+      if (this.currentSkill) this.loadSkill(this.currentSkill);
+      const paletteWrap = document.getElementById("wfPaletteWrap");
+      if (paletteWrap) await _rebuildPaletteForEdit(paletteWrap);
+    }
+
+    // ── Save ─────────────────────────────────────────────────
     async save() {
       // Handle new skill creation
       if (this._isNew) {
@@ -1197,7 +1579,6 @@
           return;
         }
         try {
-          // Create skill directory
           const createResp = await fetch("/skills/create", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1221,22 +1602,28 @@
       const skillMd = this._assembleSkillMd();
       if (!skillMd) return;
 
-      // Check if name was changed (rename)
       const nameInput = document.getElementById("wfEditName");
       const newName = nameInput?.value?.trim();
       const originalName = nameInput?.dataset?.original;
       const renamed = newName && originalName && newName !== originalName;
 
+      // Show saving modal
+      const overlay = this._showSaveModal();
+
       try {
-        // Save content first
+        const _user = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
         const resp = await fetch(`/skills/${this.currentSkill}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ yaml_content: skillMd }),
+          body: JSON.stringify({
+            yaml_content: skillMd,
+            user_name: _user.name || "unknown",
+            user_id: _user.id || "unknown",
+          }),
         });
         const data = await resp.json();
         if (!resp.ok) {
-          if (window.showToast) window.showToast("儲存失敗: " + (data.detail || ""), "error");
+          this._saveModalError(overlay, "儲存失敗: " + (data.detail || ""));
           return;
         }
 
@@ -1249,27 +1636,101 @@
           });
           if (renameResp.ok) {
             this.currentSkill = newName;
-            if (window.showToast) window.showToast(`已更名為 ${newName} 並同步`, "success");
           } else {
             const renameErr = await renameResp.json();
-            if (window.showToast) window.showToast("更名失敗: " + (renameErr.detail || ""), "error");
+            this._saveModalError(overlay, "更名失敗: " + (renameErr.detail || ""));
+            return;
           }
-        } else {
-          this._clearDirty();
-          if (window.showToast) window.showToast("已儲存並同步 ✅", "success");
         }
 
-        // Rescan + refresh
-        await fetch("/skills/rescan", { method: "POST" });
-        // Reload dynamic skills
-        _skillsLoaded = false;
-        this.loadSkill(this.currentSkill);
-        // Rebuild palette
-        const paletteWrap = document.getElementById("wfPaletteWrap");
-        if (paletteWrap) await _rebuildPaletteForEdit(paletteWrap);
+        this._clearDirty();
+        this._saveModalSuccess(overlay);
       } catch (e) {
-        if (window.showToast) window.showToast("儲存錯誤: " + e.message, "error");
+        this._saveModalError(overlay, "儲存錯誤: " + e.message);
       }
+    }
+
+    async deleteSkill() {
+      if (!this.currentSkill || this._isNew) return;
+      const skillName = this.currentSkill;
+
+      // Build confirmation modal
+      const overlay = document.createElement("div");
+      overlay.className = "wf-delete-overlay";
+      overlay.innerHTML = `
+        <div class="wf-delete-modal">
+          <h3>確認刪除 Agent Skill</h3>
+          <div class="wf-delete-skill-name">${skillName}</div>
+          <label for="wfDeleteReason">刪除原因（必填）</label>
+          <textarea id="wfDeleteReason" placeholder="請輸入刪除原因，至少 5 個字..."></textarea>
+          <div class="wf-delete-hint">此操作不可復原，將完全移除該 Skill 及所有相關檔案，並同步 Commit。</div>
+          <div class="wf-delete-actions">
+            <button class="wf-delete-cancel" id="wfDeleteCancel">取消</button>
+            <button class="wf-delete-confirm" id="wfDeleteConfirm" disabled>確認刪除</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      const textarea = overlay.querySelector("#wfDeleteReason");
+      const confirmBtn = overlay.querySelector("#wfDeleteConfirm");
+      const cancelBtn = overlay.querySelector("#wfDeleteCancel");
+
+      // Enable confirm only when reason >= 5 chars
+      textarea.addEventListener("input", () => {
+        confirmBtn.disabled = textarea.value.trim().length < 5;
+      });
+      textarea.focus();
+
+      // Cancel
+      cancelBtn.addEventListener("click", () => overlay.remove());
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+      // Confirm
+      confirmBtn.addEventListener("click", async () => {
+        const reason = textarea.value.trim();
+        if (reason.length < 5) return;
+
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "刪除中...";
+
+        const user = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+        try {
+          const resp = await fetch(`/skills/${skillName}`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              reason,
+              user_name: user.name || "unknown",
+              user_id: user.id || "unknown",
+            }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) {
+            if (window.showToast) window.showToast("刪除失敗: " + (data.detail || ""), "error");
+            return;
+          }
+          if (window.showToast) window.showToast(`已刪除 ${skillName} 並同步 Commit`, "success");
+
+          // Clear editor
+          this.currentSkill = null;
+          this._isNew = false;
+          this._clearDirty();
+          const content = document.getElementById("wfEditorContent");
+          const empty = document.getElementById("wfEditorEmpty");
+          if (content) content.style.display = "none";
+          if (empty) empty.style.display = "flex";
+
+          // Rebuild palette
+          _skillsLoaded = false;
+          const paletteWrap = document.getElementById("wfPaletteWrap");
+          if (paletteWrap) await _rebuildPaletteForEdit(paletteWrap);
+        } catch (e) {
+          if (window.showToast) window.showToast("刪除錯誤: " + e.message, "error");
+        } finally {
+          overlay.remove();
+        }
+      });
     }
 
     async rollback() {
@@ -1349,14 +1810,15 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            user_input: userMsg,
             session_id: "skill_test_" + this.currentSkill,
-            message: userMsg,
             model: model,
             injected_skill: this.currentSkill,
+            execute: true,
           }),
         });
 
-        // SSE stream or JSON
+        // SSE stream
         if (resp.headers.get("content-type")?.includes("text/event-stream")) {
           const reader = resp.body.getReader();
           const decoder = new TextDecoder();
@@ -1371,14 +1833,17 @@
                 try {
                   const d = JSON.parse(line.slice(6));
                   if (d.content) assistantText += d.content;
+                  if (d.status === "success" && d.content) assistantText = d.content;
                 } catch (_) {}
               }
             }
           }
           if (assistantText) this._addTestMsg(assistantText, "assistant");
+          else this._addTestMsg("（無回應）", "system");
         } else {
           const data = await resp.json();
-          this._addTestMsg(data.reply || data.content || JSON.stringify(data), "assistant");
+          const reply = data.reply || data.content || data.message || JSON.stringify(data);
+          this._addTestMsg(reply, "assistant");
         }
       } catch (e) {
         this._addTestMsg("Error: " + e.message, "system");

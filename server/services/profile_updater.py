@@ -101,8 +101,51 @@ class ProfileUpdater:
                 pass
         return ""
 
+    def _inject_employee_header(self, session_id: str, content: str) -> str:
+        """Prepend employee info block from user context if available."""
+        try:
+            from server.services.employee_lookup import get_user_context
+            ctx = get_user_context(session_id)
+            if not ctx or not ctx.get("onboarding_completed"):
+                return content
+            # Build fixed header block
+            header = (
+                f"### 員工基本資料（系統自動帶入，請勿修改）\n\n"
+                f"- 姓名：{ctx.get('name', '')}\n"
+                f"- 部門：{ctx.get('department', '')}\n"
+                f"- 職稱：{ctx.get('title', '')}\n"
+                f"- 信箱：{ctx.get('email', '')}\n"
+                f"- 分機：{ctx.get('extension', '')}\n"
+                f"- 員編：{ctx.get('employee_id', '')}\n\n"
+            )
+            # Remove existing employee header if present (avoid duplication)
+            marker = "### 員工基本資料"
+            if marker in content:
+                # Find end of existing block (next ### or end)
+                idx = content.index(marker)
+                rest = content[idx:]
+                next_section = rest.find("\n### ", 1)
+                if next_section > 0:
+                    content = content[:idx] + rest[next_section + 1:]
+                else:
+                    # Employee block is at the end, find the next ## or ###
+                    lines = content[:idx].rstrip() + "\n"
+                    content = lines
+            # Insert after the first line (# Profile — xxx)
+            first_newline = content.find("\n")
+            if first_newline > 0:
+                # Find end of header lines (version line)
+                version_end = content.find("\n\n", first_newline)
+                if version_end > 0:
+                    return content[:version_end + 2] + header + content[version_end + 2:]
+            return header + content
+        except Exception as _e:
+            logger.debug(f"Employee header injection skipped: {_e}")
+            return content
+
     def save_profile(self, session_id: str, content: str):
         """Save updated profile content and update metadata."""
+        content = self._inject_employee_header(session_id, content)
         path = self._profile_path(session_id)
         path.write_text(content, encoding="utf-8")
         # Update meta
