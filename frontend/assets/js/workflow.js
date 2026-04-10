@@ -307,13 +307,12 @@
     }
 
     _getPortEdge(block, side) {
-      // Return exact port position on block edge
       switch (side) {
-        case "right":  return { x: block.x + BLOCK_W, y: snap(block.y + BLOCK_H / 2) };
-        case "left":   return { x: block.x,           y: snap(block.y + BLOCK_H / 2) };
-        case "bottom": return { x: snap(block.x + BLOCK_W / 2), y: block.y + BLOCK_H };
-        case "top":    return { x: snap(block.x + BLOCK_W / 2), y: block.y };
-        default:       return { x: block.x + BLOCK_W, y: snap(block.y + BLOCK_H / 2) };
+        case "right":  return { x: block.x + BLOCK_W, y: block.y + BLOCK_H / 2 };
+        case "left":   return { x: block.x,           y: block.y + BLOCK_H / 2 };
+        case "bottom": return { x: block.x + BLOCK_W / 2, y: block.y + BLOCK_H };
+        case "top":    return { x: block.x + BLOCK_W / 2, y: block.y };
+        default:       return { x: block.x + BLOCK_W, y: block.y + BLOCK_H / 2 };
       }
     }
 
@@ -330,115 +329,147 @@
     }
 
     _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
-      // Strict orthogonal routing — lines NEVER enter any block's bounding box
+      // Clean rewrite: draw.io style routing
+      //
+      // Step 1: From port edge, extend 1 grid cell in exit direction → "start point"
+      // Step 2: From port edge, extend 1 grid cell in entry direction → "end point"
+      // Step 3: Connect start→end with orthogonal segments that don't cross any block
+      //
+      // The extension segments (step 1 & 2) are always safe because they go
+      // AWAY from the block, so they can't cross any other block that's not
+      // overlapping (anti-overlap prevents that).
 
-      // Build bounding boxes — use actual block rect (no inflation)
-      // Lines must not enter any block's actual pixel area
-      const boxes = [];
+      const G = GRID; // 10px = 1 small grid cell
+
+      // Extension vectors per side
+      const ext = { right: [G,0], left: [-G,0], bottom: [0,G], top: [0,-G] };
+      const fExt = ext[fromSide || "right"];
+      const tExt = ext[toSide || "left"];
+
+      // Extended start/end points (1 grid cell outside block)
+      const sx = x1 + fExt[0], sy = y1 + fExt[1];
+      const ex = x2 + tExt[0], ey = y2 + tExt[1];
+
+      // Build block rects for collision (ALL blocks, no exceptions)
+      const rects = [];
       this.blocks.forEach(b => {
-        boxes.push({ l: b.x, t: b.y, r: b.x + BLOCK_W, b: b.y + BLOCK_H, id: b.id });
+        rects.push({ l: b.x, t: b.y, r: b.x + BLOCK_W, b: b.y + BLOCK_H });
       });
 
-      // Segment collision — checks ALL blocks, no exclusions
-      const hHits = (y, xA, xB) => {
-        const lo = Math.min(xA, xB), hi = Math.max(xA, xB);
-        for (const box of boxes) {
-          if (y > box.t && y < box.b && hi > box.l && lo < box.r) return true;
+      // Collision checks for orthogonal segments
+      const hOK = (y, xa, xb) => {
+        const lo = Math.min(xa, xb), hi = Math.max(xa, xb);
+        for (const r of rects) {
+          if (y > r.t && y < r.b && hi > r.l && lo < r.r) return false;
         }
-        return false;
+        return true;
       };
-      const vHits = (x, yA, yB) => {
-        const lo = Math.min(yA, yB), hi = Math.max(yA, yB);
-        for (const box of boxes) {
-          if (x > box.l && x < box.r && hi > box.t && lo < box.b) return true;
+      const vOK = (x, ya, yb) => {
+        const lo = Math.min(ya, yb), hi = Math.max(ya, yb);
+        for (const r of rects) {
+          if (x > r.l && x < r.r && hi > r.t && lo < r.b) return false;
         }
-        return false;
+        return true;
       };
 
-      // Collect safe corridor positions — 1 small grid (10px) outside each block
-      const CORR = GRID; // 10px corridor distance
-      const safeXs = new Set();
-      const safeYs = new Set();
+      // Build path: always start with port→extension, end with extension→port
+      // Middle: connect sx,sy → ex,ey
+      const prefix = `M ${x1} ${y1} L ${sx} ${sy}`;
+      const suffix = `L ${ex} ${ey} L ${x2} ${y2}`;
+
+      // Candidate corridor positions (1 grid outside every block edge)
+      const cxs = new Set();
+      const cys = new Set();
       this.blocks.forEach(b => {
-        safeXs.add(snap(b.x - CORR));
-        safeXs.add(snap(b.x + BLOCK_W + CORR));
-        safeYs.add(snap(b.y - CORR));
-        safeYs.add(snap(b.y + BLOCK_H + CORR));
+        cxs.add(b.x - G); cxs.add(b.x + BLOCK_W + G);
+        cys.add(b.y - G); cys.add(b.y + BLOCK_H + G);
       });
-      safeXs.add(snap((x1 + x2) / 2));
-      safeYs.add(snap((y1 + y2) / 2));
+      cxs.add(snap((sx + ex) / 2));
+      cys.add(snap((sy + ey) / 2));
 
-      // Score a candidate path (lower = better): total manhattan length
       const pathLen = (pts) => {
-        let len = 0;
-        for (let i = 1; i < pts.length; i++) {
-          len += Math.abs(pts[i][0] - pts[i-1][0]) + Math.abs(pts[i][1] - pts[i-1][1]);
-        }
-        return len;
+        let l = 0;
+        for (let i = 1; i < pts.length; i++) l += Math.abs(pts[i][0]-pts[i-1][0]) + Math.abs(pts[i][1]-pts[i-1][1]);
+        return l;
       };
 
-      // Try H-V-H routing with different midX values
-      const candidates = [];
+      const simplify = (pts) => {
+        if (pts.length <= 2) return pts;
+        const s = [pts[0]];
+        for (let i = 1; i < pts.length - 1; i++) {
+          const p = pts[i-1], c = pts[i], n = pts[i+1];
+          if (!((p[0]===c[0]&&c[0]===n[0]) || (p[1]===c[1]&&c[1]===n[1]))) s.push(c);
+        }
+        s.push(pts[pts.length-1]);
+        return s;
+      };
 
-      // Sort safe corridors by distance to midpoint
-      const sortedXs = [...safeXs].sort((a, b) => Math.abs(a - (x1+x2)/2) - Math.abs(b - (x1+x2)/2));
-      const sortedYs = [...safeYs].sort((a, b) => Math.abs(a - (y1+y2)/2) - Math.abs(b - (y1+y2)/2));
+      // Try direct connection (straight line if aligned)
+      if (Math.abs(sx - ex) < 2) {
+        // Vertical straight
+        if (vOK(sx, sy, ey)) return `${prefix} L ${ex} ${ey} ${suffix.replace(/^L\s*[\d.-]+\s+[\d.-]+\s*/, "")}`;
+      }
+      if (Math.abs(sy - ey) < 2) {
+        // Horizontal straight
+        if (hOK(sy, sx, ex)) return `${prefix} L ${ex} ${ey} ${suffix.replace(/^L\s*[\d.-]+\s+[\d.-]+\s*/, "")}`;
+      }
 
-      // H-V-H: try each safe X corridor
-      for (const mx of sortedXs) {
-        if (!hHits(y1, x1, mx) && !vHits(mx, y1, y2) && !hHits(y2, mx, x2)) {
-          candidates.push({ pts: [[x1,y1],[mx,y1],[mx,y2],[x2,y2]], len: pathLen([[x1,y1],[mx,y1],[mx,y2],[x2,y2]]) });
+      // Try 3-segment paths
+      const results = [];
+
+      // H-V-H: horizontal from sx → vertical → horizontal to ex
+      for (const mx of [...cxs].sort((a,b) => Math.abs(a-(sx+ex)/2) - Math.abs(b-(sx+ex)/2))) {
+        if (hOK(sy, sx, mx) && vOK(mx, sy, ey) && hOK(ey, mx, ex)) {
+          const pts = [[sx,sy],[mx,sy],[mx,ey],[ex,ey]];
+          results.push({ pts: simplify(pts), len: pathLen(pts) });
         }
       }
 
-      // V-H-V: try each safe Y corridor
-      for (const my of sortedYs) {
-        if (!vHits(x1, y1, my) && !hHits(my, x1, x2) && !vHits(x2, my, y2)) {
-          candidates.push({ pts: [[x1,y1],[x1,my],[x2,my],[x2,y2]], len: pathLen([[x1,y1],[x1,my],[x2,my],[x2,y2]]) });
+      // V-H-V: vertical from sy → horizontal → vertical to ey
+      for (const my of [...cys].sort((a,b) => Math.abs(a-(sy+ey)/2) - Math.abs(b-(sy+ey)/2))) {
+        if (vOK(sx, sy, my) && hOK(my, sx, ex) && vOK(ex, my, ey)) {
+          const pts = [[sx,sy],[sx,my],[ex,my],[ex,ey]];
+          results.push({ pts: simplify(pts), len: pathLen(pts) });
         }
       }
 
-      // 5-segment: H-V-H-V-H (detour via safe corridors)
-      for (const mx of sortedXs.slice(0, 3)) {
-        for (const my of sortedYs.slice(0, 3)) {
-          if (!hHits(y1, x1, mx) && !vHits(mx, y1, my) && !hHits(my, mx, x2) && !vHits(x2, my, y2)) {
-            const pts = [[x1,y1],[mx,y1],[mx,my],[x2,my],[x2,y2]];
-            candidates.push({ pts, len: pathLen(pts) });
+      // 5-segment detours
+      for (const mx of [...cxs].sort((a,b) => Math.abs(a-(sx+ex)/2) - Math.abs(b-(sx+ex)/2)).slice(0,4)) {
+        for (const my of [...cys].sort((a,b) => Math.abs(a-(sy+ey)/2) - Math.abs(b-(sy+ey)/2)).slice(0,4)) {
+          // H-V-H-V-H
+          if (hOK(sy,sx,mx) && vOK(mx,sy,my) && hOK(my,mx,ex) && vOK(ex,my,ey)) {
+            const pts = [[sx,sy],[mx,sy],[mx,my],[ex,my],[ex,ey]];
+            results.push({ pts: simplify(pts), len: pathLen(pts) });
+          }
+          // V-H-V-H-V
+          if (vOK(sx,sy,my) && hOK(my,sx,mx) && vOK(mx,my,ey) && hOK(ey,mx,ex)) {
+            const pts = [[sx,sy],[sx,my],[mx,my],[mx,ey],[ex,ey]];
+            results.push({ pts: simplify(pts), len: pathLen(pts) });
           }
         }
       }
 
-      // Pick shortest valid path
-      if (candidates.length > 0) {
-        candidates.sort((a, b) => a.len - b.len);
-        const best = candidates[0].pts;
-        // Simplify collinear points
-        const simplified = [best[0]];
-        for (let i = 1; i < best.length - 1; i++) {
-          const p = best[i-1], c = best[i], n = best[i+1];
-          if (!((p[0]===c[0] && c[0]===n[0]) || (p[1]===c[1] && c[1]===n[1]))) {
-            simplified.push(c);
-          }
-        }
-        simplified.push(best[best.length - 1]);
-        return "M " + simplified.map(p => `${p[0]} ${p[1]}`).join(" L ");
+      // Pick shortest
+      if (results.length > 0) {
+        results.sort((a, b) => a.len - b.len);
+        const mid = results[0].pts;
+        return prefix + " L " + mid.map(p => `${p[0]} ${p[1]}`).join(" L ") + " " + suffix;
       }
 
-      // Ultimate fallback — go around via outermost edge
-      const farRight = snap(Math.max(...[...safeXs]) + CORR * 2);
-      const farLeft  = snap(Math.min(...[...safeXs]) - CORR * 2);
-      const farTop   = snap(Math.min(...[...safeYs]) - CORR * 2);
-      const farBot   = snap(Math.max(...[...safeYs]) + CORR * 2);
-
-      // Pick the shortest detour around everything
-      const fallbacks = [
-        [[x1,y1],[farRight,y1],[farRight,y2],[x2,y2]],
-        [[x1,y1],[farLeft,y1],[farLeft,y2],[x2,y2]],
-        [[x1,y1],[x1,farTop],[x2,farTop],[x2,y2]],
-        [[x1,y1],[x1,farBot],[x2,farBot],[x2,y2]],
+      // Fallback: route via extreme outer edge
+      const farR = Math.max(...[...cxs]) + G * 3;
+      const farL = Math.min(...[...cxs]) - G * 3;
+      const farT = Math.min(...[...cys]) - G * 3;
+      const farB = Math.max(...[...cys]) + G * 3;
+      const fbs = [
+        { pts: [[sx,sy],[farR,sy],[farR,ey],[ex,ey]], len: 0 },
+        { pts: [[sx,sy],[farL,sy],[farL,ey],[ex,ey]], len: 0 },
+        { pts: [[sx,sy],[sx,farT],[ex,farT],[ex,ey]], len: 0 },
+        { pts: [[sx,sy],[sx,farB],[ex,farB],[ex,ey]], len: 0 },
       ];
-      fallbacks.sort((a, b) => pathLen(a) - pathLen(b));
-      return "M " + fallbacks[0].map(p => `${p[0]} ${p[1]}`).join(" L ");
+      fbs.forEach(f => f.len = pathLen(f.pts));
+      fbs.sort((a,b) => a.len - b.len);
+      return prefix + " L " + fbs[0].pts.map(p=>`${p[0]} ${p[1]}`).join(" L ") + " " + suffix;
     }
 
     // ── Reset ────────────────────────────────────────────────
