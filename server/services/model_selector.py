@@ -123,11 +123,25 @@ def select_model_for_skill(
             skill_recommended = recommended.get(provider)
 
             if skill_recommended:
-                # Compare: use the one that's more appropriate
-                # If skill recommends stronger → upgrade (skill needs it)
-                # If skill recommends weaker → downgrade (save tokens)
-                model = skill_recommended
-                logger.debug(f"[ModelSelector] {skill_name}: recommended={skill_recommended} (provider={provider})")
+                base_strength = _model_strength(base_model)
+                skill_strength = _model_strength(skill_recommended)
+
+                if skill_strength > base_strength:
+                    # Skill recommends WEAKER (cheaper) model → use it (save tokens)
+                    model = skill_recommended
+                    logger.debug(f"[ModelSelector] {skill_name}: downgrade to {skill_recommended} (skill says cheaper is enough)")
+                elif skill_strength < base_strength:
+                    # Skill recommends STRONGER (more expensive) model → only upgrade for semantic skills
+                    _is_semantic = not skill_metadata.get("_has_scripts", True)
+                    if _is_semantic or skill_metadata.get("_force_upgrade"):
+                        model = skill_recommended
+                        logger.debug(f"[ModelSelector] {skill_name}: upgrade to {skill_recommended} (semantic skill needs it)")
+                    else:
+                        # Executable skill doesn't need stronger model — keep router's choice
+                        model = base_model
+                        logger.debug(f"[ModelSelector] {skill_name}: keep {base_model} (executable skill, no upgrade needed)")
+                else:
+                    model = skill_recommended
             else:
                 model = base_model
         else:

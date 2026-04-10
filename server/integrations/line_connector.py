@@ -1489,9 +1489,14 @@ def _process_line_message(
                 if _likely_skill:
                     _skill_info = uma.registry.get_skill(_likely_skill)
                     if _skill_info:
+                        _skill_meta = _skill_info.get("metadata", {})
+                        # Check if skill has scripts (executable mode)
+                        _skill_path = _skill_info.get("path")
+                        if _skill_path:
+                            _skill_meta["_has_scripts"] = (_skill_path / "scripts" / "main.py").exists()
                         _skill_rec_model = select_model_for_skill(
                             _likely_skill,
-                            _skill_info.get("metadata", {}),
+                            _skill_meta,
                             user_default_model=_routed_model,
                             estimated_input_tokens=len(user_input or "") // 3,
                         )
