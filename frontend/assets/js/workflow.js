@@ -286,7 +286,8 @@
       this.nextId = 1;
       this.nextConnId = 1;
       this.select(null);
-      // Remove saved flow
+      // Remove saved flow (backend + localStorage)
+      fetch("/api/workflows/default", { method: "DELETE" }).catch(() => {});
       localStorage.removeItem("wf_flow_default");
       // Add default Start block
       this.addBlock("start", 200, 250);
@@ -310,27 +311,76 @@
       if (lbl) lbl.textContent = "100%";
     }
 
-    // ── Run Flow (Animation) ─────────────────────────────────
+    // ── Run Flow (Backend execution + Frontend animation) ────
     async runFlow() {
+      // Save first to ensure backend has latest
+      await this.save("default");
+
+      // Start frontend animation
       const order = this._topoSort();
       for (const id of order) {
         const b = this.blocks.get(id);
         if (!b) continue;
         b.el.classList.add("running");
         b.el.querySelector(".wf-block-status")?.classList.add("running");
-        // Animate incoming connections
         this.connections.filter(c => c.to === id).forEach(c => c.el.classList.add("active-flow"));
-        await sleep(400);
+        await sleep(300);
+      }
+
+      // Call backend execution
+      try {
+        const resp = await fetch("/api/workflows/default/execute", { method: "POST" });
+        const data = await resp.json();
+
+        // Update block statuses from results
+        if (data.results) {
+          data.results.forEach(r => {
+            // Find block by matching type
+            this.blocks.forEach(b => {
+              const skillName = b.type.startsWith("mcp-") ? b.type : `mcp-${b.type}`;
+              if (r.block_id === b.id || r.skill === skillName) {
+                const statusEl = b.el.querySelector(".wf-block-status");
+                if (statusEl) {
+                  statusEl.classList.remove("running");
+                  statusEl.classList.add(r.status === "success" ? "ok" : r.status === "error" ? "error" : "ok");
+                }
+              }
+            });
+          });
+        }
+
+        // Log results
+        if (window._wfDashboard) {
+          const success = data.results?.filter(r => r.status === "success").length || 0;
+          const errors = data.results?.filter(r => r.status === "error").length || 0;
+          window._wfDashboard.addLog(
+            `Flow 執行完成 (${success} 成功, ${errors} 錯誤)`,
+            errors > 0 ? "failed" : "success"
+          );
+        }
+
+        if (window.showToast) {
+          window.showToast(`執行完成：${data.blocks_executed} 個節點`, "success");
+        }
+      } catch (e) {
+        if (window.showToast) window.showToast("執行失敗: " + e.message, "error");
+        if (window._wfDashboard) window._wfDashboard.addLog("Flow 執行失敗", "failed");
+      }
+
+      // Clean up animations
+      this.blocks.forEach(b => {
         b.el.classList.remove("running");
         b.el.querySelector(".wf-block-status")?.classList.remove("running");
-        b.el.querySelector(".wf-block-status")?.classList.add("ok");
-        this.connections.filter(c => c.to === id).forEach(c => c.el.classList.remove("active-flow"));
-      }
-      // Reset status after 2s
+      });
+      this.connections.forEach(c => c.el.classList.remove("active-flow"));
+
+      // Reset status after 3s
       setTimeout(() => {
-        this.blocks.forEach(b => b.el.querySelector(".wf-block-status")?.classList.remove("ok"));
-      }, 2000);
-      if (window._wfDashboard) window._wfDashboard.addLog("Flow 執行完成", "success");
+        this.blocks.forEach(b => {
+          const s = b.el.querySelector(".wf-block-status");
+          if (s) { s.classList.remove("ok", "error"); }
+        });
+      }, 3000);
     }
 
     _topoSort() {
@@ -357,20 +407,48 @@
       if (window._wfDashboard) window._wfDashboard.updateStats(this.blocks.size, this.connections.length);
     }
 
-    // ── Persistence (localStorage) ───────────────────────────
-    save(name) {
+    // ── Persistence (Backend API with localStorage fallback) ──
+    async save(name) {
+      const flowId = name || "default";
       const data = {
+        name: flowId,
         blocks: Array.from(this.blocks.values()).map(b => ({ id: b.id, type: b.type, x: b.x, y: b.y, label: b.label })),
         connections: this.connections.map(c => ({ from: c.from, to: c.to })),
       };
-      localStorage.setItem("wf_flow_" + (name || "default"), JSON.stringify(data));
-      if (window.showToast) window.showToast("工作流已儲存", "success");
+      // Save to backend
+      try {
+        const resp = await fetch(`/api/workflows/${flowId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(data),
+        });
+        if (resp.ok) {
+          if (window.showToast) window.showToast("工作流已儲存", "success");
+        } else {
+          throw new Error("API save failed");
+        }
+      } catch (e) {
+        // Fallback to localStorage
+        localStorage.setItem("wf_flow_" + flowId, JSON.stringify(data));
+        if (window.showToast) window.showToast("工作流已儲存（本地）", "success");
+      }
     }
 
-    load(name) {
-      const raw = localStorage.getItem("wf_flow_" + (name || "default"));
-      if (!raw) return;
-      const data = JSON.parse(raw);
+    async load(name) {
+      const flowId = name || "default";
+      let data = null;
+      // Try backend first
+      try {
+        const resp = await fetch(`/api/workflows/${flowId}`);
+        if (resp.ok) data = await resp.json();
+      } catch (_) {}
+      // Fallback to localStorage
+      if (!data) {
+        const raw = localStorage.getItem("wf_flow_" + flowId);
+        if (raw) data = JSON.parse(raw);
+      }
+      if (!data || !data.blocks) return;
+
       // Clear
       this.blocks.forEach(b => b.el.remove());
       this.blocks.clear();
@@ -379,17 +457,15 @@
       this.nextId = 1;
       this.nextConnId = 1;
       // Restore blocks
-      let maxId = 0;
       data.blocks.forEach(b => {
         this.addBlock(b.type, b.x, b.y, b.label);
-        if (b.id > maxId) maxId = b.id;
       });
       // Map old IDs to new sequential IDs
       const idMap = new Map();
       let idx = 1;
       data.blocks.forEach(b => { idMap.set(b.id, idx++); });
       // Restore connections
-      data.connections.forEach(c => {
+      (data.connections || []).forEach(c => {
         const from = idMap.get(c.from);
         const to = idMap.get(c.to);
         if (from && to) this._addConnection(from, to);
@@ -845,13 +921,12 @@
     if (surface && svg && viewport) {
       window._wfDesigner = new FlowDesigner(surface, svg, viewport);
       // Load saved or add demo blocks
-      const saved = localStorage.getItem("wf_flow_default");
-      if (saved) {
-        window._wfDesigner.load("default");
-      } else {
-        // Default: only a Start block
-        window._wfDesigner.addBlock("start", 200, 250);
-      }
+      // Load saved flow (API first, then localStorage fallback)
+      window._wfDesigner.load("default").then(() => {
+        if (window._wfDesigner.blocks.size === 0) {
+          window._wfDesigner.addBlock("start", 200, 250);
+        }
+      });
     }
 
     // Init Dashboard — sync immediately with canvas state
@@ -1369,14 +1444,15 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            user_input: userMsg,
             session_id: "skill_test_" + this.currentSkill,
-            message: userMsg,
             model: model,
             injected_skill: this.currentSkill,
+            execute: true,
           }),
         });
 
-        // SSE stream or JSON
+        // SSE stream
         if (resp.headers.get("content-type")?.includes("text/event-stream")) {
           const reader = resp.body.getReader();
           const decoder = new TextDecoder();
@@ -1391,14 +1467,17 @@
                 try {
                   const d = JSON.parse(line.slice(6));
                   if (d.content) assistantText += d.content;
+                  if (d.status === "success" && d.content) assistantText = d.content;
                 } catch (_) {}
               }
             }
           }
           if (assistantText) this._addTestMsg(assistantText, "assistant");
+          else this._addTestMsg("（無回應）", "system");
         } else {
           const data = await resp.json();
-          this._addTestMsg(data.reply || data.content || JSON.stringify(data), "assistant");
+          const reply = data.reply || data.content || data.message || JSON.stringify(data);
+          this._addTestMsg(reply, "assistant");
         }
       } catch (e) {
         this._addTestMsg("Error: " + e.message, "system");
