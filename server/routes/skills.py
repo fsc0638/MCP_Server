@@ -13,7 +13,7 @@ import yaml
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from main import get_uma
-from server.schemas.skills import SkillUpdateRequest, CreateSkillRequest
+from server.schemas.skills import SkillUpdateRequest, SkillDeleteRequest, CreateSkillRequest
 from server.services.prompt_cache import invalidate_prompt_cache
 
 router = APIRouter(tags=["Skill Management"])
@@ -28,31 +28,44 @@ def sanitize_filename(filename: str) -> str:
     return filename or "uploaded_file"
 
 
-def sync_skills_git(message: str):
+def sync_skills_git(message: str, user_name: str = "", user_id: str = ""):
     """
     Synchronize the Agent_skills local repository with the remote.
     Performs: git add ., git commit -m message, git push origin main.
+    Commit message includes user info and timestamp for audit trail.
     """
     uma = get_uma()
     skills_home = uma.registry.skills_home.resolve()
-    
-    # We only sync if it's a git repo
-    if not (skills_home / ".git").exists():
-        logger.warning(f"Git sync skipped: {skills_home} is not a Git repository.")
+
+    # Find the git repo root — skills_home may be Agent_skills/skills/,
+    # but .git lives at Agent_skills/
+    git_root = skills_home
+    if not (git_root / ".git").exists() and (git_root.parent / ".git").exists():
+        git_root = git_root.parent
+    if not (git_root / ".git").exists():
+        logger.warning(f"Git sync skipped: {git_root} is not a Git repository.")
         return {"status": "skipped", "message": "Not a git repository"}
+
+    # Build commit message with user info and timestamp
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    commit_msg = f"[Skill Mgmt] {message}"
+    if user_name or user_id:
+        commit_msg += f"\n\nUser: {user_name} ({user_id}) | {now}"
+    else:
+        commit_msg += f"\n\nUser: system | {now}"
 
     try:
         # 1. git add .
-        subprocess.run(["git", "add", "."], cwd=skills_home, check=True, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=git_root, check=True, capture_output=True)
         # 2. git commit (allow failure if no changes)
-        proc = subprocess.run(["git", "commit", "-m", f"[Skill Mgmt] {message}"], cwd=skills_home, capture_output=True, text=True)
+        proc = subprocess.run(["git", "commit", "-m", commit_msg], cwd=git_root, capture_output=True, text=True)
         if proc.returncode != 0 and "nothing to commit" not in proc.stdout.lower():
              logger.error(f"Git commit failed: {proc.stderr}")
              return {"status": "error", "error": f"Commit failed: {proc.stderr}"}
-        
+
         # 3. git push
-        subprocess.run(["git", "push", "origin", "main"], cwd=skills_home, check=True, capture_output=True)
-        logger.info(f"Git sync successful for Agent_skills: {message}")
+        subprocess.run(["git", "push", "origin", "main"], cwd=git_root, check=True, capture_output=True)
+        logger.info(f"Git sync successful for Agent_skills: {message} (by {user_name})")
         return {"status": "success"}
     except Exception as e:
         logger.error(f"Git sync exception: {e}")
@@ -158,7 +171,11 @@ def update_skill(skill_name: str, req: SkillUpdateRequest):
         skill_md_path.write_text(new_content, encoding="utf-8")
         uma.registry._register_skill(skill_path)
         invalidate_prompt_cache()
-        sync_res = sync_skills_git(f"Updated skill {skill_name}")
+        sync_res = sync_skills_git(
+            f"Updated skill {skill_name}",
+            user_name=req.user_name,
+            user_id=req.user_id,
+        )
         return {
             "status": "success",
             "message": f"Skill '{skill_name}' updated and backup created.",
@@ -170,7 +187,7 @@ def update_skill(skill_name: str, req: SkillUpdateRequest):
 
 
 @router.delete("/skills/{skill_name}")
-def delete_skill(skill_name: str):
+def delete_skill(skill_name: str, req: SkillDeleteRequest):
     from server.core.retriever import retriever
 
     uma = get_uma()
@@ -203,7 +220,11 @@ def delete_skill(skill_name: str):
         shutil.rmtree(skill_path, onerror=remove_readonly)
         uma.registry.skills.pop(skill_name.lower(), None)
         invalidate_prompt_cache()
-        sync_res = sync_skills_git(f"Deleted skill {skill_name}")
+        sync_res = sync_skills_git(
+            f"Deleted skill {skill_name} | Reason: {req.reason}",
+            user_name=req.user_name,
+            user_id=req.user_id,
+        )
         return {"status": "success", "message": f"Skill '{skill_name}' deleted.", "git_sync": sync_res}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

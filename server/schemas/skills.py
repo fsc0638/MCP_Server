@@ -5,6 +5,14 @@ from pydantic import BaseModel
 
 class SkillUpdateRequest(BaseModel):
     yaml_content: str
+    user_name: str = "unknown"
+    user_id: str = "unknown"
+
+
+class SkillDeleteRequest(BaseModel):
+    reason: str
+    user_name: str = "unknown"
+    user_id: str = "unknown"
 
 
 class CreateSkillRequest(BaseModel):

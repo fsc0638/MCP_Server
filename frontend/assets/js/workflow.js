@@ -1513,6 +1513,63 @@
       return yaml;
     }
 
+    // ── Save Status Modal helpers ───────────────────────────
+    _showSaveModal() {
+      const ov = document.createElement("div");
+      ov.className = "wf-save-overlay";
+      ov.innerHTML = `
+        <div class="wf-save-modal">
+          <img src="../assets/images/kw_logo.png" alt="Agent K" />
+          <div class="wf-save-text" id="wfSaveStatus">
+            Saving<span class="wf-save-dots"><span>.</span><span>.</span><span>.</span></span>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(ov);
+      return ov;
+    }
+
+    _saveModalSuccess(overlay) {
+      const status = overlay.querySelector("#wfSaveStatus");
+      if (!status) return;
+      // Stop logo pulse
+      const img = overlay.querySelector("img");
+      if (img) img.style.animation = "none";
+      // Replace "Saving..." with a clickable success button
+      status.innerHTML = "";
+      const btn = document.createElement("button");
+      btn.className = "wf-save-ok";
+      btn.textContent = "Success";
+      btn.addEventListener("click", () => {
+        overlay.remove();
+        // Refresh editor + palette
+        this._postSaveRefresh();
+      });
+      status.parentElement.appendChild(btn);
+    }
+
+    _saveModalError(overlay, msg) {
+      const status = overlay.querySelector("#wfSaveStatus");
+      if (!status) return;
+      const img = overlay.querySelector("img");
+      if (img) img.style.animation = "none";
+      status.innerHTML = `
+        <div class="wf-save-error">
+          ${msg}
+          <br/><button onclick="this.closest('.wf-save-overlay').remove()">關閉</button>
+        </div>
+      `;
+    }
+
+    async _postSaveRefresh() {
+      await fetch("/skills/rescan", { method: "POST" });
+      _skillsLoaded = false;
+      if (this.currentSkill) this.loadSkill(this.currentSkill);
+      const paletteWrap = document.getElementById("wfPaletteWrap");
+      if (paletteWrap) await _rebuildPaletteForEdit(paletteWrap);
+    }
+
+    // ── Save ─────────────────────────────────────────────────
     async save() {
       // Handle new skill creation
       if (this._isNew) {
@@ -1522,7 +1579,6 @@
           return;
         }
         try {
-          // Create skill directory
           const createResp = await fetch("/skills/create", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1546,22 +1602,28 @@
       const skillMd = this._assembleSkillMd();
       if (!skillMd) return;
 
-      // Check if name was changed (rename)
       const nameInput = document.getElementById("wfEditName");
       const newName = nameInput?.value?.trim();
       const originalName = nameInput?.dataset?.original;
       const renamed = newName && originalName && newName !== originalName;
 
+      // Show saving modal
+      const overlay = this._showSaveModal();
+
       try {
-        // Save content first
+        const _user = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
         const resp = await fetch(`/skills/${this.currentSkill}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ yaml_content: skillMd }),
+          body: JSON.stringify({
+            yaml_content: skillMd,
+            user_name: _user.name || "unknown",
+            user_id: _user.id || "unknown",
+          }),
         });
         const data = await resp.json();
         if (!resp.ok) {
-          if (window.showToast) window.showToast("儲存失敗: " + (data.detail || ""), "error");
+          this._saveModalError(overlay, "儲存失敗: " + (data.detail || ""));
           return;
         }
 
@@ -1574,27 +1636,101 @@
           });
           if (renameResp.ok) {
             this.currentSkill = newName;
-            if (window.showToast) window.showToast(`已更名為 ${newName} 並同步`, "success");
           } else {
             const renameErr = await renameResp.json();
-            if (window.showToast) window.showToast("更名失敗: " + (renameErr.detail || ""), "error");
+            this._saveModalError(overlay, "更名失敗: " + (renameErr.detail || ""));
+            return;
           }
-        } else {
-          this._clearDirty();
-          if (window.showToast) window.showToast("已儲存並同步 ✅", "success");
         }
 
-        // Rescan + refresh
-        await fetch("/skills/rescan", { method: "POST" });
-        // Reload dynamic skills
-        _skillsLoaded = false;
-        this.loadSkill(this.currentSkill);
-        // Rebuild palette
-        const paletteWrap = document.getElementById("wfPaletteWrap");
-        if (paletteWrap) await _rebuildPaletteForEdit(paletteWrap);
+        this._clearDirty();
+        this._saveModalSuccess(overlay);
       } catch (e) {
-        if (window.showToast) window.showToast("儲存錯誤: " + e.message, "error");
+        this._saveModalError(overlay, "儲存錯誤: " + e.message);
       }
+    }
+
+    async deleteSkill() {
+      if (!this.currentSkill || this._isNew) return;
+      const skillName = this.currentSkill;
+
+      // Build confirmation modal
+      const overlay = document.createElement("div");
+      overlay.className = "wf-delete-overlay";
+      overlay.innerHTML = `
+        <div class="wf-delete-modal">
+          <h3>確認刪除 Agent Skill</h3>
+          <div class="wf-delete-skill-name">${skillName}</div>
+          <label for="wfDeleteReason">刪除原因（必填）</label>
+          <textarea id="wfDeleteReason" placeholder="請輸入刪除原因，至少 5 個字..."></textarea>
+          <div class="wf-delete-hint">此操作不可復原，將完全移除該 Skill 及所有相關檔案，並同步 Commit。</div>
+          <div class="wf-delete-actions">
+            <button class="wf-delete-cancel" id="wfDeleteCancel">取消</button>
+            <button class="wf-delete-confirm" id="wfDeleteConfirm" disabled>確認刪除</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      const textarea = overlay.querySelector("#wfDeleteReason");
+      const confirmBtn = overlay.querySelector("#wfDeleteConfirm");
+      const cancelBtn = overlay.querySelector("#wfDeleteCancel");
+
+      // Enable confirm only when reason >= 5 chars
+      textarea.addEventListener("input", () => {
+        confirmBtn.disabled = textarea.value.trim().length < 5;
+      });
+      textarea.focus();
+
+      // Cancel
+      cancelBtn.addEventListener("click", () => overlay.remove());
+      overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+
+      // Confirm
+      confirmBtn.addEventListener("click", async () => {
+        const reason = textarea.value.trim();
+        if (reason.length < 5) return;
+
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "刪除中...";
+
+        const user = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+        try {
+          const resp = await fetch(`/skills/${skillName}`, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              reason,
+              user_name: user.name || "unknown",
+              user_id: user.id || "unknown",
+            }),
+          });
+          const data = await resp.json();
+          if (!resp.ok) {
+            if (window.showToast) window.showToast("刪除失敗: " + (data.detail || ""), "error");
+            return;
+          }
+          if (window.showToast) window.showToast(`已刪除 ${skillName} 並同步 Commit`, "success");
+
+          // Clear editor
+          this.currentSkill = null;
+          this._isNew = false;
+          this._clearDirty();
+          const content = document.getElementById("wfEditorContent");
+          const empty = document.getElementById("wfEditorEmpty");
+          if (content) content.style.display = "none";
+          if (empty) empty.style.display = "flex";
+
+          // Rebuild palette
+          _skillsLoaded = false;
+          const paletteWrap = document.getElementById("wfPaletteWrap");
+          if (paletteWrap) await _rebuildPaletteForEdit(paletteWrap);
+        } catch (e) {
+          if (window.showToast) window.showToast("刪除錯誤: " + e.message, "error");
+        } finally {
+          overlay.remove();
+        }
+      });
     }
 
     async rollback() {
