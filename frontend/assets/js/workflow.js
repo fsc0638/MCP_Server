@@ -284,177 +284,54 @@
     }
 
     _routePath(x1, y1, x2, y2, fromSide, toSide, fromBlockId, toBlockId) {
-      // A*-inspired orthogonal routing (draw.io style)
-      const PAD = GRID; // padding around blocks
-      const TURN_COST = 50; // penalty for each direction change
+      // Draw.io style routing: exit port direction → route to target → enter target direction
+      const GAP = GRID * 2; // 48px extension from port before first turn
 
-      // Collect obstacle rects — EXCLUDE the two connected blocks
-      const obstacles = [];
-      this.blocks.forEach(b => {
-        if (b.id === fromBlockId || b.id === toBlockId) return; // Skip connected blocks
-        obstacles.push({ x: b.x - PAD, y: b.y - PAD, w: BLOCK_W + PAD * 2, h: BLOCK_H + PAD * 2 });
-      });
+      // Exit and enter directions as vectors
+      const exitDir = { right: [1,0], left: [-1,0], bottom: [0,1], top: [0,-1] };
+      const enterDir = { left: [-1,0], right: [1,0], top: [0,-1], bottom: [0,1] };
+      const ed = exitDir[fromSide || "right"] || [1, 0];
+      const nd = enterDir[toSide || "left"] || [-1, 0];
 
-      // Check if a point is inside any obstacle
-      const inObstacle = (px, py) => {
-        for (const r of obstacles) {
-          if (px > r.x && px < r.x + r.w && py > r.y && py < r.y + r.h) return true;
+      // Extension points: first step away from port
+      const ex1 = x1 + ed[0] * GAP;
+      const ey1 = y1 + ed[1] * GAP;
+      const ex2 = x2 + nd[0] * GAP;
+      const ey2 = y2 + nd[1] * GAP;
+
+      // Case 1: Horizontal exit → Horizontal enter (most common: right → left)
+      if (ed[1] === 0 && nd[1] === 0) {
+        if (Math.abs(ey1 - ey2) < 2 && Math.abs(ex1 - ex2) < 2) {
+          // Nearly aligned — straight line
+          return `M ${x1} ${y1} L ${x2} ${y2}`;
         }
-        return false;
-      };
-
-      // Check if a segment crosses any obstacle
-      const segmentClear = (ax, ay, bx, by) => {
-        // Only check orthogonal segments
-        if (ax === bx) { // vertical
-          const minY = Math.min(ay, by), maxY = Math.max(ay, by);
-          for (const r of obstacles) {
-            if (ax > r.x && ax < r.x + r.w && maxY > r.y && minY < r.y + r.h) return false;
-          }
-        } else { // horizontal
-          const minX = Math.min(ax, bx), maxX = Math.max(ax, bx);
-          for (const r of obstacles) {
-            if (maxX > r.x && minX < r.x + r.w && ay > r.y && ay < r.y + r.h) return false;
-          }
-        }
-        return true;
-      };
-
-      // Generate candidate X and Y coordinates (guide lines)
-      const xs = new Set([x1, x2]);
-      const ys = new Set([y1, y2]);
-      this.blocks.forEach(b => {
-        xs.add(b.x - PAD); xs.add(b.x + BLOCK_W / 2); xs.add(b.x + BLOCK_W + PAD);
-        ys.add(b.y - PAD); ys.add(b.y + BLOCK_H / 2); ys.add(b.y + BLOCK_H + PAD);
-      });
-      // Add midpoints and exit extension points
-      xs.add(snap((x1 + x2) / 2));
-      ys.add(snap((y1 + y2) / 2));
-      // Exit extension: a point GAP away from port in the exit direction
-      if (fromSide === "right") xs.add(x1 + PAD * 2);
-      if (fromSide === "left") xs.add(x1 - PAD * 2);
-      if (fromSide === "bottom") ys.add(y1 + PAD * 2);
-      if (fromSide === "top") ys.add(y1 - PAD * 2);
-      if (toSide === "left") xs.add(x2 - PAD * 2);
-      if (toSide === "right") xs.add(x2 + PAD * 2);
-      if (toSide === "top") ys.add(y2 - PAD * 2);
-      if (toSide === "bottom") ys.add(y2 + PAD * 2);
-
-      const sortedXs = [...xs].sort((a, b) => a - b);
-      const sortedYs = [...ys].sort((a, b) => a - b);
-
-      // Build grid nodes
-      const nodes = [];
-      const nodeMap = new Map(); // "x,y" → index
-      for (const gx of sortedXs) {
-        for (const gy of sortedYs) {
-          const key = `${gx},${gy}`;
-          if (!nodeMap.has(key)) {
-            nodeMap.set(key, nodes.length);
-            nodes.push({ x: gx, y: gy });
-          }
-        }
+        // Both horizontal: exit → extend → vertical jog → extend → enter
+        const midX = snap((ex1 + ex2) / 2);
+        return `M ${x1} ${y1} L ${ex1} ${ey1} L ${midX} ${ey1} L ${midX} ${ey2} L ${ex2} ${ey2} L ${x2} ${y2}`;
       }
 
-      // Ensure start and end are in the grid
-      const startKey = `${x1},${y1}`;
-      const endKey = `${x2},${y2}`;
-      if (!nodeMap.has(startKey)) { nodeMap.set(startKey, nodes.length); nodes.push({x:x1, y:y1}); }
-      if (!nodeMap.has(endKey)) { nodeMap.set(endKey, nodes.length); nodes.push({x:x2, y:y2}); }
-      const startIdx = nodeMap.get(startKey);
-      const endIdx = nodeMap.get(endKey);
-
-      // Build adjacency: connect nodes that share X or Y and segment is clear
-      const adj = nodes.map(() => []);
-      const nodesByX = new Map();
-      const nodesByY = new Map();
-      nodes.forEach((n, i) => {
-        const kx = n.x; const ky = n.y;
-        if (!nodesByX.has(kx)) nodesByX.set(kx, []);
-        nodesByX.get(kx).push(i);
-        if (!nodesByY.has(ky)) nodesByY.set(ky, []);
-        nodesByY.get(ky).push(i);
-      });
-
-      // Connect nodes on same X (vertical neighbors)
-      for (const [, idxs] of nodesByX) {
-        idxs.sort((a, b) => nodes[a].y - nodes[b].y);
-        for (let i = 0; i < idxs.length - 1; i++) {
-          const a = idxs[i], b = idxs[i + 1];
-          if (segmentClear(nodes[a].x, nodes[a].y, nodes[b].x, nodes[b].y)) {
-            const dist = Math.abs(nodes[b].y - nodes[a].y);
-            adj[a].push({ to: b, dist, dir: "v" });
-            adj[b].push({ to: a, dist, dir: "v" });
-          }
+      // Case 2: Vertical exit → Vertical enter (bottom → top)
+      if (ed[0] === 0 && nd[0] === 0) {
+        if (Math.abs(ex1 - ex2) < 2 && Math.abs(ey1 - ey2) < 2) {
+          return `M ${x1} ${y1} L ${x2} ${y2}`;
         }
-      }
-      // Connect nodes on same Y (horizontal neighbors)
-      for (const [, idxs] of nodesByY) {
-        idxs.sort((a, b) => nodes[a].x - nodes[b].x);
-        for (let i = 0; i < idxs.length - 1; i++) {
-          const a = idxs[i], b = idxs[i + 1];
-          if (segmentClear(nodes[a].x, nodes[a].y, nodes[b].x, nodes[b].y)) {
-            const dist = Math.abs(nodes[b].x - nodes[a].x);
-            adj[a].push({ to: b, dist, dir: "h" });
-            adj[b].push({ to: a, dist, dir: "h" });
-          }
-        }
+        const midY = snap((ey1 + ey2) / 2);
+        return `M ${x1} ${y1} L ${ex1} ${ey1} L ${ex1} ${midY} L ${ex2} ${midY} L ${ex2} ${ey2} L ${x2} ${y2}`;
       }
 
-      // A* search with turn penalty
-      const INF = 1e9;
-      const dist = new Float64Array(nodes.length).fill(INF);
-      const prev = new Int32Array(nodes.length).fill(-1);
-      const prevDir = new Array(nodes.length).fill("");
-      const visited = new Uint8Array(nodes.length);
-      dist[startIdx] = 0;
-
-      // Simple priority queue (small graph, no need for heap)
-      const pq = [{ idx: startIdx, f: 0 }];
-
-      while (pq.length) {
-        pq.sort((a, b) => a.f - b.f);
-        const { idx } = pq.shift();
-        if (visited[idx]) continue;
-        visited[idx] = 1;
-        if (idx === endIdx) break;
-
-        for (const edge of adj[idx]) {
-          const turnCost = (prevDir[idx] && prevDir[idx] !== edge.dir) ? TURN_COST : 0;
-          const newDist = dist[idx] + edge.dist + turnCost;
-          if (newDist < dist[edge.to]) {
-            dist[edge.to] = newDist;
-            prev[edge.to] = idx;
-            prevDir[edge.to] = edge.dir;
-            const h = Math.abs(nodes[edge.to].x - x2) + Math.abs(nodes[edge.to].y - y2);
-            pq.push({ idx: edge.to, f: newDist + h });
-          }
-        }
+      // Case 3: Horizontal exit → Vertical enter (right → top/bottom)
+      if (ed[1] === 0 && nd[0] === 0) {
+        // L-shape: go horizontal to target X, then vertical
+        return `M ${x1} ${y1} L ${ex1} ${ey1} L ${ex2} ${ey1} L ${ex2} ${ey2} L ${x2} ${y2}`;
       }
 
-      // Reconstruct path
-      if (dist[endIdx] < INF) {
-        const path = [];
-        let cur = endIdx;
-        while (cur !== -1) {
-          path.unshift(nodes[cur]);
-          cur = prev[cur];
-        }
-        // Simplify: remove collinear points
-        const simplified = [path[0]];
-        for (let i = 1; i < path.length - 1; i++) {
-          const p = path[i - 1], c = path[i], n = path[i + 1];
-          if (!((p.x === c.x && c.x === n.x) || (p.y === c.y && c.y === n.y))) {
-            simplified.push(c);
-          }
-        }
-        simplified.push(path[path.length - 1]);
-        return "M " + simplified.map(p => `${p.x} ${p.y}`).join(" L ");
+      // Case 4: Vertical exit → Horizontal enter (bottom/top → left/right)
+      if (ed[0] === 0 && nd[1] === 0) {
+        return `M ${x1} ${y1} L ${ex1} ${ey1} L ${ex1} ${ey2} L ${ex2} ${ey2} L ${x2} ${y2}`;
       }
 
-      // Fallback: simple L-shape
-      const midX = snap((x1 + x2) / 2);
-      return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+      // Fallback
+      return `M ${x1} ${y1} L ${ex1} ${ey1} L ${ex2} ${ey2} L ${x2} ${y2}`;
     }
 
     // ── Reset ────────────────────────────────────────────────
