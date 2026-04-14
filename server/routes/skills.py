@@ -123,7 +123,7 @@ def sync_skills_git(message: str, user_name: str = "", user_id: str = "", change
 
 
 @router.get("/skills/list")
-def list_skills(request: Request):
+def list_skills(request: Request, dept: str = "", uid: str = ""):
     uma = get_uma()
 
     # Load user context for department filtering
@@ -132,29 +132,43 @@ def list_skills(request: Request):
         _un, _uid = _extract_user(request)
         if _uid:
             import json as _json
-            _uc_path = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"line_{_uid}.json"
-            if _uc_path.exists():
-                _user_ctx = _json.loads(_uc_path.read_text(encoding="utf-8"))
-            # Also try without line_ prefix
+            # Try workspace/users/ files (LINE users)
+            for _prefix in [f"line_{_uid}", _uid]:
+                _uc_path = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{_prefix}.json"
+                if _uc_path.exists():
+                    _user_ctx = _json.loads(_uc_path.read_text(encoding="utf-8"))
+                    break
+            # Fallback: lookup from employee list (Web login users)
             if not _user_ctx:
-                _uc_path2 = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{_uid}.json"
-                if _uc_path2.exists():
-                    _user_ctx = _json.loads(_uc_path2.read_text(encoding="utf-8"))
+                try:
+                    from server.services.employee_lookup import lookup, build_user_context
+                    _emp = lookup(_un) or lookup(_uid)
+                    if _emp:
+                        _user_ctx = build_user_context(_uid, _emp)
+                except Exception:
+                    pass
     except Exception:
         pass
+
+    # Fallback: use query params from frontend (for password-login users without server session)
+    if not _user_ctx and (dept or uid):
+        _user_ctx = {"department_code": dept, "user_id": uid, "employee_id": uid}
 
     skills: Dict[str, Dict[str, Any]] = {}
     for name, data in uma.registry.skills.items():
         meta = data["metadata"]
         scope = meta.get("_scope", "system")
 
-        # Filter: department skills only visible to same department members
-        if _user_ctx and scope.startswith("dept:"):
+        # Filter: no user context → only system skills visible (safe default)
+        if scope.startswith("dept:"):
+            if not _user_ctx:
+                continue
             dept_code = scope.split(":")[1]
             if dept_code != _user_ctx.get("department_code", ""):
                 continue
-        # Filter: personal skills only visible to owner
-        if _user_ctx and scope.startswith("user:"):
+        elif scope.startswith("user:"):
+            if not _user_ctx:
+                continue
             owner_id = scope.split(":")[1]
             if owner_id != _user_ctx.get("user_id", "") and owner_id != _user_ctx.get("employee_id", ""):
                 continue

@@ -200,8 +200,10 @@
           </div>
           <div id="wfEditorContent" style="display:none;flex-direction:column;height:100%;">
             <div class="wf-editor-header">
-              <span>📝</span>
-              <span id="wfEditorTitle">—</span>
+              <div style="display:flex;flex-direction:column;">
+                <span id="wfEditorTitle" style="font-weight:700;">—</span>
+                <span id="wfEditorSkillId" style="font-size:0.6rem;color:var(--text-tertiary,#94A3B8);font-weight:400;margin-top:1px;"></span>
+              </div>
               <div class="wf-editor-header-actions">
                 <button class="wf-editor-btn wf-editor-btn-danger" onclick="window._wfSkillEditor&&window._wfSkillEditor.deleteSkill()">刪除</button>
                 <button class="wf-editor-btn wf-editor-btn-secondary" onclick="window._wfSkillEditor&&window._wfSkillEditor.rollback()">還原</button>

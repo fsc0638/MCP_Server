@@ -225,3 +225,27 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
     user["_debug_sess_user_id"] = sess.user_id
     user["_debug_ctx_found"] = _ctx is not None
     return {"status": "success", "user": user}
+
+
+@router.get("/employee-lookup")
+def employee_lookup_api(email: str = "", name: str = "", id: str = ""):
+    """Public endpoint for login enrichment — lookup employee by email/name/id."""
+    try:
+        from server.services.employee_lookup import lookup
+        query = email or name or id
+        if not query:
+            return {}
+        emp = lookup(query)
+        if not emp:
+            return {}
+        return {
+            "name": emp.get("name", ""),
+            "email": emp.get("email", ""),
+            "employee_id": emp.get("employee_id", ""),
+            "department_code": emp.get("department_code", ""),
+            "department_name": emp.get("department_name", ""),
+            "title": emp.get("title", ""),
+            "extension": emp.get("extension", ""),
+        }
+    except Exception:
+        return {}

@@ -297,7 +297,10 @@ async def shutdown():
     if __watcher is not None:
         __watcher.stop()
     if __scheduler is not None:
-        __scheduler.shutdown(wait=False)
-        logger.info("[Scheduler] APScheduler shut down.")
+        try:
+            __scheduler.shutdown(wait=False)
+            logger.info("[Scheduler] APScheduler shut down.")
+        except Exception:
+            pass
     session_mgr = get_session_manager()
     session_mgr.flush_all_sessions(make_llm_callable())

@@ -944,7 +944,12 @@
   async function _loadSkillsFromAPI() {
     if (_skillsLoaded) return;
     try {
-      const resp = await fetch("/skills/list");
+      // Pass user context for department/personal skill filtering
+      const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+      const _params = new URLSearchParams();
+      if (_u.department_code) _params.set("dept", _u.department_code);
+      if (_u.employee_id || _u.id) _params.set("uid", _u.employee_id || _u.id);
+      const resp = await fetch("/skills/list" + (_params.toString() ? "?" + _params : ""));
       if (!resp.ok) return;
       const data = await resp.json();
       const skills = data.skills || {};
@@ -1301,6 +1306,8 @@
       // Update header
       const scopeLabel = "新增 Skill";
       document.getElementById("wfEditorTitle").textContent = scopeLabel;
+      const _idEl = document.getElementById("wfEditorSkillId");
+      if (_idEl) _idEl.textContent = "ID 將在首次儲存後自動產生";
       document.getElementById("wfTestSkillName").textContent = "—";
 
       // Render empty form
@@ -1381,6 +1388,8 @@
       const def = BLOCK_DEFS[skillName.replace("mcp-", "")] || {};
       document.getElementById("wfEditorTitle").textContent = def.label || skillName;
       document.getElementById("wfTestSkillName").textContent = def.label || skillName;
+      const _idEl = document.getElementById("wfEditorSkillId");
+      if (_idEl) _idEl.textContent = "";
 
       // Fetch skill data
       try {
@@ -1390,6 +1399,10 @@
         ]);
         // Store backup for rollback
         this._backup = detail.raw_content || "";
+        // Display SkillK_ ID below title
+        if (_idEl && detail.metadata?.skillk_id) {
+          _idEl.textContent = detail.metadata.skillk_id;
+        }
         this._renderEditor(skillName, detail, files);
       } catch (e) {
         console.error("[SkillEditor] Load failed:", e);
@@ -1522,8 +1535,18 @@
 
       const category = document.getElementById("wfEditCategory")?.value || "System";
 
-      // Assemble YAML frontmatter (no parameters, no estimated_tokens)
+      // Generate or preserve SkillK_ ID (immutable after first save)
+      let _skillkId = meta.skillk_id || "";
+      if (!_skillkId) {
+        const _chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        let _rand = "";
+        for (let i = 0; i < 20; i++) _rand += _chars.charAt(Math.floor(Math.random() * _chars.length));
+        _skillkId = "SkillK_" + _rand;
+      }
+
+      // Assemble YAML frontmatter
       let yaml = `---\nname: ${name}\n`;
+      yaml += `skillk_id: ${_skillkId}\n`;
       if (displayName) yaml += `display_name: "${displayName}"\n`;
       yaml += `category: ${category}\n`;
       if (meta.provider) yaml += `provider: ${meta.provider}\n`;
@@ -1606,9 +1629,26 @@
     async _postSaveRefresh() {
       await fetch("/skills/rescan", { method: "POST" });
       _skillsLoaded = false;
+      // Remember which scope sections are expanded before rebuild
+      const _openState = {};
+      document.querySelectorAll(".wf-palette-scope-header").forEach(h => {
+        const bodyId = h.nextElementSibling?.id;
+        if (bodyId) _openState[bodyId] = h.classList.contains("open");
+      });
       if (this.currentSkill) this.loadSkill(this.currentSkill);
       const paletteWrap = document.getElementById("wfPaletteWrap");
-      if (paletteWrap) await _rebuildPaletteForEdit(paletteWrap);
+      if (paletteWrap) {
+        await _rebuildPaletteForEdit(paletteWrap);
+        // Restore expanded state
+        Object.entries(_openState).forEach(([id, wasOpen]) => {
+          const body = document.getElementById(id);
+          const header = body?.previousElementSibling;
+          if (body && header) {
+            if (wasOpen) { header.classList.add("open"); body.classList.remove("collapsed"); }
+            else { header.classList.remove("open"); body.classList.add("collapsed"); }
+          }
+        });
+      }
     }
 
     // ── Save ─────────────────────────────────────────────────

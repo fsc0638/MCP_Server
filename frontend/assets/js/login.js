@@ -68,21 +68,39 @@
 
     const name = email.split("@")[0] || "User";
     const initials = name.slice(0, 2).toUpperCase();
-    sessionStorage.setItem(
-      "kway_user",
-      JSON.stringify({
-        name: name,
-        initials: initials,
-        email: email,
-        dept: "MCP Workspace",
-        provider: "password",
-      })
-    );
 
-    showToast("Login successful", "success");
-    setTimeout(function () {
-      window.location.href = "chat.html";
-    }, 700);
+    // Try to enrich user context from employee lookup
+    var userData = {
+      name: name,
+      initials: initials,
+      email: email,
+      dept: "MCP Workspace",
+      provider: "password",
+    };
+
+    fetch("/api/auth/employee-lookup?email=" + encodeURIComponent(email))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (emp) {
+        if (emp && emp.name) {
+          userData.name = emp.name;
+          userData.initials = emp.name.slice(0, 2);
+          userData.email = emp.email || email;
+          userData.department_code = emp.department_code || "";
+          userData.department_name = emp.department_name || "";
+          userData.department = emp.department_code ? "(" + emp.department_code + ") " + (emp.department_name || "") : "";
+          userData.employee_id = emp.employee_id || "";
+          userData.title = emp.title || "";
+          userData.extension = emp.extension || "";
+        }
+      })
+      .catch(function () {})
+      .finally(function () {
+        sessionStorage.setItem("kway_user", JSON.stringify(userData));
+        showToast("Login successful", "success");
+        setTimeout(function () {
+          window.location.href = "chat.html";
+        }, 700);
+      });
   });
 
   window.onload = function () {
