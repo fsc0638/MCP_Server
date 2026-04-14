@@ -138,6 +138,14 @@
           <div class="page-settings-section-title">危險操作</div>
           <div class="page-settings-danger-card">
             <div class="page-settings-row">
+              <div class="page-settings-row-info"><div class="page-settings-row-label">Server Log 保留天數</div><div class="page-settings-row-desc">超過設定天數的 Log 將自動清除（最低 20 天）</div></div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <input type="number" class="input-field" id="settingLogRetention" value="30" min="20" style="width:70px;text-align:center;" aria-label="Log 保留天數" />
+                <span style="font-size:0.8rem;color:var(--text-muted);">天</span>
+                <button class="page-settings-btn-danger" style="background:var(--kway-blue,#0D6EFD);border-color:var(--kway-blue,#0D6EFD);" onclick="saveLogRetention()" aria-label="儲存 Log 設定">儲存</button>
+              </div>
+            </div>
+            <div class="page-settings-row">
               <div class="page-settings-row-info"><div class="page-settings-row-label">清除所有對話記錄</div><div class="page-settings-row-desc">此操作不可逆</div></div>
               <button class="page-settings-btn-danger" onclick="confirmDanger('清除所有對話記錄')" aria-label="清除所有對話記錄">清除資料</button>
             </div>
