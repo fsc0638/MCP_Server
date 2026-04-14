@@ -22,7 +22,9 @@ The web UI is served at `http://localhost:8500/ui`. There is no frontend build s
 Copy `.env.template` to `.env`. Key variables:
 
 ```bash
-SKILLS_HOME=Agent_skills/skills          # Path to skills directory
+SKILLS_HOME=Agent_skills/system_skills   # Path to system skills directory
+DEPT_SKILLS_HOME=Agent_skills/department_skills
+PERSONAL_SKILLS_HOME=Agent_skills/personal_skills
 OPENAI_API_KEY=...
 GEMINI_API_KEY=...
 ANTHROPIC_API_KEY=...
@@ -66,7 +68,7 @@ User (Web/LINE) → FastAPI Routes → chat_core.py → Model Adapter
 
 ### Skill System
 
-Skills live in `Agent_skills/skills/{skill-name}/`. Each skill requires a `SKILL.md` with YAML frontmatter:
+Skills live in `Agent_skills/system_skills/{skill-name}/`. Each skill requires a `SKILL.md` with YAML frontmatter:
 
 ```yaml
 ---
@@ -271,7 +273,7 @@ Push commands: `git push origin fsc` / `git push origin AgentK_UAT`
 
 ## Adding a New Skill
 
-1. Create `Agent_skills/skills/mcp-{name}/SKILL.md` with YAML frontmatter
+1. Create `Agent_skills/system_skills/mcp-{name}/SKILL.md` with YAML frontmatter
 2. Optionally add `Scripts/main.py` (reads JSON from stdin, prints JSON to stdout)
 3. For long-running skills, add `execution_timeout: N` to SKILL.md (default 30s)
 4. Restart the server or call `POST /skills/reload` — UMA rescans on startup
@@ -312,7 +314,7 @@ Push commands: `git push origin fsc` / `git push origin AgentK_UAT`
 
 Interval tasks use elapsed-time logic (`now - last_run >= interval_minutes`), not wall-clock modulo. Tasks with `once: true` are deleted after execution.
 
-Task types: `news`, `work_summary`, `language`, `custom`, `reminder`. See `Agent_skills/skills/mcp-schedule-manager/SKILL.md` for full field-mapping rules.
+Task types: `news`, `work_summary`, `language`, `custom`, `reminder`. See `Agent_skills/system_skills/mcp-schedule-manager/SKILL.md` for full field-mapping rules.
 
 ### LINE Bot Image Delivery
 

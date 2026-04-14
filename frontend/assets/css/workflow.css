@@ -42,10 +42,32 @@
   color: var(--text-tertiary); letter-spacing: 0.05em;
   padding: 4px 6px; margin-bottom: 4px;
 }
-.wf-palette-scope-title {
-  font-size: 0.7rem; font-weight: 700;
-  color: var(--text-secondary); padding: 6px 6px 4px;
-  border-top: 1px solid var(--border-subtle); margin-top: 4px;
+/* ── Collapsible scope sections (Skill Edit mode) ──────── */
+.wf-palette-scope { margin-bottom: 2px; }
+.wf-palette-scope-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 8px; cursor: pointer; user-select: none;
+  font-size: 0.72rem; font-weight: 700; color: var(--text-secondary);
+  border-top: 1px solid var(--border-subtle);
+  transition: background 0.15s;
+}
+.wf-palette-scope-header:first-child { border-top: none; }
+.wf-palette-scope-header:hover { background: var(--bg-hover); }
+.wf-palette-scope-count {
+  font-size: 0.6rem; font-weight: 600; color: var(--text-tertiary);
+  background: var(--bg-hover, #f1f5f9); border-radius: 8px; padding: 1px 6px;
+  margin-left: auto;
+}
+.wf-palette-scope-arrow {
+  transition: transform 0.2s; flex-shrink: 0;
+}
+.wf-palette-scope-header.open .wf-palette-scope-arrow { transform: rotate(180deg); }
+.wf-palette-scope-body {
+  overflow: hidden; transition: max-height 0.25s ease, opacity 0.2s;
+  max-height: 2000px; opacity: 1;
+}
+.wf-palette-scope-body.collapsed {
+  max-height: 0; opacity: 0;
 }
 
 .wf-palette-item {

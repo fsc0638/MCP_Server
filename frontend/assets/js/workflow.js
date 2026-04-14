@@ -948,21 +948,23 @@
       if (!resp.ok) return;
       const data = await resp.json();
       const skills = data.skills || {};
-      Object.entries(skills).forEach(([name, info]) => {
-        const shortName = name.replace("mcp-", "");
+      Object.entries(skills).forEach(([registryKey, info]) => {
+        // Use short_name (e.g. "mcp-test") not registry key (e.g. "dept:Y200:mcp-test")
+        const skillName = info.short_name || registryKey;
+        const shortName = skillName.replace("mcp-", "");
         const apiDisplayName = info.display_name || "";
         if (!BLOCK_DEFS[shortName]) {
           BLOCK_DEFS[shortName] = {
-            label: apiDisplayName || _guessLabel(name, info.description),
-            icon: _guessIcon(name),
-            color: _guessColor(name),
-            category: _guessCategory(name, info.description),
+            label: apiDisplayName || _guessLabel(skillName, info.description),
+            icon: _guessIcon(skillName),
+            color: _guessColor(skillName),
+            category: _guessCategory(skillName, info.description),
           };
         } else if (apiDisplayName) {
-          // Update label from API display_name if available
           BLOCK_DEFS[shortName].label = apiDisplayName;
         }
-        _dynamicSkills[name] = { ready: info.ready !== false, description: info.description || "", scope: info.scope || "system", short_name: info.short_name || name };
+        // Key by short_name so palette and editor use clean names
+        _dynamicSkills[skillName] = { ready: info.ready !== false, description: info.description || "", scope: info.scope || "system", short_name: skillName };
       });
       _skillsLoaded = true;
     } catch (e) {
@@ -1204,39 +1206,36 @@
       <button class="wf-palette-header-btn" onclick="toggleSkillEditMode()">編輯節點</button>
     </div><div class="wf-palette-body">`;
 
-    // Group skills by scope for three-tier display
-    const SCOPE_LABELS = { "system": "📌 系統技能", "dept": "🏢 部門技能", "user": "👤 個人技能" };
+    // Group skills by scope for three-tier collapsible display
+    const SCOPE_LABELS = { "system": "系統技能", "dept": "部門技能", "user": "個人技能" };
     const scopeGroups = { system: [], dept: [], user: [] };
 
-    // 1. Control blocks (always greyed out)
-    const controlItems = Object.entries(BLOCK_DEFS).filter(([, d]) => d.category === "control");
-
-    // 2. Classify skills by scope
+    // Classify skills by scope (skip control blocks)
     Object.entries(BLOCK_DEFS).forEach(([type, def]) => {
       if (def.category === "control") return;
       const skillName = type.startsWith("mcp-") ? type : "mcp-" + type;
       const info = _dynamicSkills[skillName] || {};
-      const scope = (info.scope || "system").split(":")[0]; // "dept:A100" → "dept"
+      const scope = (info.scope || "system").split(":")[0];
       (scopeGroups[scope] || scopeGroups.system).push([type, def, skillName]);
     });
 
-    // 3. Render control (disabled)
-    if (controlItems.length) {
-      html += `<div class="wf-palette-category"><div class="wf-palette-category-title">${CATEGORIES.control?.label || "控制"}</div>`;
-      controlItems.forEach(([type, def]) => {
-        html += `<div class="wf-palette-item wf-palette-item--disabled" data-type="${type}">
-          <div class="wf-palette-item-accent" style="background:${def.color}"></div>
-          <div class="wf-palette-item-icon" style="background:${def.color}">${def.icon}</div>
-          <span>${def.label}</span></div>`;
-      });
-      html += `</div>`;
-    }
-
-    // 4. Render each scope group
+    // Render each scope as a collapsible section
     for (const [scopeKey, label] of Object.entries(SCOPE_LABELS)) {
       const items = scopeGroups[scopeKey];
-      if (!items.length) continue;
-      html += `<div class="wf-palette-category"><div class="wf-palette-scope-title">${label}</div>`;
+      const count = items.length;
+      const id = `wfScopeGroup_${scopeKey}`;
+      // Default: system expanded, others collapsed
+      const open = scopeKey === "system";
+      html += `<div class="wf-palette-scope">
+        <div class="wf-palette-scope-header${open ? " open" : ""}" onclick="this.classList.toggle('open');document.getElementById('${id}').classList.toggle('collapsed');">
+          <span>${label}</span>
+          <span class="wf-palette-scope-count">${count}</span>
+          <svg class="wf-palette-scope-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="wf-palette-scope-body${open ? "" : " collapsed"}" id="${id}">`;
+      if (count === 0) {
+        html += `<div style="font-size:0.65rem;color:var(--text-tertiary);padding:6px 8px;">（無）</div>`;
+      }
       items.forEach(([type, def, skillName]) => {
         html += `<div class="wf-palette-item wf-palette-item--clickable" data-type="${type}"
           onclick="window._wfSkillEditor&&window._wfSkillEditor.loadSkill('${skillName}')">
@@ -1244,7 +1243,7 @@
           <div class="wf-palette-item-icon" style="background:${def.color}">${def.icon}</div>
           <span>${def.label}</span></div>`;
       });
-      html += `</div>`;
+      html += `</div></div>`;
     }
     html += `</div>`;
     container.innerHTML = html;
@@ -1300,16 +1299,24 @@
       if (content) content.style.display = "flex";
 
       // Update header
-      document.getElementById("wfEditorTitle").textContent = "新增 Skill";
+      const scopeLabel = "新增 Skill";
+      document.getElementById("wfEditorTitle").textContent = scopeLabel;
       document.getElementById("wfTestSkillName").textContent = "—";
 
       // Render empty form
       const body = document.getElementById("wfEditorBody");
       if (!body) return;
+      const _defaultCat = "System";
       body.innerHTML = `
-        <div class="wf-editor-field">
-          <label>顯示名稱 (Display Name)</label>
-          <input type="text" id="wfEditDisplayName" value="" placeholder="例如：我的新技能" />
+        <div class="wf-editor-field" style="display:flex;gap:10px;">
+          <div style="flex:2"><label>顯示名稱 (Display Name)</label>
+            <input type="text" id="wfEditDisplayName" value="" placeholder="例如：我的新技能" /></div>
+          <div style="flex:1"><label>技能群組 (Category)</label>
+            <select id="wfEditCategory">
+              <option value="System"${_defaultCat==="System"?" selected":""}>System</option>
+              <option value="Department"${_defaultCat==="Department"?" selected":""}>Department</option>
+              <option value="Personal"${_defaultCat==="Personal"?" selected":""}>Personal</option>
+            </select></div>
         </div>
         <div class="wf-editor-field">
           <label>名稱 (Name)</label>
@@ -1412,10 +1419,17 @@
       const def = BLOCK_DEFS[skillName.replace("mcp-", "")] || {};
       const displayName = meta.display_name || def.label || skillName.replace("mcp-", "").replace(/-/g, " ");
 
+      const _cat = meta.category || "System";
       body.innerHTML = `
-        <div class="wf-editor-field">
-          <label>顯示名稱 (Display Name)</label>
-          <input type="text" id="wfEditDisplayName" value="${this._escapeHtml(displayName)}" />
+        <div class="wf-editor-field" style="display:flex;gap:10px;">
+          <div style="flex:2"><label>顯示名稱 (Display Name)</label>
+            <input type="text" id="wfEditDisplayName" value="${this._escapeHtml(displayName)}" /></div>
+          <div style="flex:1"><label>技能群組 (Category)</label>
+            <select id="wfEditCategory">
+              <option value="System"${_cat==="System"?" selected":""}>System</option>
+              <option value="Department"${_cat==="Department"?" selected":""}>Department</option>
+              <option value="Personal"${_cat==="Personal"?" selected":""}>Personal</option>
+            </select></div>
         </div>
         <div class="wf-editor-field">
           <label>名稱 (Name)</label>
@@ -1506,9 +1520,12 @@
 
       const displayName = document.getElementById("wfEditDisplayName")?.value?.trim() || "";
 
+      const category = document.getElementById("wfEditCategory")?.value || "System";
+
       // Assemble YAML frontmatter (no parameters, no estimated_tokens)
       let yaml = `---\nname: ${name}\n`;
       if (displayName) yaml += `display_name: "${displayName}"\n`;
+      yaml += `category: ${category}\n`;
       if (meta.provider) yaml += `provider: ${meta.provider}\n`;
       yaml += `version: "${version}"\n`;
       if (desc) {
@@ -1604,10 +1621,25 @@
           return;
         }
         try {
+          // Resolve scope + owner from Category dropdown
+          const _catVal = (document.getElementById("wfEditCategory")?.value || "System").toLowerCase();
+          const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+          let _scope = "system", _owner = "";
+          if (_catVal === "department") {
+            _scope = "department";
+            _owner = _u.department_code || "unknown";
+          } else if (_catVal === "personal") {
+            _scope = "personal";
+            _owner = _u.employee_id || _u.id || "unknown";
+          }
           const createResp = await fetch("/skills/create", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: newName }),
+            body: JSON.stringify({
+              name: newName,
+              scope: _scope,
+              owner: _owner,
+            }),
           });
           if (!createResp.ok) {
             const err = await createResp.json();
@@ -1637,6 +1669,28 @@
 
       try {
         const _user = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+
+        // Step 1: Move directory FIRST if category changed (before PUT triggers rescan)
+        const _newCat = (document.getElementById("wfEditCategory")?.value || "System");
+        const _oldCat = (this._editState?.meta?.category || "System");
+        if (_newCat !== _oldCat && !this._isNew) {
+          const _scopeMap = { "System": "system", "Department": "department", "Personal": "personal" };
+          const _targetScope = _scopeMap[_newCat] || "system";
+          let _targetOwner = "";
+          if (_targetScope === "department") _targetOwner = _user.department_code || "unknown";
+          else if (_targetScope === "personal") _targetOwner = _user.employee_id || _user.id || "unknown";
+
+          const moveResp = await fetch(`/skills/${this.currentSkill}/move?target_scope=${_targetScope}&target_owner=${_targetOwner}`, {
+            method: "POST",
+          });
+          if (!moveResp.ok) {
+            const moveErr = await moveResp.json();
+            this._saveModalError(overlay, "搬移失敗: " + (moveErr.detail || ""));
+            return;
+          }
+        }
+
+        // Step 2: PUT to update SKILL.md content (now in the new directory)
         const resp = await fetch(`/skills/${this.currentSkill}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -1652,7 +1706,7 @@
           return;
         }
 
-        // Handle rename if name changed
+        // Step 3: Handle rename if name changed
         if (renamed) {
           const renameResp = await fetch(`/skills/${this.currentSkill}/rename`, {
             method: "POST",

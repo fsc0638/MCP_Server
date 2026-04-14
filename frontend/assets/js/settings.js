@@ -59,13 +59,13 @@
     const fields = {
       settingDisplayName: data.name || '',
       settingEmail: data.email || '',
-      settingDepartment: data.department_name || data.department || '',
+      settingDepartment: data.department_code ? `(${data.department_code}) ${data.department_name || data.department || ''}` : (data.department_name || data.department || ''),
       settingTitle: data.title || '',
       settingExtension: data.extension || '',
     };
     Object.entries(fields).forEach(([id, val]) => {
       const el = document.getElementById(id);
-      if (el) el.value = val;
+      if (el) el.textContent = val;
     });
 
     // Language preference

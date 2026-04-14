@@ -15,8 +15,8 @@ class UMA:
     The main interface for Unified Model Adapter.
     Integrates Registry, Converter, and Executor.
     """
-    def __init__(self, skills_home: str, dept_skills_home: str = None, user_skills_home: str = None, project_root: str = None):
-        self.registry = SkillRegistry(skills_home, dept_skills_home, user_skills_home)
+    def __init__(self, skills_home: str, dept_skills_home: str = None, personal_skills_home: str = None, project_root: str = None):
+        self.registry = SkillRegistry(skills_home, dept_skills_home, personal_skills_home)
         self.executor = ExecutionEngine(skills_home)
         self.converter = SchemaConverter()
         self.project_root = project_root or str(Path(skills_home).resolve().parents[1])
@@ -300,10 +300,10 @@ class SkillRegistry:
     """
     Manages discovery, metadata parsing, and caching of GitHub Skills.
     """
-    def __init__(self, skills_home: str, dept_skills_home: str = None, user_skills_home: str = None):
+    def __init__(self, skills_home: str, dept_skills_home: str = None, personal_skills_home: str = None):
         self.skills_home = Path(skills_home).resolve()
         self.dept_skills_home = Path(dept_skills_home).resolve() if dept_skills_home else None
-        self.user_skills_home = Path(user_skills_home).resolve() if user_skills_home else None
+        self.personal_skills_home = Path(personal_skills_home).resolve() if personal_skills_home else None
         self.skills: Dict[str, Dict[str, Any]] = {}
         self.schema_cache: Dict[str, Dict[str, Any]] = {}
         self.validation_cache: Dict[str, bool] = {}
@@ -313,7 +313,7 @@ class SkillRegistry:
         Scans three-tier skill directories for valid Skill Bundles:
         1. skills_home (system) — available to all users
         2. dept_skills_home/{dept_code}/ (department) — available to department members
-        3. user_skills_home/{user_id}/ (personal) — available to owner only
+        3. personal_skills_home/{user_id}/ (personal) — available to owner only
         D-01/D-13: Auto-regenerates skills_manifest.json after scanning.
         """
         # 1. System skills
@@ -327,8 +327,8 @@ class SkillRegistry:
                     self._scan_directory(dept_dir, scope=f"dept:{dept_dir.name}")
 
         # 3. Personal skills (two-level: user_id/skill_name)
-        if self.user_skills_home and self.user_skills_home.exists():
-            for user_dir in self.user_skills_home.iterdir():
+        if self.personal_skills_home and self.personal_skills_home.exists():
+            for user_dir in self.personal_skills_home.iterdir():
                 if user_dir.is_dir() and user_dir.name != ".gitkeep":
                     self._scan_directory(user_dir, scope=f"user:{user_dir.name}")
 
