@@ -59,6 +59,56 @@
   /* Transition */
   --transition: 0.20s cubic-bezier(0.4, 0, 0.2, 1);
 
+  /* Background (extended) */
+  --bg-main:          #f8f9fb;
+
+  /* Text (extended) */
+  --text-tertiary:    #94a3b8;
+
+  /* Accent Colors */
+  --accent-teal:      #4bbfb5;
+  --accent-teal-pale: #d9f5f2;
+
+  /* Status / Semantic Colors */
+  --color-success:    #059669;
+  --color-success-bg: #dcfce7;
+  --color-error:      #dc2626;
+  --color-error-bg:   #fef2f2;
+  --color-warning:    #d97706;
+  --color-warning-bg: #fef3c7;
+  --color-info:       #4285f4;
+  --color-info-bg:    #dbeafe;
+
+  /* Shadow (extended) */
+  --shadow-clay-sm:   0 2px 8px rgba(0,0,0,0.06);
+  --shadow-clay-md:   0 4px 16px rgba(0,0,0,0.10);
+  --shadow-hover:     0 4px 16px rgba(0,0,0,0.07);
+  --shadow-drawer:    -4px 0 24px rgba(0,0,0,0.12);
+  --shadow-modal:     0 8px 32px rgba(0,0,0,0.18);
+
+  /* Overlay */
+  --overlay-bg:       rgba(0,0,0,0.40);
+
+  /* Radius (extended — aligned to actual usage) */
+  --radius-button:    8px;
+  --radius-card:      12px;
+  --radius-card-lg:   14px;
+
+  /* Font Scale */
+  --font-2xs:  0.60rem;
+  --font-xs:   0.68rem;
+  --font-sm:   0.75rem;
+  --font-base: 0.82rem;
+  --font-md:   0.90rem;
+  --font-lg:   1.05rem;
+  --font-xl:   1.20rem;
+  --font-2xl:  1.60rem;
+
+  /* Transition Scale */
+  --transition-fast:  0.12s ease-out;
+  --transition-base:  0.20s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow:  0.25s ease-out;
+
   /* Typography */
   --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, sans-serif;
 }

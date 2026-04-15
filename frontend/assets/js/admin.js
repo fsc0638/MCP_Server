@@ -221,12 +221,12 @@
     // Placeholder — will be replaced with real activity data
     feed.innerHTML = `
       <div class="admin-feed-item">
-        <span class="admin-feed-dot" style="background:#059669;"></span>
+        <span class="admin-feed-dot" class="admin-bg-success"></span>
         <span class="admin-feed-text">系統啟動完成</span>
         <span class="admin-feed-time">剛剛</span>
       </div>
       <div class="admin-feed-item">
-        <span class="admin-feed-dot" style="background:#1A9AAA;"></span>
+        <span class="admin-feed-dot" class="admin-bg-teal"></span>
         <span class="admin-feed-text">Skills 掃描完成（${document.getElementById("kpiSkills")?.textContent || "?"} 個技能）</span>
         <span class="admin-feed-time">啟動時</span>
       </div>
@@ -515,7 +515,7 @@
 
       const statusBadge = enabled
         ? '<span class="admin-scope-badge system">啟用中</span>'
-        : '<span class="admin-scope-badge" style="background:#fef3c7;color:#92400e;">已暫停</span>';
+        : '<span class="admin-scope-badge" style="background:var(--color-warning-bg);color:var(--color-warning);">已暫停</span>';
       const typeBadge = `<span style="display:inline-flex;align-items:center;gap:4px;font-size:0.72rem;"><span style="width:7px;height:7px;border-radius:50%;background:${typeColors[t.type]||"#94a3b8"};"></span>${t.type || "—"}</span>`;
       const cronHuman = _cronToHuman(t.cron);
 
@@ -557,7 +557,7 @@
           </div>
           <div style="display:flex;gap:6px;align-items:center;">
             <button class="admin-btn" style="font-size:0.68rem;" onclick="_toggleSchedTask('${sessionId}','${taskId}');document.getElementById('adminDrawerOverlay')?.remove();">${enabled ? "暫停" : "恢復"}</button>
-            <button class="admin-btn" style="font-size:0.68rem;color:#ea4335;border-color:#fecaca;" onclick="_deleteSchedTask('${sessionId}','${taskId}','${_esc(task.name||"")}')">刪除</button>
+            <button class="admin-btn" style="font-size:0.68rem;color:var(--color-error);border-color:var(--color-error-bg);" onclick="_deleteSchedTask('${sessionId}','${taskId}','${_esc(task.name||"")}')">刪除</button>
             <button class="admin-drawer-close" onclick="document.getElementById('adminDrawerOverlay')?.remove()">&times;</button>
           </div>
         </div>
@@ -958,7 +958,7 @@
         fileList.forEach(f => {
           h += `<div style="display:flex;align-items:center;justify-content:space-between;padding:3px 0;font-size:0.72rem;color:var(--text-secondary);">
             <span>${_esc(f)}</span>
-            ${_editable ? `<button style="background:none;border:none;color:#ea4335;cursor:pointer;font-size:0.8rem;" onclick="_drawerDeleteFile('${skillName}','${folder}','${f}')">&times;</button>` : ""}
+            ${_editable ? `<button style="background:none;border:none;color:var(--color-error);cursor:pointer;font-size:0.8rem;" onclick="_drawerDeleteFile('${skillName}','${folder}','${f}')">&times;</button>` : ""}
           </div>`;
         });
       } else {
@@ -978,7 +978,7 @@
             <div style="font-size:0.58rem;color:var(--text-tertiary);font-family:monospace;margin-top:2px;">${meta.skillk_id || ""}</div>
           </div>
           <div style="display:flex;gap:6px;align-items:center;">
-            ${_editable ? `<button class="admin-btn" style="font-size:0.68rem;color:#ea4335;border-color:#fecaca;" onclick="_deleteSkillFromAdmin('${skillName}')">刪除</button>` : ""}
+            ${_editable ? `<button class="admin-btn" style="font-size:0.68rem;color:var(--color-error);border-color:var(--color-error-bg);" onclick="_deleteSkillFromAdmin('${skillName}')">刪除</button>` : ""}
             ${_editable ? `<button class="admin-btn" style="font-size:0.68rem;" onclick="_drawerRollback('${skillName}')">還原</button>` : ""}
             <button class="admin-drawer-close" onclick="document.getElementById('adminDrawerOverlay')?.remove()">&times;</button>
           </div>
@@ -1269,7 +1269,7 @@
         const isAdmin = emp.role === "admin";
         html += `<tr>
           <td>${_esc(eid)}</td>
-          <td><div style="display:flex;align-items:center;"><span style="width:46px;flex-shrink:0;text-align:right;padding-right:6px;">${isAdmin ? '<span class="admin-scope-badge" style="background:#fef2f2;color:#dc2626;font-size:0.6rem;">Admin</span>' : ''}</span><span class="admin-table-name" onclick="_openUserDrawer('${_esc(eid)}')">${_esc(name)}</span></div></td>
+          <td><div style="display:flex;align-items:center;"><span style="width:46px;flex-shrink:0;text-align:right;padding-right:6px;">${isAdmin ? '<span class="admin-scope-badge" style="background:var(--color-error-bg);color:var(--color-error);font-size:0.6rem;">Admin</span>' : ''}</span><span class="admin-table-name" onclick="_openUserDrawer('${_esc(eid)}')">${_esc(name)}</span></div></td>
           <td><span class="admin-scope-badge department">${_esc(emp.department_code || "")} ${_esc(emp.department_name || "")}</span></td>
           <td>${_esc(emp.title || "")}</td>
           <td style="font-size:0.72rem;">${_esc(email)}</td>

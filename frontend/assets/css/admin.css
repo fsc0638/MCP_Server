@@ -67,10 +67,10 @@
   background: var(--bg-surface, #fff);
   border: 1px solid var(--border-subtle);
   border-radius: 12px; padding: 18px 20px;
-  transition: box-shadow 0.15s, transform 0.15s;
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
 }
 .admin-kpi-card:hover {
-  box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+  box-shadow: var(--shadow-hover);
   transform: translateY(-2px);
 }
 .admin-kpi-label {
@@ -85,9 +85,9 @@
   font-size: 0.68rem; color: var(--text-tertiary); margin-top: 6px;
 }
 .admin-kpi-accent { border-left: 3px solid var(--kway-blue, #1A9AAA); }
-.admin-kpi-accent-orange { border-left: 3px solid #F5A623; }
-.admin-kpi-accent-green { border-left: 3px solid #059669; }
-.admin-kpi-accent-red { border-left: 3px solid #DC2626; }
+.admin-kpi-accent-orange { border-left: 3px solid var(--kway-orange); }
+.admin-kpi-accent-green { border-left: 3px solid var(--color-success); }
+.admin-kpi-accent-red { border-left: 3px solid var(--color-error); }
 
 /* ── Chart Container ───────────────────────────────────────── */
 .admin-chart-card {
@@ -110,7 +110,7 @@
   display: flex; align-items: flex-start; gap: 10px;
   padding: 10px 14px; background: var(--bg-surface);
   border: 1px solid var(--border-subtle); border-radius: 10px;
-  font-size: 0.76rem; transition: background 0.12s;
+  font-size: 0.76rem; transition: background var(--transition-fast);
 }
 .admin-feed-item:hover { background: var(--bg-hover); }
 .admin-feed-dot {
@@ -198,21 +198,21 @@
 .admin-mode-dot::before {
   content: ""; width: 7px; height: 7px; border-radius: 50%;
 }
-.admin-mode-dot.executable::before { background: #059669; }
-.admin-mode-dot.code::before { background: #3b82f6; }
-.admin-mode-dot.semantic::before { background: #94A3B8; }
+.admin-mode-dot.executable::before { background: var(--color-success); }
+.admin-mode-dot.code::before { background: var(--color-info); }
+.admin-mode-dot.semantic::before { background: var(--text-tertiary); }
 .admin-scope-badge {
   font-size: 0.65rem; font-weight: 600; padding: 2px 8px;
   border-radius: 10px; display: inline-block;
 }
-.admin-scope-badge.system { background: #dcfce7; color: #166534; }
-.admin-scope-badge.department { background: #dbeafe; color: #1e40af; }
-.admin-scope-badge.personal { background: #e6f6f8; color: #0e7490; }
+.admin-scope-badge.system { background: var(--color-success-bg); color: #166534; }
+.admin-scope-badge.department { background: var(--color-info-bg); color: #1e40af; }
+.admin-scope-badge.personal { background: var(--kway-blue-pale); color: #0e7490; }
 .admin-table-actions { display: flex; gap: 6px; }
 .admin-table-action {
   padding: 4px 10px; border-radius: 6px; font-size: 0.68rem; font-weight: 500;
   cursor: pointer; border: 1px solid var(--border-subtle);
-  background: var(--bg-surface); color: var(--text-secondary); transition: background 0.12s;
+  background: var(--bg-surface); color: var(--text-secondary); transition: background var(--transition-fast);
 }
 .admin-table-action:hover { background: var(--bg-hover); }
 .admin-table-action.danger { color: #DC2626; border-color: #fecaca; }
@@ -221,7 +221,7 @@
 /* ── Drawer (right side panel) ─────────────────────────────── */
 .admin-drawer-overlay {
   position: fixed; inset: 0; z-index: 200;
-  background: rgba(0,0,0,0.3); opacity: 0;
+  background: var(--overlay-bg); opacity: 0;
   pointer-events: none; transition: opacity 0.25s;
 }
 .admin-drawer-overlay.open { opacity: 1; pointer-events: auto; }
@@ -229,7 +229,7 @@
   position: fixed; top: 0; right: 0; bottom: 0;
   width: 520px; max-width: 90vw; z-index: 201;
   background: var(--bg-surface, #fff);
-  box-shadow: -4px 0 24px rgba(0,0,0,0.12);
+  box-shadow: var(--shadow-drawer);
   transform: translateX(100%); transition: transform 0.25s ease-out;
   display: flex; flex-direction: column;
 }
@@ -243,7 +243,7 @@
   width: 28px; height: 28px; border: none; background: none;
   cursor: pointer; color: var(--text-tertiary); font-size: 1.1rem;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 6px; transition: background 0.12s;
+  border-radius: 6px; transition: background var(--transition-fast);
 }
 .admin-drawer-close:hover { background: var(--bg-hover); }
 .admin-drawer-body {
@@ -271,13 +271,13 @@ textarea.admin-drawer-input { min-height: 80px; resize: vertical; font-family: i
 /* ── Global Search Modal (Ctrl+K) ─────────────────────────── */
 .admin-cmdk-overlay {
   position: fixed; inset: 0; z-index: 300;
-  background: rgba(0,0,0,0.4); display: none;
+  background: var(--overlay-bg); display: none;
   align-items: flex-start; justify-content: center; padding-top: 15vh;
 }
 .admin-cmdk-overlay.open { display: flex; }
 .admin-cmdk {
   width: 480px; max-width: 90vw; background: var(--bg-surface);
-  border-radius: 14px; box-shadow: 0 12px 40px rgba(0,0,0,0.2);
+  border-radius: 14px; box-shadow: var(--shadow-modal);
   overflow: hidden;
 }
 .admin-cmdk-input {
@@ -305,7 +305,7 @@ textarea.admin-drawer-input { min-height: 80px; resize: vertical; font-family: i
 .admin-wf-card {
   background: var(--bg-surface); border: 1px solid var(--border-subtle);
   border-radius: 12px; overflow: hidden;
-  transition: box-shadow 0.15s, transform 0.15s; cursor: pointer;
+  transition: box-shadow var(--transition-fast), transform var(--transition-fast); cursor: pointer;
 }
 .admin-wf-card:hover {
   box-shadow: 0 4px 16px rgba(0,0,0,0.07); transform: translateY(-2px);
@@ -368,8 +368,8 @@ textarea.admin-drawer-input { min-height: 80px; resize: vertical; font-family: i
   width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
   border: 2px solid var(--bg-surface); z-index: 1;
 }
-.admin-timeline-dot.ok { background: #059669; }
-.admin-timeline-dot.err { background: #DC2626; }
+.admin-timeline-dot.ok { background: var(--color-success); }
+.admin-timeline-dot.err { background: var(--color-error); }
 .admin-timeline-dot.run { background: var(--kway-blue); }
 .admin-timeline-line {
   flex: 1; width: 2px; background: var(--border-subtle); margin-top: 2px;
@@ -406,20 +406,20 @@ textarea.admin-drawer-input { min-height: 80px; resize: vertical; font-family: i
   font-size: 0.7rem; padding: 3px 10px; border-radius: 8px;
   font-weight: 600;
 }
-.admin-settings-badge.ok { background: #dcfce7; color: #166534; }
-.admin-settings-badge.warn { background: #fef3c7; color: #92400e; }
+.admin-settings-badge.ok { background: var(--color-success-bg); color: #166534; }
+.admin-settings-badge.warn { background: var(--color-warning-bg); color: var(--color-warning); }
 
 /* ── Delete Confirmation Modal (same as chat SkillEditor) ─── */
 .admin-delete-overlay {
   position: fixed; inset: 0; z-index: 9999;
-  background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center;
+  background: var(--overlay-bg); display: flex; align-items: center; justify-content: center;
 }
 .admin-delete-modal {
   background: var(--bg-surface, #fff); border-radius: 14px; padding: 28px 32px;
-  width: 420px; max-width: 90vw; box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  width: 420px; max-width: 90vw; box-shadow: var(--shadow-modal);
 }
 .admin-delete-modal h3 {
-  margin: 0 0 4px; font-size: 1rem; color: #ea4335;
+  margin: 0 0 4px; font-size: 1rem; color: var(--color-error);
 }
 .admin-delete-modal .admin-delete-skill-name {
   font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 16px;
@@ -432,7 +432,7 @@ textarea.admin-drawer-input { min-height: 80px; resize: vertical; font-family: i
   border-radius: 8px; padding: 8px 10px; font-size: 0.78rem; resize: vertical;
   font-family: inherit; box-sizing: border-box;
 }
-.admin-delete-modal textarea:focus { outline: none; border-color: #ea4335; }
+.admin-delete-modal textarea:focus { outline: none; border-color: var(--color-error); }
 .admin-delete-modal .admin-delete-hint {
   font-size: 0.65rem; color: var(--text-tertiary); margin: 4px 0 16px;
 }
@@ -445,9 +445,20 @@ textarea.admin-drawer-input { min-height: 80px; resize: vertical; font-family: i
 }
 .admin-delete-cancel { background: var(--bg-surface); color: var(--text-secondary); }
 .admin-delete-cancel:hover { background: var(--bg-hover); }
-.admin-delete-confirm { background: #ea4335; color: #fff; border-color: #ea4335; }
+.admin-delete-confirm { background: var(--color-error); color: #fff; border-color: var(--color-error); }
 .admin-delete-confirm:hover { opacity: 0.9; }
 .admin-delete-confirm:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Status Dot Colors (used in tables/timelines) ──────────── */
+.admin-status-success { color: var(--color-success); }
+.admin-status-error { color: var(--color-error); }
+.admin-status-warning { color: var(--color-warning); }
+.admin-status-info { color: var(--color-info); }
+.admin-bg-success { background: var(--color-success); }
+.admin-bg-error { background: var(--color-error); }
+.admin-bg-warning { background: var(--color-warning); }
+.admin-bg-info { background: var(--color-info); }
+.admin-bg-teal { background: var(--kway-blue); }
 
 /* ── Token Page Buttons ────────────────────────────────────── */
 .admin-toolbar .admin-btn[data-range] {
