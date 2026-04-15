@@ -80,7 +80,19 @@ def sync_skills_git(message: str, user_name: str = "", user_id: str = "", change
     - Stages only specified paths (or all if changed_paths is None)
     - Commits with user info and timestamp
     - Pushes to origin main
+    - Personal skills are NOT pushed to Git (user-managed locally)
     """
+    # Skip git for personal skills — they are not tracked in the repo
+    if changed_paths:
+        uma = get_uma()
+        _personal_root = uma.registry.personal_skills_home
+        if _personal_root:
+            _pr = str(_personal_root.resolve())
+            _all_personal = all(str(Path(p).resolve()).startswith(_pr) for p in changed_paths)
+            if _all_personal:
+                logger.info(f"[Git] Skipped (personal skill): {message}")
+                return {"status": "skipped", "message": "Personal skills are not pushed to Git"}
+
     git_root = _get_git_root()
     if not (git_root / ".git").exists():
         logger.warning(f"Git sync skipped: {git_root} is not a Git repository.")
@@ -173,6 +185,18 @@ def list_skills(request: Request, dept: str = "", uid: str = ""):
             if owner_id != _user_ctx.get("user_id", "") and owner_id != _user_ctx.get("employee_id", ""):
                 continue
 
+        # Determine edit permission:
+        # System → only admin | Department → same dept members | Personal → owner only | Guest → none
+        _editable = False
+        _role = _user_ctx.get("role", "") if _user_ctx else ""
+        if scope == "system":
+            _editable = (_role == "admin")
+        elif scope.startswith("dept:"):
+            _editable = bool(_user_ctx)  # same dept (already filtered above)
+        elif scope.startswith("user:"):
+            _editable = bool(_user_ctx)  # owner (already filtered above)
+        # Guest (no _user_ctx) → _editable stays False
+
         skills[name] = {
             "description": meta.get("description", ""),
             "display_name": meta.get("display_name", ""),
@@ -182,8 +206,10 @@ def list_skills(request: Request, dept: str = "", uid: str = ""):
             "path": str(data["path"]),
             "scope": scope,
             "short_name": meta.get("_short_name", name),
+            "editable": _editable,
         }
-    return {"total": len(skills), "skills": skills}
+    _is_guest = _user_ctx is None
+    return {"total": len(skills), "skills": skills, "guest": _is_guest}
 
 
 @router.get("/skills/{skill_name}")

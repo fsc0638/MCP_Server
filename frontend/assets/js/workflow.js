@@ -969,8 +969,9 @@
           BLOCK_DEFS[shortName].label = apiDisplayName;
         }
         // Key by short_name so palette and editor use clean names
-        _dynamicSkills[skillName] = { ready: info.ready !== false, description: info.description || "", scope: info.scope || "system", short_name: skillName };
+        _dynamicSkills[skillName] = { ready: info.ready !== false, description: info.description || "", scope: info.scope || "system", short_name: skillName, editable: info.editable === true };
       });
+      window._wfIsGuest = data.guest === true;
       _skillsLoaded = true;
     } catch (e) {
       console.warn("[WF] Failed to load skills from API:", e);
@@ -1252,6 +1253,10 @@
     }
     html += `</div>`;
     container.innerHTML = html;
+
+    // Hide "新增 Skill" button for guests
+    const _createBtn = document.getElementById("wfBtnCreateSkill");
+    if (_createBtn && window._wfIsGuest) _createBtn.style.display = "none";
   }
 
   async function _rebuildPaletteForFlow(container) {
@@ -1404,6 +1409,14 @@
           _idEl.textContent = detail.metadata.skillk_id;
         }
         this._renderEditor(skillName, detail, files);
+
+        // Toggle edit buttons based on editable permission
+        const _info = _dynamicSkills[skillName] || {};
+        const _canEdit = _info.editable === true;
+        ["wfBtnDelete","wfBtnRollback","wfBtnSave"].forEach(id => {
+          const btn = document.getElementById(id);
+          if (btn) btn.style.display = _canEdit ? "" : "none";
+        });
       } catch (e) {
         console.error("[SkillEditor] Load failed:", e);
         if (window.showToast) window.showToast("載入失敗: " + e.message, "error");

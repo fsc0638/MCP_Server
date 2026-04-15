@@ -196,7 +196,7 @@
           <div class="wf-editor-empty" id="wfEditorEmpty">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             <p style="text-align:center;">請從左側選擇一個 Skill 開始編輯<br/>或</p>
-            <button class="wf-editor-btn wf-editor-btn-primary" style="padding:8px 20px;font-size:0.8rem;" onclick="window._wfSkillEditor&&window._wfSkillEditor.createNewSkill()">+ 新增 Skill</button>
+            <button class="wf-editor-btn wf-editor-btn-primary" id="wfBtnCreateSkill" style="padding:8px 20px;font-size:0.8rem;" onclick="window._wfSkillEditor&&window._wfSkillEditor.createNewSkill()">+ 新增 Skill</button>
           </div>
           <div id="wfEditorContent" style="display:none;flex-direction:column;height:100%;">
             <div class="wf-editor-header">
@@ -204,10 +204,10 @@
                 <span id="wfEditorTitle" style="font-weight:700;">—</span>
                 <span id="wfEditorSkillId" style="font-size:0.6rem;color:var(--text-tertiary,#94A3B8);font-weight:400;margin-top:1px;"></span>
               </div>
-              <div class="wf-editor-header-actions">
-                <button class="wf-editor-btn wf-editor-btn-danger" onclick="window._wfSkillEditor&&window._wfSkillEditor.deleteSkill()">刪除</button>
-                <button class="wf-editor-btn wf-editor-btn-secondary" onclick="window._wfSkillEditor&&window._wfSkillEditor.rollback()">還原</button>
-                <button class="wf-editor-btn wf-editor-btn-primary" onclick="window._wfSkillEditor&&window._wfSkillEditor.save()">儲存</button>
+              <div class="wf-editor-header-actions" id="wfEditorActions">
+                <button class="wf-editor-btn wf-editor-btn-danger" id="wfBtnDelete" onclick="window._wfSkillEditor&&window._wfSkillEditor.deleteSkill()">刪除</button>
+                <button class="wf-editor-btn wf-editor-btn-secondary" id="wfBtnRollback" onclick="window._wfSkillEditor&&window._wfSkillEditor.rollback()">還原</button>
+                <button class="wf-editor-btn wf-editor-btn-primary" id="wfBtnSave" onclick="window._wfSkillEditor&&window._wfSkillEditor.save()">儲存</button>
               </div>
             </div>
             <div class="wf-editor-body" id="wfEditorBody"></div>
