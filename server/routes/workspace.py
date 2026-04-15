@@ -204,6 +204,48 @@ def _cleanup_old_logs(retention_days: int) -> list:
 
 # ── Schedule Management API ────────────────────────────────────────────────
 
+@router.get("/api/session-names")
+def get_session_names():
+    """Resolve session IDs to human-readable names (user name or group name)."""
+    users_dir = WORKSPACE_DIR / "users"
+    names = {}
+    # 1. From workspace/users/*.json (LINE users)
+    if users_dir.exists():
+        for f in users_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                sid = f.stem
+                name = d.get("name", "")
+                if name:
+                    names[sid] = name
+                    # Also map without prefix
+                    if sid.startswith("line_"):
+                        names[sid.replace("line_", "")] = name
+            except Exception:
+                pass
+
+    # 2. From workspace/profiles/*group*.profile.md (LINE groups — extract from profile title)
+    profiles_dir = WORKSPACE_DIR / "profiles"
+    if profiles_dir.exists():
+        for f in profiles_dir.glob("*group*.profile.md"):
+            try:
+                sid = f.stem.replace(".profile", "")
+                content = f.read_text(encoding="utf-8")
+                # Try to find group name in profile (look for 群組名稱 or first heading)
+                for line in content.split("\n"):
+                    if "群組" in line and "：" in line:
+                        gname = line.split("：", 1)[1].strip()
+                        if gname:
+                            names[sid] = gname
+                            break
+                if sid not in names:
+                    names[sid] = sid.replace("line_group_", "群組 ")[:20]
+            except Exception:
+                pass
+
+    return {"names": names}
+
+
 @router.get("/api/schedules")
 def list_all_schedules():
     """List all scheduled tasks across all sessions for admin dashboard."""

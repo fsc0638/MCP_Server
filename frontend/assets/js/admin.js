@@ -499,10 +499,14 @@
       </div>
     `;
 
-    // Fetch from new API
+    // Fetch schedules + session names
     try {
-      const resp = await fetch("/api/schedules");
-      if (resp.ok) _schedData = await resp.json();
+      const [schedResp, namesResp] = await Promise.all([
+        fetch("/api/schedules"),
+        fetch("/api/session-names"),
+      ]);
+      if (schedResp.ok) _schedData = await schedResp.json();
+      if (namesResp.ok) { const nd = await namesResp.json(); window._sessionNames = nd.names || {}; }
     } catch (_) {}
 
     if (!_schedData) { _schedData = { total: 0, active: 0, paused: 0, sessions: [], tasks: [] }; }
@@ -576,7 +580,7 @@
         <td>${typeBadge}</td>
         <td><span style="font-size:0.75rem;">${_esc(cronHuman)}</span><br/><span style="font-size:0.6rem;color:var(--text-tertiary);font-family:monospace;">${_esc(t.cron || "")}</span></td>
         <td>${statusBadge}</td>
-        <td style="font-size:0.68rem;color:var(--text-secondary);word-break:break-all;">${_esc(sid)}</td>
+        <td style="font-size:0.72rem;color:var(--text-secondary);">${_esc(_resolveSessionName(sid))}<br/><span style="font-size:0.58rem;color:var(--text-tertiary);font-family:monospace;">${_esc(sid)}</span></td>
         <td><div class="admin-table-actions">
           <button class="admin-table-action" onclick="_openSchedDrawer('${t._session_id}','${t.id}')">維護</button>
           <button class="admin-table-action" onclick="_toggleSchedTask('${t._session_id}','${t.id}')">${enabled ? "暫停" : "恢復"}</button>
@@ -636,8 +640,9 @@
             </div>
           </div>
           <div class="admin-drawer-field">
-            <label class="admin-drawer-label">Session ID</label>
-            <div style="font-size:0.75rem;font-family:monospace;color:var(--text-secondary);word-break:break-all;">${_esc(sessionId)}</div>
+            <label class="admin-drawer-label">Session</label>
+            <div style="font-size:0.82rem;font-weight:600;color:var(--text-primary);">${_esc(_resolveSessionName(sessionId))}</div>
+            <div style="font-size:0.65rem;font-family:monospace;color:var(--text-tertiary);margin-top:2px;word-break:break-all;">${_esc(sessionId)}</div>
           </div>
           <div class="admin-drawer-field">
             <label class="admin-drawer-label">建立時間</label>
@@ -978,6 +983,16 @@
 
   function _esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
   function _fmtExt(ext) { if (!ext || ext.length <= 3) return _esc(ext); return _esc(ext.substring(0,3)) + ' / ' + _esc(ext.substring(3)); }
+  function _resolveSessionName(sid) {
+    const names = window._sessionNames || {};
+    if (names[sid]) return names[sid];
+    // Try without line_ prefix
+    const short = sid.replace("line_", "");
+    if (names[short]) return names[short];
+    // Fallback: make it readable
+    if (sid.includes("group_")) return "群組";
+    return "使用者";
+  }
 
   // ── Skill Drawer ───────────────────────────────────────────
   window._openSkillDrawer = async function (skillName) {

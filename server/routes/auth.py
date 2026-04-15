@@ -380,7 +380,69 @@ def update_employee(employee_id: str, req: EmployeeUpdateRequest):
             except Exception:
                 pass
 
-    return {"status": "success", "employee_id": employee_id, "xlsx_saved": xlsx_saved, "synced_files": synced}
+    # 4. Sync profile files (workspace/profiles/*.profile.md)
+    profiles_dir = _P(pr) / "workspace" / "profiles"
+    profile_synced = []
+    if profiles_dir.exists():
+        for pf in profiles_dir.glob("*.profile.md"):
+            try:
+                content = pf.read_text(encoding="utf-8")
+                # Check if this profile belongs to this employee (by 員編 or 信箱)
+                if f"員編：{employee_id}" not in content and (not req.email or req.email.lower() not in content.lower()):
+                    continue
+                # Replace fields in the 員工基本資料 section
+                import re as _re
+                # Get old values before replacing (for full-text substitution)
+                _old_title = ""
+                _m = _re.search(r'- 職稱：(.+)', content)
+                if _m: _old_title = _m.group(1).strip()
+
+                # Replace structured fields
+                if req.name:
+                    content = _re.sub(r'(- 姓名：).*', f'- 姓名：{req.name}', content)
+                if req.title:
+                    content = _re.sub(r'(- 職稱：).*', f'- 職稱：{req.title}', content)
+                    # Also replace old title in profile body text
+                    if _old_title and _old_title != req.title:
+                        content = content.replace(_old_title, req.title)
+                if req.department_code or req.department_name:
+                    dept_str = f"{req.department_code}　 {req.department_name}" if req.department_code and req.department_name else (req.department_code or req.department_name)
+                    content = _re.sub(r'(- 部門：).*', f'- 部門：{dept_str}', content)
+                if req.email:
+                    content = _re.sub(r'(- 信箱：).*', f'- 信箱：{req.email}', content)
+                if req.extension:
+                    content = _re.sub(r'(- 分機：).*', f'- 分機：{req.extension}', content)
+                pf.write_text(content, encoding="utf-8")
+                profile_synced.append(pf.name)
+            except Exception:
+                pass
+
+    # 5. Clear session history so LLM doesn't use stale cached profile
+    sessions_dir = _P(pr) / "workspace" / "sessions"
+    session_cleared = []
+    if sessions_dir.exists():
+        for sf in sessions_dir.glob("*.json"):
+            try:
+                sdata = _json.loads(sf.read_text(encoding="utf-8"))
+                # Match session by employee_id in messages or by filename containing user_id
+                sname = sf.stem
+                matched = False
+                for s in synced:
+                    # synced contains filenames like "line_U09e...json" — match session by same prefix
+                    sid = s.replace(".json", "")
+                    if sname == sid or sname.startswith(sid):
+                        matched = True
+                        break
+                if matched and isinstance(sdata, list) and len(sdata) > 0:
+                    # Remove the first system message if it contains old profile data
+                    if sdata[0].get("role") == "system":
+                        sdata[0]["content"] = ""  # Clear cached system prompt so it regenerates
+                        sf.write_text(_json.dumps(sdata, ensure_ascii=False, indent=2), encoding="utf-8")
+                        session_cleared.append(sf.name)
+            except Exception:
+                pass
+
+    return {"status": "success", "employee_id": employee_id, "xlsx_saved": xlsx_saved, "synced_files": synced, "profile_synced": profile_synced, "session_cleared": session_cleared}
 
 
 @router.post("/employees/{employee_id}")
