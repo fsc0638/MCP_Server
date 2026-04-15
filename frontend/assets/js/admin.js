@@ -81,7 +81,16 @@
       <div class="admin-row">
         <div class="admin-col-main">
           <div class="admin-chart-card">
-            <div class="admin-chart-title">Token 用量趨勢（7 日）</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+              <div class="admin-chart-title" style="margin:0;" id="dashTokenTitle">Token 用量趨勢</div>
+              <div style="display:flex;gap:4px;" id="dashTokenRange">
+                <button class="admin-btn" data-days="1" onclick="_setDashTokenRange(1)" style="font-size:0.65rem;padding:3px 10px;">日</button>
+                <button class="admin-btn admin-btn-primary" data-days="7" onclick="_setDashTokenRange(7)" style="font-size:0.65rem;padding:3px 10px;">周</button>
+                <button class="admin-btn" data-days="30" onclick="_setDashTokenRange(30)" style="font-size:0.65rem;padding:3px 10px;">月</button>
+                <button class="admin-btn" data-days="90" onclick="_setDashTokenRange(90)" style="font-size:0.65rem;padding:3px 10px;">季</button>
+                <button class="admin-btn" data-days="365" onclick="_setDashTokenRange(365)" style="font-size:0.65rem;padding:3px 10px;">年</button>
+              </div>
+            </div>
             <div class="admin-chart-wrap"><canvas id="adminTokenChart"></canvas></div>
           </div>
           <div class="admin-chart-card">
@@ -123,13 +132,24 @@
     } catch (_) {}
 
     try {
-      // Token summary — daily is dict(date→{total_tokens,...}), total has input/output/total_tokens
+      // Token summary — use monthly data for current month
       const tokenResp = await fetch("/skills/workflow/stats");
       if (tokenResp.ok) {
         const d = await tokenResp.json();
-        const total = d.total?.total_tokens || 0;
         const fmt = n => n > 100000 ? Math.round(n / 1000) + "K" : n.toLocaleString();
-        document.getElementById("kpiTokens").textContent = fmt(total);
+        // Get current month YYYY-MM
+        const now = new Date();
+        const curMonth = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
+        const monthly = d.monthly || {};
+        const thisMonth = monthly[curMonth];
+        if (thisMonth) {
+          document.getElementById("kpiTokens").textContent = fmt(thisMonth.total_tokens || 0);
+          // Update sub text with details
+          const subEl = document.getElementById("kpiTokens")?.nextElementSibling;
+          if (subEl) subEl.textContent = `${curMonth} | ${thisMonth.skill_calls||0} skill + ${thisMonth.chat_calls||0} chat`;
+        } else {
+          document.getElementById("kpiTokens").textContent = fmt(d.total?.total_tokens || 0);
+        }
       }
     } catch (_) {}
 
@@ -138,7 +158,7 @@
     if (sEl) sEl.textContent = "—";
   }
 
-  // ── Token Chart (7-day Area) ────────────────────────────────
+  // ── Token Chart (dynamic range) ─────────────────────────────
   // Helper: convert daily dict → sorted array
   function _dailyToArray(dailyDict) {
     return Object.entries(dailyDict || {})
@@ -146,38 +166,70 @@
       .sort((a, b) => a.date.localeCompare(b.date));
   }
 
+  let _dashTokenDays = 7;
+  let _dashTokenData = null;
+
   async function loadTokenChart() {
     try {
       const resp = await fetch("/skills/workflow/stats");
       if (!resp.ok) return;
-      const data = await resp.json();
-      const daily = _dailyToArray(data.daily).slice(-7);
-      if (!daily.length) return;
-
-      const ctx = document.getElementById("adminTokenChart");
-      if (!ctx || typeof Chart === "undefined") return;
-
-      new Chart(ctx, {
-        type: "line",
-        data: {
-          labels: daily.map(d => d.date.slice(5)),
-          datasets: [
-            { label: "Total Tokens", data: daily.map(d => d.total_tokens || 0), borderColor: "#1A9AAA", backgroundColor: "rgba(26,154,170,0.15)", fill: true, tension: 0.3, borderWidth: 2 },
-            { label: "Skill Calls", data: daily.map(d => d.skill_calls || 0), borderColor: "#F5A623", backgroundColor: "rgba(245,166,35,0.10)", fill: false, tension: 0.3, borderWidth: 2, yAxisID: "y1" },
-          ],
-        },
-        options: {
-          responsive: true, maintainAspectRatio: false,
-          interaction: { mode: "index", intersect: false },
-          plugins: { legend: { position: "bottom", labels: { font: { size: 11 } } } },
-          scales: {
-            y: { beginAtZero: true, position: "left", title: { display: true, text: "Tokens", font: { size: 10 } }, ticks: { font: { size: 10 } } },
-            y1: { beginAtZero: true, position: "right", grid: { drawOnChartArea: false }, title: { display: true, text: "Calls", font: { size: 10 } }, ticks: { font: { size: 10 } } },
-            x: { ticks: { font: { size: 10 } } },
-          },
-        },
-      });
+      _dashTokenData = await resp.json();
+      _renderDashTokenChart();
     } catch (_) {}
+  }
+
+  window._setDashTokenRange = function (days) {
+    _dashTokenDays = days;
+    document.querySelectorAll("#dashTokenRange .admin-btn").forEach(b => {
+      b.classList.toggle("admin-btn-primary", parseInt(b.dataset.days) === days);
+    });
+    _renderDashTokenChart();
+  };
+
+  function _renderDashTokenChart() {
+    if (!_dashTokenData) return;
+    const allDaily = _dailyToArray(_dashTokenData.daily);
+    const daily = allDaily.slice(-_dashTokenDays);
+    if (!daily.length) return;
+
+    // Update title
+    const rangeLabels = { 1: "今日", 7: "近 7 日", 30: "近 30 日", 90: "近 90 日", 365: "近一年" };
+    const titleEl = document.getElementById("dashTokenTitle");
+    if (titleEl) titleEl.textContent = "Token 用量趨勢（" + (rangeLabels[_dashTokenDays] || _dashTokenDays + " 日") + "）";
+
+    // Destroy old chart
+    const ctx = document.getElementById("adminTokenChart");
+    if (!ctx || typeof Chart === "undefined") return;
+    const old = Chart.getChart(ctx);
+    if (old) old.destroy();
+
+    // Format labels based on range
+    let labelFn;
+    if (_dashTokenDays <= 7) labelFn = d => d.date.slice(5);          // MM-DD
+    else if (_dashTokenDays <= 90) labelFn = d => d.date.slice(5);     // MM-DD
+    else labelFn = d => d.date.slice(0, 7);                            // YYYY-MM
+
+    new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: daily.map(labelFn),
+        datasets: [
+          { label: "Total Tokens", data: daily.map(d => d.total_tokens || 0), borderColor: "#1A9AAA", backgroundColor: "rgba(26,154,170,0.15)", fill: true, tension: 0.4, borderWidth: 2, pointRadius: _dashTokenDays > 30 ? 0 : 3 },
+          { label: "Skill Calls", data: daily.map(d => d.skill_calls || 0), borderColor: "#F5A623", backgroundColor: "rgba(245,166,35,0.08)", fill: false, tension: 0.4, borderWidth: 2, pointRadius: _dashTokenDays > 30 ? 0 : 3, yAxisID: "y1" },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        animation: { duration: 400, easing: "easeOutQuart" },
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { position: "bottom", labels: { font: { size: 11 } } } },
+        scales: {
+          y: { beginAtZero: true, position: "left", title: { display: true, text: "Tokens", font: { size: 10 } }, ticks: { font: { size: 10 } } },
+          y1: { beginAtZero: true, position: "right", grid: { drawOnChartArea: false }, title: { display: true, text: "Calls", font: { size: 10 } }, ticks: { stepSize: 1, font: { size: 10 } } },
+          x: { ticks: { font: { size: _dashTokenDays > 90 ? 8 : 10 }, maxRotation: _dashTokenDays > 30 ? 45 : 0 } },
+        },
+      },
+    });
   }
 
   // ── Skill Top 5 (by calls, Horizontal Bar) ─────────────────
@@ -1363,9 +1415,9 @@
           <div class="admin-drawer-field">
             <label class="admin-drawer-label">角色權限</label>
             <select class="admin-drawer-input" id="userEditRole">
-              <option value="editor">Editor（一般編輯者）</option>
-              <option value="viewer">Viewer（唯讀）</option>
-              <option value="admin">Admin（管理員）</option>
+              <option value="editor"${(emp.role||"")==="editor"||!emp.role?" selected":""}>Editor（一般編輯者）</option>
+              <option value="viewer"${emp.role==="viewer"?" selected":""}>Viewer（唯讀）</option>
+              <option value="admin"${emp.role==="admin"?" selected":""}>Admin（管理員）</option>
             </select>
           </div>
         </div>

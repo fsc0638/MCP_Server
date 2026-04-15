@@ -669,8 +669,9 @@ async def workflow_stats():
         return {
             "by_skill": data.get("by_skill", {}),
             "daily": data.get("daily", {}),
+            "monthly": data.get("monthly", {}),
             "total": data.get("total", {}),
         }
     except Exception as e:
-        return {"by_skill": {}, "daily": {}, "total": {}, "_error": str(e)}
+        return {"by_skill": {}, "daily": {}, "monthly": {}, "total": {}, "_error": str(e)}
 

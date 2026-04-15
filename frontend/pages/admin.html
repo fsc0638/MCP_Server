@@ -8,7 +8,11 @@
   <link rel="stylesheet" href="../assets/css/themes.css" />
   <link rel="stylesheet" href="../assets/css/chat.css" />
   <link rel="stylesheet" href="../assets/css/admin.css" />
-  <script>(function(){var t=localStorage.getItem('kway_theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+  <script>(function(){
+    var t=localStorage.getItem('kway_theme');if(t)document.documentElement.setAttribute('data-theme',t);
+    // Admin gate: redirect non-admin users to chat
+    try{var u=JSON.parse(sessionStorage.getItem('kway_user')||'{}');if(u.role!=='admin'){window.location.href='chat.html';}}catch(_){window.location.href='chat.html';}
+  })();</script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <body>
