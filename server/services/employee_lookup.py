@@ -70,6 +70,9 @@ def _load_employees() -> List[Dict[str, Any]]:
                 dept_code = dept_match.group(1).strip()
                 dept_name = dept_match.group(2).strip()
 
+            # Column 6 (index 6) = role (admin/editor/viewer), added by admin panel
+            _role = str(row[6]).strip().lower() if len(row) > 6 and row[6] else ""
+
             employees.append({
                 "employee_id": emp_id,
                 "name": name,
@@ -79,6 +82,7 @@ def _load_employees() -> List[Dict[str, Any]]:
                 "department_full": raw_dept,
                 "title": str(row[4]).strip() if row[4] else "",
                 "email": str(row[5]).strip().lower() if row[5] else "",
+                "role": _role,
             })
 
         wb.close()
@@ -89,6 +93,65 @@ def _load_employees() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"[EmployeeLookup] Failed to load: {e}")
         return []
+
+
+def save_employee_to_xlsx(employee_id: str, updates: Dict[str, Any]) -> bool:
+    """Write updated employee data back to xlsx and refresh cache."""
+    global _EMPLOYEE_CACHE
+    xlsx_path = _get_xlsx_path()
+    if not xlsx_path.exists():
+        return False
+
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(str(xlsx_path))
+        ws = wb.active
+
+        # Ensure header row has "角色" column (col 7 = G)
+        header = [ws.cell(row=1, column=c).value for c in range(1, 8)]
+        if len(header) < 7 or header[6] != "角色":
+            ws.cell(row=1, column=7, value="角色")
+
+        # Find the row by employee_id
+        found_row = None
+        for r in range(2, ws.max_row + 1):
+            raw_name = str(ws.cell(row=r, column=2).value or "").strip()
+            match = re.match(r'^(\d+)\s+', raw_name)
+            if match and match.group(1).strip() == employee_id:
+                found_row = r
+                break
+
+        if not found_row:
+            wb.close()
+            return False
+
+        # Update cells
+        if "name" in updates:
+            ws.cell(row=found_row, column=2, value=f"{employee_id} {updates['name']}")
+        if "extension" in updates:
+            ws.cell(row=found_row, column=3, value=updates["extension"])
+        if "department_code" in updates and "department_name" in updates:
+            ws.cell(row=found_row, column=4, value=f"{updates['department_code']} {updates['department_name']}")
+        elif "department_code" in updates:
+            ws.cell(row=found_row, column=4, value=updates["department_code"])
+        if "title" in updates:
+            ws.cell(row=found_row, column=5, value=updates["title"])
+        if "email" in updates:
+            ws.cell(row=found_row, column=6, value=updates["email"])
+        if "role" in updates:
+            ws.cell(row=found_row, column=7, value=updates["role"])
+
+        wb.save(str(xlsx_path))
+        wb.close()
+
+        # Invalidate cache so next load picks up changes
+        _EMPLOYEE_CACHE = None
+        logger.info(f"[EmployeeLookup] Updated employee {employee_id} in xlsx")
+        return True
+
+    except Exception as e:
+        logger.error(f"[EmployeeLookup] Failed to save xlsx: {e}")
+        return False
 
 
 def get_departments() -> List[Dict[str, str]]:

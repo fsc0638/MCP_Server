@@ -7,7 +7,10 @@ from google.oauth2 import id_token
 from google.auth.transport import requests
 from pydantic import BaseModel
 
+import logging as _logging
 from server.services.line_login import build_authorize_url, consume_callback, generate_state_nonce
+
+_auth_logger = _logging.getLogger("MCP_Server.Auth")
 
 class GoogleLoginRequest(BaseModel):
     token: str
@@ -130,9 +133,11 @@ def line_callback(code: str = "", state: str = "", error: str = "", error_descri
     On success, sets a cookie and redirects to the chat UI.
     """
     if error:
+        _auth_logger.warning("[LINE callback] LINE returned error: %s %s", error, error_description)
         raise HTTPException(status_code=401, detail=f"LINE auth error: {error} {error_description}".strip())
 
     try:
+        _auth_logger.info("[LINE callback] received code=%s… state=%s…", code[:6] if code else "", state[:8] if state else "")
         user = consume_callback(code=code, state=state)
 
         # Store minimal session in cookie (same-origin flow).
@@ -156,6 +161,7 @@ def line_callback(code: str = "", state: str = "", error: str = "", error_descri
         )
         return resp
     except ValueError as ve:
+        _auth_logger.warning("[LINE callback] ValueError: %s", ve)
         raise HTTPException(status_code=401, detail=f"LINE login failed: {str(ve)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LINE login callback error: {str(e)}")
@@ -249,3 +255,174 @@ def employee_lookup_api(email: str = "", name: str = "", id: str = ""):
         }
     except Exception:
         return {}
+
+
+@router.get("/employees")
+def list_employees(dept: str = ""):
+    """List all employees, optionally filtered by department code."""
+    try:
+        from server.services.employee_lookup import _load_employees
+        employees = _load_employees()
+        result = []
+        for emp in employees:
+            if dept and emp.get("department_code", "") != dept:
+                continue
+            result.append({
+                "employee_id": emp.get("employee_id", ""),
+                "name": emp.get("name", ""),
+                "email": emp.get("email", ""),
+                "department_code": emp.get("department_code", ""),
+                "department_name": emp.get("department_name", ""),
+                "title": emp.get("title", ""),
+                "extension": emp.get("extension", ""),
+                "role": emp.get("role", ""),
+            })
+        return {"total": len(result), "employees": result}
+    except Exception as e:
+        return {"total": 0, "employees": [], "error": str(e)}
+
+
+@router.get("/departments")
+def list_departments():
+    """List all unique departments."""
+    try:
+        from server.services.employee_lookup import _load_employees
+        employees = _load_employees()
+        depts = {}
+        for emp in employees:
+            code = emp.get("department_code", "")
+            name = emp.get("department_name", "")
+            if code and code not in depts:
+                depts[code] = name
+        result = [{"code": k, "name": v} for k, v in sorted(depts.items())]
+        return {"total": len(result), "departments": result}
+    except Exception as e:
+        return {"total": 0, "departments": [], "error": str(e)}
+
+
+class EmployeeUpdateRequest(BaseModel):
+    name: str = ""
+    email: str = ""
+    department_code: str = ""
+    department_name: str = ""
+    title: str = ""
+    extension: str = ""
+    role: str = ""  # editor / viewer / admin
+
+
+@router.put("/employees/{employee_id}")
+def update_employee(employee_id: str, req: EmployeeUpdateRequest):
+    """Update employee info and sync to workspace/users/ login data."""
+    import json as _json
+    from pathlib import Path as _P
+
+    # 1. Write back to xlsx (persistent source of truth)
+    xlsx_saved = False
+    try:
+        from server.services.employee_lookup import save_employee_to_xlsx
+        updates = {}
+        if req.name: updates["name"] = req.name
+        if req.email: updates["email"] = req.email.lower()
+        if req.department_code: updates["department_code"] = req.department_code
+        if req.department_name: updates["department_name"] = req.department_name
+        if req.title: updates["title"] = req.title
+        if req.extension: updates["extension"] = req.extension
+        if req.role: updates["role"] = req.role
+        xlsx_saved = save_employee_to_xlsx(employee_id, updates)
+    except Exception as e:
+        _auth_logger.error(f"[EmployeeUpdate] xlsx save error: {e}")
+
+    # 2. Update in-memory cache (reload from xlsx if saved, or patch directly)
+    try:
+        from server.services.employee_lookup import _load_employees
+        employees = _load_employees()
+        found = None
+        for emp in employees:
+            if emp.get("employee_id") == employee_id:
+                found = emp
+                break
+        if not found:
+            raise HTTPException(status_code=404, detail=f"Employee '{employee_id}' not found")
+
+        if req.name: found["name"] = req.name
+        if req.email: found["email"] = req.email.lower()
+        if req.department_code:
+            found["department_code"] = req.department_code
+            if req.department_name: found["department_name"] = req.department_name
+            found["department_full"] = f"{req.department_code} {req.department_name}" if req.department_name else req.department_code
+        if req.title: found["title"] = req.title
+        if req.extension: found["extension"] = req.extension
+        if req.role: found["role"] = req.role
+    except HTTPException:
+        raise
+    except Exception as e:
+        _auth_logger.error(f"[EmployeeUpdate] Cache update error: {e}")
+
+    # 3. Sync to workspace/users/*.json login files
+    pr = os.environ.get("PROJECT_ROOT", str(_P(__file__).resolve().parents[2]))
+    users_dir = _P(pr) / "workspace" / "users"
+    synced = []
+    if users_dir.exists():
+        for uf in users_dir.glob("*.json"):
+            try:
+                udata = _json.loads(uf.read_text(encoding="utf-8"))
+                if udata.get("employee_id") == employee_id or udata.get("email", "").lower() == (req.email or "").lower():
+                    if req.name: udata["name"] = req.name
+                    if req.email: udata["email"] = req.email.lower()
+                    if req.department_code:
+                        udata["department_code"] = req.department_code
+                        if req.department_name: udata["department_name"] = req.department_name
+                    if req.title: udata["title"] = req.title
+                    if req.extension: udata["extension"] = req.extension
+                    if req.role: udata["role"] = req.role
+                    uf.write_text(_json.dumps(udata, ensure_ascii=False, indent=2), encoding="utf-8")
+                    synced.append(uf.name)
+            except Exception:
+                pass
+
+    return {"status": "success", "employee_id": employee_id, "xlsx_saved": xlsx_saved, "synced_files": synced}
+
+
+@router.post("/employees/{employee_id}")
+def create_employee(employee_id: str, req: EmployeeUpdateRequest):
+    """Add a new employee to xlsx."""
+    try:
+        from server.services.employee_lookup import _load_employees, _get_xlsx_path, _EMPLOYEE_CACHE
+        import server.services.employee_lookup as _el
+
+        # Check if already exists
+        employees = _load_employees()
+        for emp in employees:
+            if emp.get("employee_id") == employee_id:
+                raise HTTPException(status_code=409, detail=f"Employee '{employee_id}' already exists")
+
+        # Append to xlsx
+        import openpyxl
+        xlsx_path = _get_xlsx_path()
+        wb = openpyxl.load_workbook(str(xlsx_path))
+        ws = wb.active
+
+        # Ensure header has 角色 column
+        if ws.cell(row=1, column=7).value != "角色":
+            ws.cell(row=1, column=7, value="角色")
+
+        new_row = ws.max_row + 1
+        ws.cell(row=new_row, column=1, value=new_row - 1)  # 序號
+        ws.cell(row=new_row, column=2, value=f"{employee_id} {req.name}")
+        ws.cell(row=new_row, column=3, value=req.extension)
+        ws.cell(row=new_row, column=4, value=f"{req.department_code} {req.department_name}" if req.department_code else "")
+        ws.cell(row=new_row, column=5, value=req.title)
+        ws.cell(row=new_row, column=6, value=req.email)
+        ws.cell(row=new_row, column=7, value=req.role)
+
+        wb.save(str(xlsx_path))
+        wb.close()
+
+        # Invalidate cache
+        _el._EMPLOYEE_CACHE = None
+
+        return {"status": "success", "employee_id": employee_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

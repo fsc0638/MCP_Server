@@ -9,7 +9,10 @@
   <link rel="stylesheet" href="../assets/css/chat.css" />
   <link rel="stylesheet" href="../assets/css/workflow.css" />
   <!-- Anti-FOUC: apply saved theme before first paint -->
-  <script>(function(){var t=localStorage.getItem('kway_theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+  <script>(function(){var t=localStorage.getItem('kway_theme');if(t)document.documentElement.setAttribute('data-theme',t);
+    // If ?wf= param present, pre-hide chat body to avoid flash before workflow loads
+    if(location.search.indexOf('wf=')>-1){document.write('<style id="wfAntiFlash">.page-chat-body{visibility:hidden;}</style>');}
+  })();</script>
 </head>
 <body>
 <div class="page-chat-root">
@@ -41,6 +44,12 @@
         </svg>
         設計工作流
       </button>
+      <a href="admin.html" class="page-chat-workspace-tag" style="text-decoration:none;" aria-label="管理後台">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4"/>
+        </svg>
+        管理後台
+      </a>
     </div>
 
     <div class="page-chat-topbar-right">
@@ -402,6 +411,15 @@
 </style>
 
 <script src="../config.js" onerror="console.warn('config.js 未找到，將使用示範模式')"></script>
+<!-- Workflow Landing Overlay (outside chat-body to avoid layout conflicts) -->
+<div class="wf-landing-overlay" id="wfLandingOverlay">
+  <div class="wf-landing-left" id="wfLandingLeft"></div>
+  <div class="wf-landing-center">
+    <div class="wf-landing-grid" id="wfLandingGrid"></div>
+  </div>
+  <div class="wf-landing-right" id="wfLandingRight"></div>
+</div>
+
 <script src="../assets/js/script.js"></script>
 <script src="../assets/js/chat.js"></script>
 <script src="../assets/js/workflow.js"></script>

@@ -201,3 +201,67 @@ def _cleanup_old_logs(retention_days: int) -> list:
 
     return cleaned
 
+
+# ── Schedule Management API ────────────────────────────────────────────────
+
+@router.get("/api/schedules")
+def list_all_schedules():
+    """List all scheduled tasks across all sessions for admin dashboard."""
+    schedules_dir = WORKSPACE_DIR / "schedules"
+    if not schedules_dir.exists():
+        return {"total": 0, "sessions": [], "tasks": []}
+
+    sessions = []
+    all_tasks = []
+    for f in sorted(schedules_dir.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            sid = data.get("session_id", f.stem)
+            tasks = data.get("tasks", [])
+            active = sum(1 for t in tasks if t.get("enabled"))
+            paused = sum(1 for t in tasks if not t.get("enabled"))
+            sessions.append({"session_id": sid, "task_count": len(tasks), "active": active, "paused": paused})
+            for t in tasks:
+                t["_session_id"] = sid
+                all_tasks.append(t)
+        except Exception:
+            pass
+
+    return {
+        "total": len(all_tasks),
+        "active": sum(1 for t in all_tasks if t.get("enabled")),
+        "paused": sum(1 for t in all_tasks if not t.get("enabled")),
+        "sessions": sessions,
+        "tasks": all_tasks,
+    }
+
+
+@router.post("/api/schedules/{session_id}/{task_id}/toggle")
+def toggle_schedule_task(session_id: str, task_id: str):
+    """Toggle a task's enabled state (pause/resume)."""
+    sched_file = WORKSPACE_DIR / "schedules" / f"{session_id}.json"
+    if not sched_file.exists():
+        raise HTTPException(status_code=404, detail="Session schedule not found")
+    data = json.loads(sched_file.read_text(encoding="utf-8"))
+    for t in data.get("tasks", []):
+        if t.get("id") == task_id:
+            t["enabled"] = not t.get("enabled", True)
+            sched_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            return {"status": "success", "task_id": task_id, "enabled": t["enabled"]}
+    raise HTTPException(status_code=404, detail="Task not found")
+
+
+@router.delete("/api/schedules/{session_id}/{task_id}")
+def delete_schedule_task(session_id: str, task_id: str):
+    """Delete a scheduled task."""
+    sched_file = WORKSPACE_DIR / "schedules" / f"{session_id}.json"
+    if not sched_file.exists():
+        raise HTTPException(status_code=404, detail="Session schedule not found")
+    data = json.loads(sched_file.read_text(encoding="utf-8"))
+    original_len = len(data.get("tasks", []))
+    data["tasks"] = [t for t in data.get("tasks", []) if t.get("id") != task_id]
+    if len(data["tasks"]) == original_len:
+        raise HTTPException(status_code=404, detail="Task not found")
+    sched_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"status": "success", "task_id": task_id}
+

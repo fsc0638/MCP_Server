@@ -618,11 +618,13 @@
 
     // ── Persistence (Backend API with localStorage fallback) ──
     async save(name) {
-      const flowId = name || "default";
+      const flowId = name || this._currentWfId || "default";
       const data = {
         name: flowId,
         blocks: Array.from(this.blocks.values()).map(b => ({ id: b.id, type: b.type, x: b.x, y: b.y, label: b.label })),
         connections: this.connections.map(c => ({ from: c.from, to: c.to })),
+        scope: this._currentScope || "personal",
+        owner: this._currentOwner || "",
       };
       // Save to backend
       try {
@@ -643,12 +645,15 @@
       }
     }
 
-    async load(name) {
+    async load(name, scope, owner) {
       const flowId = name || "default";
       let data = null;
       // Try backend first
       try {
-        const resp = await fetch(`/api/workflows/${flowId}`);
+        const _q = new URLSearchParams();
+        if (scope) _q.set("scope", scope);
+        if (owner) _q.set("owner", owner);
+        const resp = await fetch(`/api/workflows/${flowId}?${_q}`);
         if (resp.ok) data = await resp.json();
       } catch (_) {}
       // Fallback to localStorage
@@ -1087,49 +1092,177 @@
 
     const isActive = body.classList.contains("wf-mode");
 
-    if (isActive) {
-      // Check for unsaved skill edits before exiting
+    const _overlay = document.getElementById("wfLandingOverlay");
+    const _landingOpen = _overlay?.classList.contains("open");
+
+    if (_landingOpen) {
+      // Landing is open → close landing, back to chat
+      body.classList.remove("wf-mode");
+      if (btn) btn.classList.remove("active");
+      if (_overlay) _overlay.classList.remove("open");
+      const _pp = document.getElementById("wfPropPanel");
+      if (_pp) _pp.classList.add("hidden");
+
+    } else if (isActive) {
+      // In Designer/Skill Editor → back to Landing (not chat)
       if (_skillEditMode && window._wfSkillEditor?._hasUnsavedChanges()) {
         const ok = await _showConfirmAsync("技能尚未儲存，確定要退出嗎？");
         if (!ok) return;
       }
-
-      // Exit workflow mode — clean up everything
       body.classList.remove("wf-mode");
-      if (btn) btn.classList.remove("active");
-
-      // Force exit skill-edit mode if active
       _skillEditMode = false;
-
-      // Reset ALL inline display styles so CSS takes over
       ["wfSkillEditArea", "wfCanvasArea", "wfPaletteWrap", "wfDashboardWrap"].forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.style.display = ""; el.classList.remove("visible"); }
       });
-    } else {
-      body.classList.add("wf-mode");
-      if (btn) btn.classList.add("active");
-      // Hide old placeholder
-      const oldView = document.getElementById("workflowView");
-      if (oldView) oldView.style.display = "none";
-      const chatBody = document.getElementById("chatBody");
-      if (chatBody) chatBody.style.display = "";
-
-      if (!_initialized) {
-        _initialized = true;
-        _initWorkflow();
-      } else {
-        // Re-entering: ensure palette is in flow mode (not skill-edit)
-        const paletteWrap = document.getElementById("wfPaletteWrap");
-        if (paletteWrap) _rebuildPaletteForFlow(paletteWrap);
+      // Close property panel
+      const _propPanel = document.getElementById("wfPropPanel");
+      if (_propPanel) _propPanel.classList.add("hidden");
+      // Clean up designer blocks from DOM
+      if (window._wfDesigner) {
+        window._wfDesigner.blocks.forEach(b => b.el.remove());
+        window._wfDesigner.blocks.clear();
+        window._wfDesigner.connections.forEach(c => c.el.remove());
+        window._wfDesigner.connections = [];
       }
+      _showWorkflowLanding();
+
+    } else {
+      // Not in workflow → open Landing
+      if (btn) btn.classList.add("active");
+      _showWorkflowLanding();
     }
   }
 
-  async function _initWorkflow() {
-    // Build palette (async — loads skills from API)
+  // ── Workflow Landing (fixed overlay) ────────────────────────────
+  const _WF_COLORS = ["#34a853","#1a9aaa","#4285f4","#ea4335","#fbbc04","#8b5cf6","#ec4899","#f97316"];
+
+  function _escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+  async function _showWorkflowLanding() {
+    const overlay = document.getElementById("wfLandingOverlay");
+    if (!overlay) return;
+    overlay.classList.add("open");
+
+    // Fetch workflow list
+    const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+    const _owner = _u.employee_id || _u.id || "";
+    let workflows = [];
+    try {
+      const resp = await fetch(`/api/workflows?owner=${_owner}`);
+      if (resp.ok) workflows = (await resp.json()).workflows || [];
+    } catch (_) {}
+
+    const grid = document.getElementById("wfLandingGrid");
+    const leftPanel = document.getElementById("wfLandingLeft");
+    const rightPanel = document.getElementById("wfLandingRight");
+
+    // ── Left Panel ──
+    if (leftPanel) {
+      const sc = { all: workflows.length, system: 0, department: 0, personal: 0 };
+      workflows.forEach(wf => { sc[wf.scope || "personal"]++; });
+      leftPanel.innerHTML = `
+        <div class="wf-lp-section"><div class="wf-lp-title">搜尋</div>
+          <input class="wf-lp-search" id="wfLandingSearch" type="text" placeholder="搜尋工作流名稱..." autocomplete="off" /></div>
+        <div class="wf-lp-section"><div class="wf-lp-title">分類</div>
+          <div class="wf-lp-filter">
+            <div class="wf-lp-filter-item active" data-scope="all"><span class="wf-lp-filter-dot" style="background:#64748B;"></span><span>全部</span><span class="wf-lp-filter-count">${sc.all}</span></div>
+            <div class="wf-lp-filter-item" data-scope="system"><span class="wf-lp-filter-dot" style="background:#059669;"></span><span>系統</span><span class="wf-lp-filter-count">${sc.system}</span></div>
+            <div class="wf-lp-filter-item" data-scope="department"><span class="wf-lp-filter-dot" style="background:#4285f4;"></span><span>部門</span><span class="wf-lp-filter-count">${sc.department}</span></div>
+            <div class="wf-lp-filter-item" data-scope="personal"><span class="wf-lp-filter-dot" style="background:#1a9aaa;"></span><span>個人</span><span class="wf-lp-filter-count">${sc.personal}</span></div>
+          </div></div>
+        <div class="wf-lp-section"><div class="wf-lp-title">最近編輯</div>
+          <div class="wf-lp-recent">${workflows.slice(0, 5).map(wf =>
+            `<div class="wf-lp-recent-item" onclick="_openWorkflow('${wf.id}','${wf.scope||"personal"}','${_owner}')">${_escHtml(wf.name || wf.id)}</div>`
+          ).join("") || '<div class="wf-rp-empty">尚無紀錄</div>'}</div></div>`;
+      // Filter handlers
+      leftPanel.querySelectorAll(".wf-lp-filter-item").forEach(item => {
+        item.addEventListener("click", () => {
+          leftPanel.querySelectorAll(".wf-lp-filter-item").forEach(i => i.classList.remove("active"));
+          item.classList.add("active");
+          _filterWfCards();
+        });
+      });
+      const si = leftPanel.querySelector("#wfLandingSearch");
+      if (si) si.addEventListener("input", () => _filterWfCards());
+    }
+
+    // ── Center Cards ──
+    if (grid) {
+      let html = `<div class="wf-landing-card-new" onclick="_createNewWorkflow()">
+        <div class="wf-landing-card-new-inner"><div class="wf-landing-card-new-icon">+</div><div class="wf-landing-card-new-label">新增工作流</div></div></div>`;
+      workflows.forEach((wf, i) => {
+        const color = _WF_COLORS[i % _WF_COLORS.length];
+        const key = wf.workflow_key || wf.id;
+        const scope = wf.scope || "personal";
+        const sl = scope === "system" ? "系統" : scope === "department" ? "部門" : "個人";
+        html += `<div class="wf-landing-card" data-scope="${scope}" data-name="${_escHtml(wf.name || wf.id)}" onclick="_openWorkflow('${wf.id}','${scope}','${_owner}')">
+          <div class="wf-landing-card-header" style="background:${color};">${_escHtml(wf.name || wf.id)}<div class="wf-landing-card-key">${_escHtml(key)}</div></div>
+          <div class="wf-landing-card-body"><div class="wf-landing-card-meta">
+            <span>${sl}</span><span class="wf-landing-card-meta-dot"></span><span>${wf.block_count||0} 節點</span><span class="wf-landing-card-meta-dot"></span><span>${wf.connection_count||0} 連接</span>
+          </div></div></div>`;
+      });
+      grid.innerHTML = html;
+    }
+
+    // ── Right Panel ──
+    if (rightPanel) {
+      rightPanel.innerHTML = `
+        <div class="wf-rp-section"><div class="wf-rp-title">執行紀錄</div><div class="wf-rp-empty">尚無執行紀錄</div></div>
+        <div class="wf-rp-section"><div class="wf-rp-title">LINE Bot 觸發指令</div>
+          ${workflows.length ? workflows.slice(0,5).map(wf => `<div class="wf-rp-line-cmd">「執行 ${_escHtml(wf.name||wf.id)}」</div>`).join("") : '<div class="wf-rp-empty">建立工作流後可透過 LINE 觸發</div>'}
+        </div>
+        <div class="wf-rp-section"><div class="wf-rp-title">排程狀態</div><div class="wf-rp-empty">尚未設定排程</div></div>`;
+    }
+  }
+
+  function _filterWfCards() {
+    const grid = document.getElementById("wfLandingGrid");
+    if (!grid) return;
+    const scope = document.querySelector(".wf-lp-filter-item.active")?.dataset?.scope || "all";
+    const q = (document.getElementById("wfLandingSearch")?.value || "").toLowerCase();
+    grid.querySelectorAll(".wf-landing-card").forEach(c => {
+      const match = (scope === "all" || c.dataset.scope === scope) && (!q || (c.dataset.name || "").toLowerCase().includes(q));
+      c.style.display = match ? "" : "none";
+    });
+  }
+
+  window._createNewWorkflow = async function () {
+    const _chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let _r = ""; for (let i = 0; i < 20; i++) _r += _chars.charAt(Math.floor(Math.random() * _chars.length));
+    const wfKey = "WorkflowK_" + _r, wfId = "wf-" + Date.now();
+    const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+    try {
+      await fetch(`/api/workflows/${wfId}`, { method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ name: "新工作流", blocks: [], connections: [], scope: "personal", owner: _u.employee_id || _u.id || "", context: { workflow_key: wfKey } }) });
+    } catch (_) {}
+    _enterWorkflowCanvas(wfId, "personal", _u.employee_id || _u.id || "");
+  };
+
+  window._openWorkflow = function (id, scope, owner) { _enterWorkflowCanvas(id, scope, owner); };
+
+  async function _enterWorkflowCanvas(wfId, scope, owner) {
+    // Close landing overlay, enter wf-mode with canvas
+    const overlay = document.getElementById("wfLandingOverlay");
+    if (overlay) overlay.classList.remove("open");
+    const body = document.querySelector(".page-chat-body");
+    if (body) body.classList.add("wf-mode");
+    // Remove anti-flash style if present (from ?wf= redirect)
+    const antiFlash = document.getElementById("wfAntiFlash");
+    if (antiFlash) antiFlash.remove();
+    if (body) body.style.visibility = "visible";
+
+    // Build palette
     const paletteWrap = document.getElementById("wfPaletteWrap");
     if (paletteWrap) await _rebuildPaletteForFlow(paletteWrap);
+
+    // Clean up old designer if exists (prevent block accumulation)
+    if (window._wfDesigner) {
+      window._wfDesigner.blocks.forEach(b => b.el.remove());
+      window._wfDesigner.blocks.clear();
+      window._wfDesigner.connections.forEach(c => c.el.remove());
+      window._wfDesigner.connections = [];
+    }
 
     // Init FlowDesigner
     const surface = document.getElementById("wfCanvasSurface");
@@ -1137,27 +1270,19 @@
     const viewport = document.getElementById("wfCanvasViewport");
     if (surface && svg && viewport) {
       window._wfDesigner = new FlowDesigner(surface, svg, viewport);
-      // Load saved or add demo blocks
-      // Load saved flow (API first, then localStorage fallback)
-      window._wfDesigner.load("default").then(() => {
-        if (window._wfDesigner.blocks.size === 0) {
-          window._wfDesigner.addBlock("start", 200, 250);
-        }
-      });
+      window._wfDesigner._currentWfId = wfId;
+      window._wfDesigner._currentScope = scope;
+      window._wfDesigner._currentOwner = owner;
+      await window._wfDesigner.load(wfId, scope, owner);
+      if (window._wfDesigner.blocks.size === 0) window._wfDesigner.addBlock("start", 200, 250);
     }
 
-    // Init Dashboard — sync immediately with canvas state
+    // Init Dashboard
     const dashWrap = document.getElementById("wfDashboardWrap");
     if (dashWrap) {
       window._wfDashboard = new WorkflowDashboard(dashWrap);
-      // Wait for Chart.js to load, then sync
-      const _syncDash = () => {
-        if (window._wfDashboard && window._wfDesigner) {
-          window._wfDashboard.updateStats(window._wfDesigner.blocks.size, window._wfDesigner.connections.length);
-        }
-      };
-      setTimeout(_syncDash, 500);
-      setTimeout(_syncDash, 2000); // retry after Chart.js CDN loads
+      const _sync = () => { if (window._wfDashboard && window._wfDesigner) window._wfDashboard.updateStats(window._wfDesigner.blocks.size, window._wfDesigner.connections.length); };
+      setTimeout(_sync, 500); setTimeout(_sync, 2000);
     }
   }
 
@@ -2041,5 +2166,31 @@
   window.toggleWorkflowView = toggleWorkflowView;
   window.toggleSkillEditMode = toggleSkillEditMode;
   window.closeWfPropPanel = closeWfPropPanel;
+
+  // Auto-open workflow if ?wf=xxx query param present (from admin.html)
+  (function () {
+    const params = new URLSearchParams(window.location.search);
+    const wfId = params.get("wf");
+    if (!wfId) return;
+    const scope = params.get("scope") || "personal";
+    const owner = params.get("owner") || "";
+    history.replaceState(null, "", window.location.pathname);
+
+    // Wait for DOM elements to exist, then enter canvas
+    function _tryEnter() {
+      const surface = document.getElementById("wfCanvasSurface");
+      if (!surface) { requestAnimationFrame(_tryEnter); return; }
+      const body = document.querySelector(".page-chat-body");
+      if (body) body.classList.add("wf-mode");
+      const btn = document.getElementById("btnWorkflowDesigner");
+      if (btn) btn.classList.add("active");
+      _enterWorkflowCanvas(wfId, scope, owner);
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", _tryEnter);
+    } else {
+      _tryEnter();
+    }
+  })();
 
 })();
