@@ -230,11 +230,27 @@ class OpenAIAdapter:
         # Only force tool use when BOTH creation intent AND format are specified
         # BUT: if user requests ≥2 different formats, do NOT force — let LLM plan sequentially
         force_tool_use = has_creation_intent and has_format_specified and not _multi_format
+        _tool_names = {t.get("name", "") for t in tools}
+
+        # Force tool use for audio -> meeting -> todo/notion requests.
+        # This prevents the model from replying with text-only plans when skills are required.
+        _meeting_todo_intent = (
+            bool(user_query)
+            and any(kw in _query_lower for kw in ("錄音", "音檔", "audio", "transcribe", "逐字稿"))
+            and any(kw in _query_lower for kw in ("todo", "to do", "待辦", "notion", "上傳", "寫入", "匯入"))
+        )
+        _meeting_pipeline_tools_ready = (
+            "mcp-transcribe" in _tool_names
+            and "mcp-meeting-analyzer" in _tool_names
+        )
+        force_pipeline_tool_use = _meeting_todo_intent and _meeting_pipeline_tools_ready
+        force_tool_use = force_tool_use or force_pipeline_tool_use
 
         logger.info(
             f"[OpenAI Adapter] Tools: {len(tools)} injected "
             f"({[t.get('name') for t in tools]}), "
-            f"force_tool_use={force_tool_use}"
+            f"force_tool_use={force_tool_use}, "
+            f"force_pipeline_tool_use={force_pipeline_tool_use}"
         )
 
         # We will track the latest response id generated in this multi-round loop
@@ -375,21 +391,60 @@ class OpenAIAdapter:
                         if _orig_path:
                             import os as _os
                             if _os.path.exists(_orig_path):
+                                _audio_exts = {".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".opus", ".webm"}
+                                _orig_ext = _os.path.splitext(_orig_path)[1].lower()
                                 # Always inject file path for all skills
                                 fn_args.setdefault("_original_file_path", _orig_path)
                                 fn_args.setdefault("_original_filename", _session_mgr.get_metadata(session_id, "last_original_filename") or "")
                                 if _orig_date:
                                     fn_args.setdefault("meeting_date", _orig_date)
+                                # For transcribe: ensure file_path is a real, existing path.
+                                # Some model outputs use placeholders like "<please provide path>".
+                                if fn_name == "mcp-transcribe" and _orig_ext in _audio_exts:
+                                    _raw_fp = fn_args.get("file_path")
+                                    _fp = str(_raw_fp).strip() if _raw_fp is not None else ""
+                                    _fp = _fp.strip("`\"' ")
+                                    _fp_exists = False
+                                    if _fp:
+                                        _fp_exists = _os.path.exists(_fp)
+                                        if not _fp_exists:
+                                            try:
+                                                _fp_exists = _os.path.exists(_os.path.abspath(_fp))
+                                            except Exception:
+                                                _fp_exists = False
+                                    _fp_lower = _fp.lower()
+                                    _placeholder_markers = (
+                                        "path/to",
+                                        "c:/path",
+                                        "file_path",
+                                        "absolute path",
+                                        "your audio",
+                                        "your file",
+                                        "請提供",
+                                    )
+                                    _looks_placeholder = (
+                                        (not _fp)
+                                        or _fp.startswith("<")
+                                        or _fp.endswith(">")
+                                        or ("{" in _fp and "}" in _fp)
+                                        or any(marker in _fp_lower for marker in _placeholder_markers)
+                                    )
+                                    if (not _fp_exists) and _looks_placeholder:
+                                        fn_args["file_path"] = _orig_path
+                                        logger.info(
+                                            f"[Adapter] Replaced invalid transcribe file_path with original audio path: {_orig_path}"
+                                        )
                                 # For meeting-analyzer: inject full transcript text
                                 if fn_name == "mcp-meeting-analyzer":
-                                    try:
-                                        with open(_orig_path, "r", encoding="utf-8") as _f:
-                                            _original_text = _f.read()
-                                        if _original_text and len(_original_text) > len(fn_args.get("transcript", "")):
-                                            fn_args["transcript"] = _original_text
-                                            logger.info(f"[Adapter] Injected original file ({len(_original_text)} chars) into mcp-meeting-analyzer transcript")
-                                    except Exception as _e:
-                                        logger.warning(f"[Adapter] Failed to inject original file: {_e}")
+                                    if _orig_ext not in _audio_exts:
+                                        try:
+                                            with open(_orig_path, "r", encoding="utf-8") as _f:
+                                                _original_text = _f.read()
+                                            if _original_text and len(_original_text) > len(fn_args.get("transcript", "")):
+                                                fn_args["transcript"] = _original_text
+                                                logger.info(f"[Adapter] Injected original file ({len(_original_text)} chars) into mcp-meeting-analyzer transcript")
+                                        except Exception as _e:
+                                            logger.warning(f"[Adapter] Failed to inject original file: {_e}")
 
                         # For meeting-analyzer: fallback to user_query if transcript still empty
                         if fn_name == "mcp-meeting-analyzer" and not fn_args.get("transcript") and user_query:
