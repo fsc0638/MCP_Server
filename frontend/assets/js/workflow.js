@@ -618,11 +618,13 @@
 
     // ── Persistence (Backend API with localStorage fallback) ──
     async save(name) {
-      const flowId = name || "default";
+      const flowId = name || this._currentWfId || "default";
       const data = {
         name: flowId,
         blocks: Array.from(this.blocks.values()).map(b => ({ id: b.id, type: b.type, x: b.x, y: b.y, label: b.label })),
         connections: this.connections.map(c => ({ from: c.from, to: c.to })),
+        scope: this._currentScope || "personal",
+        owner: this._currentOwner || "",
       };
       // Save to backend
       try {
@@ -643,12 +645,15 @@
       }
     }
 
-    async load(name) {
+    async load(name, scope, owner) {
       const flowId = name || "default";
       let data = null;
       // Try backend first
       try {
-        const resp = await fetch(`/api/workflows/${flowId}`);
+        const _q = new URLSearchParams();
+        if (scope) _q.set("scope", scope);
+        if (owner) _q.set("owner", owner);
+        const resp = await fetch(`/api/workflows/${flowId}?${_q}`);
         if (resp.ok) data = await resp.json();
       } catch (_) {}
       // Fallback to localStorage
@@ -944,26 +949,34 @@
   async function _loadSkillsFromAPI() {
     if (_skillsLoaded) return;
     try {
-      const resp = await fetch("/skills/list");
+      // Pass user context for department/personal skill filtering
+      const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+      const _params = new URLSearchParams();
+      if (_u.department_code) _params.set("dept", _u.department_code);
+      if (_u.employee_id || _u.id) _params.set("uid", _u.employee_id || _u.id);
+      const resp = await fetch("/skills/list" + (_params.toString() ? "?" + _params : ""));
       if (!resp.ok) return;
       const data = await resp.json();
       const skills = data.skills || {};
-      Object.entries(skills).forEach(([name, info]) => {
-        const shortName = name.replace("mcp-", "");
+      Object.entries(skills).forEach(([registryKey, info]) => {
+        // Use short_name (e.g. "mcp-test") not registry key (e.g. "dept:Y200:mcp-test")
+        const skillName = info.short_name || registryKey;
+        const shortName = skillName.replace("mcp-", "");
         const apiDisplayName = info.display_name || "";
         if (!BLOCK_DEFS[shortName]) {
           BLOCK_DEFS[shortName] = {
-            label: apiDisplayName || _guessLabel(name, info.description),
-            icon: _guessIcon(name),
-            color: _guessColor(name),
-            category: _guessCategory(name, info.description),
+            label: apiDisplayName || _guessLabel(skillName, info.description),
+            icon: _guessIcon(skillName),
+            color: _guessColor(skillName),
+            category: _guessCategory(skillName, info.description),
           };
         } else if (apiDisplayName) {
-          // Update label from API display_name if available
           BLOCK_DEFS[shortName].label = apiDisplayName;
         }
-        _dynamicSkills[name] = { ready: info.ready !== false, description: info.description || "", scope: info.scope || "system", short_name: info.short_name || name };
+        // Key by short_name so palette and editor use clean names
+        _dynamicSkills[skillName] = { ready: info.ready !== false, description: info.description || "", scope: info.scope || "system", short_name: skillName, editable: info.editable === true };
       });
+      window._wfIsGuest = data.guest === true;
       _skillsLoaded = true;
     } catch (e) {
       console.warn("[WF] Failed to load skills from API:", e);
@@ -1079,49 +1092,177 @@
 
     const isActive = body.classList.contains("wf-mode");
 
-    if (isActive) {
-      // Check for unsaved skill edits before exiting
+    const _overlay = document.getElementById("wfLandingOverlay");
+    const _landingOpen = _overlay?.classList.contains("open");
+
+    if (_landingOpen) {
+      // Landing is open → close landing, back to chat
+      body.classList.remove("wf-mode");
+      if (btn) btn.classList.remove("active");
+      if (_overlay) _overlay.classList.remove("open");
+      const _pp = document.getElementById("wfPropPanel");
+      if (_pp) _pp.classList.add("hidden");
+
+    } else if (isActive) {
+      // In Designer/Skill Editor → back to Landing (not chat)
       if (_skillEditMode && window._wfSkillEditor?._hasUnsavedChanges()) {
         const ok = await _showConfirmAsync("技能尚未儲存，確定要退出嗎？");
         if (!ok) return;
       }
-
-      // Exit workflow mode — clean up everything
       body.classList.remove("wf-mode");
-      if (btn) btn.classList.remove("active");
-
-      // Force exit skill-edit mode if active
       _skillEditMode = false;
-
-      // Reset ALL inline display styles so CSS takes over
       ["wfSkillEditArea", "wfCanvasArea", "wfPaletteWrap", "wfDashboardWrap"].forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.style.display = ""; el.classList.remove("visible"); }
       });
-    } else {
-      body.classList.add("wf-mode");
-      if (btn) btn.classList.add("active");
-      // Hide old placeholder
-      const oldView = document.getElementById("workflowView");
-      if (oldView) oldView.style.display = "none";
-      const chatBody = document.getElementById("chatBody");
-      if (chatBody) chatBody.style.display = "";
-
-      if (!_initialized) {
-        _initialized = true;
-        _initWorkflow();
-      } else {
-        // Re-entering: ensure palette is in flow mode (not skill-edit)
-        const paletteWrap = document.getElementById("wfPaletteWrap");
-        if (paletteWrap) _rebuildPaletteForFlow(paletteWrap);
+      // Close property panel
+      const _propPanel = document.getElementById("wfPropPanel");
+      if (_propPanel) _propPanel.classList.add("hidden");
+      // Clean up designer blocks from DOM
+      if (window._wfDesigner) {
+        window._wfDesigner.blocks.forEach(b => b.el.remove());
+        window._wfDesigner.blocks.clear();
+        window._wfDesigner.connections.forEach(c => c.el.remove());
+        window._wfDesigner.connections = [];
       }
+      _showWorkflowLanding();
+
+    } else {
+      // Not in workflow → open Landing
+      if (btn) btn.classList.add("active");
+      _showWorkflowLanding();
     }
   }
 
-  async function _initWorkflow() {
-    // Build palette (async — loads skills from API)
+  // ── Workflow Landing (fixed overlay) ────────────────────────────
+  const _WF_COLORS = ["#34a853","#1a9aaa","#4285f4","#ea4335","#fbbc04","#8b5cf6","#ec4899","#f97316"];
+
+  function _escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+  async function _showWorkflowLanding() {
+    const overlay = document.getElementById("wfLandingOverlay");
+    if (!overlay) return;
+    overlay.classList.add("open");
+
+    // Fetch workflow list
+    const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+    const _owner = _u.employee_id || _u.id || "";
+    let workflows = [];
+    try {
+      const resp = await fetch(`/api/workflows?owner=${_owner}`);
+      if (resp.ok) workflows = (await resp.json()).workflows || [];
+    } catch (_) {}
+
+    const grid = document.getElementById("wfLandingGrid");
+    const leftPanel = document.getElementById("wfLandingLeft");
+    const rightPanel = document.getElementById("wfLandingRight");
+
+    // ── Left Panel ──
+    if (leftPanel) {
+      const sc = { all: workflows.length, system: 0, department: 0, personal: 0 };
+      workflows.forEach(wf => { sc[wf.scope || "personal"]++; });
+      leftPanel.innerHTML = `
+        <div class="wf-lp-section"><div class="wf-lp-title">搜尋</div>
+          <input class="wf-lp-search" id="wfLandingSearch" type="text" placeholder="搜尋工作流名稱..." autocomplete="off" /></div>
+        <div class="wf-lp-section"><div class="wf-lp-title">分類</div>
+          <div class="wf-lp-filter">
+            <div class="wf-lp-filter-item active" data-scope="all"><span class="wf-lp-filter-dot" style="background:#64748B;"></span><span>全部</span><span class="wf-lp-filter-count">${sc.all}</span></div>
+            <div class="wf-lp-filter-item" data-scope="system"><span class="wf-lp-filter-dot" style="background:#059669;"></span><span>系統</span><span class="wf-lp-filter-count">${sc.system}</span></div>
+            <div class="wf-lp-filter-item" data-scope="department"><span class="wf-lp-filter-dot" style="background:#4285f4;"></span><span>部門</span><span class="wf-lp-filter-count">${sc.department}</span></div>
+            <div class="wf-lp-filter-item" data-scope="personal"><span class="wf-lp-filter-dot" style="background:#1a9aaa;"></span><span>個人</span><span class="wf-lp-filter-count">${sc.personal}</span></div>
+          </div></div>
+        <div class="wf-lp-section"><div class="wf-lp-title">最近編輯</div>
+          <div class="wf-lp-recent">${workflows.slice(0, 5).map(wf =>
+            `<div class="wf-lp-recent-item" onclick="_openWorkflow('${wf.id}','${wf.scope||"personal"}','${_owner}')">${_escHtml(wf.name || wf.id)}</div>`
+          ).join("") || '<div class="wf-rp-empty">尚無紀錄</div>'}</div></div>`;
+      // Filter handlers
+      leftPanel.querySelectorAll(".wf-lp-filter-item").forEach(item => {
+        item.addEventListener("click", () => {
+          leftPanel.querySelectorAll(".wf-lp-filter-item").forEach(i => i.classList.remove("active"));
+          item.classList.add("active");
+          _filterWfCards();
+        });
+      });
+      const si = leftPanel.querySelector("#wfLandingSearch");
+      if (si) si.addEventListener("input", () => _filterWfCards());
+    }
+
+    // ── Center Cards ──
+    if (grid) {
+      let html = `<div class="wf-landing-card-new" onclick="_createNewWorkflow()">
+        <div class="wf-landing-card-new-inner"><div class="wf-landing-card-new-icon">+</div><div class="wf-landing-card-new-label">新增工作流</div></div></div>`;
+      workflows.forEach((wf, i) => {
+        const color = _WF_COLORS[i % _WF_COLORS.length];
+        const key = wf.workflow_key || wf.id;
+        const scope = wf.scope || "personal";
+        const sl = scope === "system" ? "系統" : scope === "department" ? "部門" : "個人";
+        html += `<div class="wf-landing-card" data-scope="${scope}" data-name="${_escHtml(wf.name || wf.id)}" onclick="_openWorkflow('${wf.id}','${scope}','${_owner}')">
+          <div class="wf-landing-card-header" style="background:${color};">${_escHtml(wf.name || wf.id)}<div class="wf-landing-card-key">${_escHtml(key)}</div></div>
+          <div class="wf-landing-card-body"><div class="wf-landing-card-meta">
+            <span>${sl}</span><span class="wf-landing-card-meta-dot"></span><span>${wf.block_count||0} 節點</span><span class="wf-landing-card-meta-dot"></span><span>${wf.connection_count||0} 連接</span>
+          </div></div></div>`;
+      });
+      grid.innerHTML = html;
+    }
+
+    // ── Right Panel ──
+    if (rightPanel) {
+      rightPanel.innerHTML = `
+        <div class="wf-rp-section"><div class="wf-rp-title">執行紀錄</div><div class="wf-rp-empty">尚無執行紀錄</div></div>
+        <div class="wf-rp-section"><div class="wf-rp-title">LINE Bot 觸發指令</div>
+          ${workflows.length ? workflows.slice(0,5).map(wf => `<div class="wf-rp-line-cmd">「執行 ${_escHtml(wf.name||wf.id)}」</div>`).join("") : '<div class="wf-rp-empty">建立工作流後可透過 LINE 觸發</div>'}
+        </div>
+        <div class="wf-rp-section"><div class="wf-rp-title">排程狀態</div><div class="wf-rp-empty">尚未設定排程</div></div>`;
+    }
+  }
+
+  function _filterWfCards() {
+    const grid = document.getElementById("wfLandingGrid");
+    if (!grid) return;
+    const scope = document.querySelector(".wf-lp-filter-item.active")?.dataset?.scope || "all";
+    const q = (document.getElementById("wfLandingSearch")?.value || "").toLowerCase();
+    grid.querySelectorAll(".wf-landing-card").forEach(c => {
+      const match = (scope === "all" || c.dataset.scope === scope) && (!q || (c.dataset.name || "").toLowerCase().includes(q));
+      c.style.display = match ? "" : "none";
+    });
+  }
+
+  window._createNewWorkflow = async function () {
+    const _chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let _r = ""; for (let i = 0; i < 20; i++) _r += _chars.charAt(Math.floor(Math.random() * _chars.length));
+    const wfKey = "WorkflowK_" + _r, wfId = "wf-" + Date.now();
+    const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+    try {
+      await fetch(`/api/workflows/${wfId}`, { method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ name: "新工作流", blocks: [], connections: [], scope: "personal", owner: _u.employee_id || _u.id || "", context: { workflow_key: wfKey } }) });
+    } catch (_) {}
+    _enterWorkflowCanvas(wfId, "personal", _u.employee_id || _u.id || "");
+  };
+
+  window._openWorkflow = function (id, scope, owner) { _enterWorkflowCanvas(id, scope, owner); };
+
+  async function _enterWorkflowCanvas(wfId, scope, owner) {
+    // Close landing overlay, enter wf-mode with canvas
+    const overlay = document.getElementById("wfLandingOverlay");
+    if (overlay) overlay.classList.remove("open");
+    const body = document.querySelector(".page-chat-body");
+    if (body) body.classList.add("wf-mode");
+    // Remove anti-flash style if present (from ?wf= redirect)
+    const antiFlash = document.getElementById("wfAntiFlash");
+    if (antiFlash) antiFlash.remove();
+    if (body) body.style.visibility = "visible";
+
+    // Build palette
     const paletteWrap = document.getElementById("wfPaletteWrap");
     if (paletteWrap) await _rebuildPaletteForFlow(paletteWrap);
+
+    // Clean up old designer if exists (prevent block accumulation)
+    if (window._wfDesigner) {
+      window._wfDesigner.blocks.forEach(b => b.el.remove());
+      window._wfDesigner.blocks.clear();
+      window._wfDesigner.connections.forEach(c => c.el.remove());
+      window._wfDesigner.connections = [];
+    }
 
     // Init FlowDesigner
     const surface = document.getElementById("wfCanvasSurface");
@@ -1129,27 +1270,19 @@
     const viewport = document.getElementById("wfCanvasViewport");
     if (surface && svg && viewport) {
       window._wfDesigner = new FlowDesigner(surface, svg, viewport);
-      // Load saved or add demo blocks
-      // Load saved flow (API first, then localStorage fallback)
-      window._wfDesigner.load("default").then(() => {
-        if (window._wfDesigner.blocks.size === 0) {
-          window._wfDesigner.addBlock("start", 200, 250);
-        }
-      });
+      window._wfDesigner._currentWfId = wfId;
+      window._wfDesigner._currentScope = scope;
+      window._wfDesigner._currentOwner = owner;
+      await window._wfDesigner.load(wfId, scope, owner);
+      if (window._wfDesigner.blocks.size === 0) window._wfDesigner.addBlock("start", 200, 250);
     }
 
-    // Init Dashboard — sync immediately with canvas state
+    // Init Dashboard
     const dashWrap = document.getElementById("wfDashboardWrap");
     if (dashWrap) {
       window._wfDashboard = new WorkflowDashboard(dashWrap);
-      // Wait for Chart.js to load, then sync
-      const _syncDash = () => {
-        if (window._wfDashboard && window._wfDesigner) {
-          window._wfDashboard.updateStats(window._wfDesigner.blocks.size, window._wfDesigner.connections.length);
-        }
-      };
-      setTimeout(_syncDash, 500);
-      setTimeout(_syncDash, 2000); // retry after Chart.js CDN loads
+      const _sync = () => { if (window._wfDashboard && window._wfDesigner) window._wfDashboard.updateStats(window._wfDesigner.blocks.size, window._wfDesigner.connections.length); };
+      setTimeout(_sync, 500); setTimeout(_sync, 2000);
     }
   }
 
@@ -1204,39 +1337,36 @@
       <button class="wf-palette-header-btn" onclick="toggleSkillEditMode()">編輯節點</button>
     </div><div class="wf-palette-body">`;
 
-    // Group skills by scope for three-tier display
-    const SCOPE_LABELS = { "system": "📌 系統技能", "dept": "🏢 部門技能", "user": "👤 個人技能" };
+    // Group skills by scope for three-tier collapsible display
+    const SCOPE_LABELS = { "system": "系統技能", "dept": "部門技能", "user": "個人技能" };
     const scopeGroups = { system: [], dept: [], user: [] };
 
-    // 1. Control blocks (always greyed out)
-    const controlItems = Object.entries(BLOCK_DEFS).filter(([, d]) => d.category === "control");
-
-    // 2. Classify skills by scope
+    // Classify skills by scope (skip control blocks)
     Object.entries(BLOCK_DEFS).forEach(([type, def]) => {
       if (def.category === "control") return;
       const skillName = type.startsWith("mcp-") ? type : "mcp-" + type;
       const info = _dynamicSkills[skillName] || {};
-      const scope = (info.scope || "system").split(":")[0]; // "dept:A100" → "dept"
+      const scope = (info.scope || "system").split(":")[0];
       (scopeGroups[scope] || scopeGroups.system).push([type, def, skillName]);
     });
 
-    // 3. Render control (disabled)
-    if (controlItems.length) {
-      html += `<div class="wf-palette-category"><div class="wf-palette-category-title">${CATEGORIES.control?.label || "控制"}</div>`;
-      controlItems.forEach(([type, def]) => {
-        html += `<div class="wf-palette-item wf-palette-item--disabled" data-type="${type}">
-          <div class="wf-palette-item-accent" style="background:${def.color}"></div>
-          <div class="wf-palette-item-icon" style="background:${def.color}">${def.icon}</div>
-          <span>${def.label}</span></div>`;
-      });
-      html += `</div>`;
-    }
-
-    // 4. Render each scope group
+    // Render each scope as a collapsible section
     for (const [scopeKey, label] of Object.entries(SCOPE_LABELS)) {
       const items = scopeGroups[scopeKey];
-      if (!items.length) continue;
-      html += `<div class="wf-palette-category"><div class="wf-palette-scope-title">${label}</div>`;
+      const count = items.length;
+      const id = `wfScopeGroup_${scopeKey}`;
+      // Default: system expanded, others collapsed
+      const open = scopeKey === "system";
+      html += `<div class="wf-palette-scope">
+        <div class="wf-palette-scope-header${open ? " open" : ""}" onclick="this.classList.toggle('open');document.getElementById('${id}').classList.toggle('collapsed');">
+          <span>${label}</span>
+          <span class="wf-palette-scope-count">${count}</span>
+          <svg class="wf-palette-scope-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="wf-palette-scope-body${open ? "" : " collapsed"}" id="${id}">`;
+      if (count === 0) {
+        html += `<div style="font-size:0.65rem;color:var(--text-tertiary);padding:6px 8px;">（無）</div>`;
+      }
       items.forEach(([type, def, skillName]) => {
         html += `<div class="wf-palette-item wf-palette-item--clickable" data-type="${type}"
           onclick="window._wfSkillEditor&&window._wfSkillEditor.loadSkill('${skillName}')">
@@ -1244,10 +1374,14 @@
           <div class="wf-palette-item-icon" style="background:${def.color}">${def.icon}</div>
           <span>${def.label}</span></div>`;
       });
-      html += `</div>`;
+      html += `</div></div>`;
     }
     html += `</div>`;
     container.innerHTML = html;
+
+    // Hide "新增 Skill" button for guests
+    const _createBtn = document.getElementById("wfBtnCreateSkill");
+    if (_createBtn && window._wfIsGuest) _createBtn.style.display = "none";
   }
 
   async function _rebuildPaletteForFlow(container) {
@@ -1300,16 +1434,26 @@
       if (content) content.style.display = "flex";
 
       // Update header
-      document.getElementById("wfEditorTitle").textContent = "新增 Skill";
+      const scopeLabel = "新增 Skill";
+      document.getElementById("wfEditorTitle").textContent = scopeLabel;
+      const _idEl = document.getElementById("wfEditorSkillId");
+      if (_idEl) _idEl.textContent = "ID 將在首次儲存後自動產生";
       document.getElementById("wfTestSkillName").textContent = "—";
 
       // Render empty form
       const body = document.getElementById("wfEditorBody");
       if (!body) return;
+      const _defaultCat = "System";
       body.innerHTML = `
-        <div class="wf-editor-field">
-          <label>顯示名稱 (Display Name)</label>
-          <input type="text" id="wfEditDisplayName" value="" placeholder="例如：我的新技能" />
+        <div class="wf-editor-field" style="display:flex;gap:10px;">
+          <div style="flex:2"><label>顯示名稱 (Display Name)</label>
+            <input type="text" id="wfEditDisplayName" value="" placeholder="例如：我的新技能" /></div>
+          <div style="flex:1"><label>技能群組 (Category)</label>
+            <select id="wfEditCategory">
+              <option value="System"${_defaultCat==="System"?" selected":""}>System</option>
+              <option value="Department"${_defaultCat==="Department"?" selected":""}>Department</option>
+              <option value="Personal"${_defaultCat==="Personal"?" selected":""}>Personal</option>
+            </select></div>
         </div>
         <div class="wf-editor-field">
           <label>名稱 (Name)</label>
@@ -1374,6 +1518,8 @@
       const def = BLOCK_DEFS[skillName.replace("mcp-", "")] || {};
       document.getElementById("wfEditorTitle").textContent = def.label || skillName;
       document.getElementById("wfTestSkillName").textContent = def.label || skillName;
+      const _idEl = document.getElementById("wfEditorSkillId");
+      if (_idEl) _idEl.textContent = "";
 
       // Fetch skill data
       try {
@@ -1383,7 +1529,19 @@
         ]);
         // Store backup for rollback
         this._backup = detail.raw_content || "";
+        // Display SkillK_ ID below title
+        if (_idEl && detail.metadata?.skillk_id) {
+          _idEl.textContent = detail.metadata.skillk_id;
+        }
         this._renderEditor(skillName, detail, files);
+
+        // Toggle edit buttons based on editable permission
+        const _info = _dynamicSkills[skillName] || {};
+        const _canEdit = _info.editable === true;
+        ["wfBtnDelete","wfBtnRollback","wfBtnSave"].forEach(id => {
+          const btn = document.getElementById(id);
+          if (btn) btn.style.display = _canEdit ? "" : "none";
+        });
       } catch (e) {
         console.error("[SkillEditor] Load failed:", e);
         if (window.showToast) window.showToast("載入失敗: " + e.message, "error");
@@ -1412,10 +1570,17 @@
       const def = BLOCK_DEFS[skillName.replace("mcp-", "")] || {};
       const displayName = meta.display_name || def.label || skillName.replace("mcp-", "").replace(/-/g, " ");
 
+      const _cat = meta.category || "System";
       body.innerHTML = `
-        <div class="wf-editor-field">
-          <label>顯示名稱 (Display Name)</label>
-          <input type="text" id="wfEditDisplayName" value="${this._escapeHtml(displayName)}" />
+        <div class="wf-editor-field" style="display:flex;gap:10px;">
+          <div style="flex:2"><label>顯示名稱 (Display Name)</label>
+            <input type="text" id="wfEditDisplayName" value="${this._escapeHtml(displayName)}" /></div>
+          <div style="flex:1"><label>技能群組 (Category)</label>
+            <select id="wfEditCategory">
+              <option value="System"${_cat==="System"?" selected":""}>System</option>
+              <option value="Department"${_cat==="Department"?" selected":""}>Department</option>
+              <option value="Personal"${_cat==="Personal"?" selected":""}>Personal</option>
+            </select></div>
         </div>
         <div class="wf-editor-field">
           <label>名稱 (Name)</label>
@@ -1506,9 +1671,22 @@
 
       const displayName = document.getElementById("wfEditDisplayName")?.value?.trim() || "";
 
-      // Assemble YAML frontmatter (no parameters, no estimated_tokens)
+      const category = document.getElementById("wfEditCategory")?.value || "System";
+
+      // Generate or preserve SkillK_ ID (immutable after first save)
+      let _skillkId = meta.skillk_id || "";
+      if (!_skillkId) {
+        const _chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        let _rand = "";
+        for (let i = 0; i < 20; i++) _rand += _chars.charAt(Math.floor(Math.random() * _chars.length));
+        _skillkId = "SkillK_" + _rand;
+      }
+
+      // Assemble YAML frontmatter
       let yaml = `---\nname: ${name}\n`;
+      yaml += `skillk_id: ${_skillkId}\n`;
       if (displayName) yaml += `display_name: "${displayName}"\n`;
+      yaml += `category: ${category}\n`;
       if (meta.provider) yaml += `provider: ${meta.provider}\n`;
       yaml += `version: "${version}"\n`;
       if (desc) {
@@ -1589,9 +1767,26 @@
     async _postSaveRefresh() {
       await fetch("/skills/rescan", { method: "POST" });
       _skillsLoaded = false;
+      // Remember which scope sections are expanded before rebuild
+      const _openState = {};
+      document.querySelectorAll(".wf-palette-scope-header").forEach(h => {
+        const bodyId = h.nextElementSibling?.id;
+        if (bodyId) _openState[bodyId] = h.classList.contains("open");
+      });
       if (this.currentSkill) this.loadSkill(this.currentSkill);
       const paletteWrap = document.getElementById("wfPaletteWrap");
-      if (paletteWrap) await _rebuildPaletteForEdit(paletteWrap);
+      if (paletteWrap) {
+        await _rebuildPaletteForEdit(paletteWrap);
+        // Restore expanded state
+        Object.entries(_openState).forEach(([id, wasOpen]) => {
+          const body = document.getElementById(id);
+          const header = body?.previousElementSibling;
+          if (body && header) {
+            if (wasOpen) { header.classList.add("open"); body.classList.remove("collapsed"); }
+            else { header.classList.remove("open"); body.classList.add("collapsed"); }
+          }
+        });
+      }
     }
 
     // ── Save ─────────────────────────────────────────────────
@@ -1604,10 +1799,25 @@
           return;
         }
         try {
+          // Resolve scope + owner from Category dropdown
+          const _catVal = (document.getElementById("wfEditCategory")?.value || "System").toLowerCase();
+          const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+          let _scope = "system", _owner = "";
+          if (_catVal === "department") {
+            _scope = "department";
+            _owner = _u.department_code || "unknown";
+          } else if (_catVal === "personal") {
+            _scope = "personal";
+            _owner = _u.employee_id || _u.id || "unknown";
+          }
           const createResp = await fetch("/skills/create", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: newName }),
+            body: JSON.stringify({
+              name: newName,
+              scope: _scope,
+              owner: _owner,
+            }),
           });
           if (!createResp.ok) {
             const err = await createResp.json();
@@ -1637,6 +1847,28 @@
 
       try {
         const _user = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+
+        // Step 1: Move directory FIRST if category changed (before PUT triggers rescan)
+        const _newCat = (document.getElementById("wfEditCategory")?.value || "System");
+        const _oldCat = (this._editState?.meta?.category || "System");
+        if (_newCat !== _oldCat && !this._isNew) {
+          const _scopeMap = { "System": "system", "Department": "department", "Personal": "personal" };
+          const _targetScope = _scopeMap[_newCat] || "system";
+          let _targetOwner = "";
+          if (_targetScope === "department") _targetOwner = _user.department_code || "unknown";
+          else if (_targetScope === "personal") _targetOwner = _user.employee_id || _user.id || "unknown";
+
+          const moveResp = await fetch(`/skills/${this.currentSkill}/move?target_scope=${_targetScope}&target_owner=${_targetOwner}`, {
+            method: "POST",
+          });
+          if (!moveResp.ok) {
+            const moveErr = await moveResp.json();
+            this._saveModalError(overlay, "搬移失敗: " + (moveErr.detail || ""));
+            return;
+          }
+        }
+
+        // Step 2: PUT to update SKILL.md content (now in the new directory)
         const resp = await fetch(`/skills/${this.currentSkill}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -1652,7 +1884,7 @@
           return;
         }
 
-        // Handle rename if name changed
+        // Step 3: Handle rename if name changed
         if (renamed) {
           const renameResp = await fetch(`/skills/${this.currentSkill}/rename`, {
             method: "POST",
@@ -1934,5 +2166,31 @@
   window.toggleWorkflowView = toggleWorkflowView;
   window.toggleSkillEditMode = toggleSkillEditMode;
   window.closeWfPropPanel = closeWfPropPanel;
+
+  // Auto-open workflow if ?wf=xxx query param present (from admin.html)
+  (function () {
+    const params = new URLSearchParams(window.location.search);
+    const wfId = params.get("wf");
+    if (!wfId) return;
+    const scope = params.get("scope") || "personal";
+    const owner = params.get("owner") || "";
+    history.replaceState(null, "", window.location.pathname);
+
+    // Wait for DOM elements to exist, then enter canvas
+    function _tryEnter() {
+      const surface = document.getElementById("wfCanvasSurface");
+      if (!surface) { requestAnimationFrame(_tryEnter); return; }
+      const body = document.querySelector(".page-chat-body");
+      if (body) body.classList.add("wf-mode");
+      const btn = document.getElementById("btnWorkflowDesigner");
+      if (btn) btn.classList.add("active");
+      _enterWorkflowCanvas(wfId, scope, owner);
+    }
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", _tryEnter);
+    } else {
+      _tryEnter();
+    }
+  })();
 
 })();

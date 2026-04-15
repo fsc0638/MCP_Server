@@ -59,13 +59,13 @@
     const fields = {
       settingDisplayName: data.name || '',
       settingEmail: data.email || '',
-      settingDepartment: data.department_name || data.department || '',
+      settingDepartment: data.department_code ? `(${data.department_code}) ${data.department_name || data.department || ''}` : (data.department_name || data.department || ''),
       settingTitle: data.title || '',
       settingExtension: data.extension || '',
     };
     Object.entries(fields).forEach(([id, val]) => {
       const el = document.getElementById(id);
-      if (el) el.value = val;
+      if (el) el.textContent = val;
     });
 
     // Language preference
@@ -143,6 +143,35 @@
       showToast(action + ' 已執行', 'success');
     }
   };
+
+  /* ── Log Retention ─────────────────────────────────────────── */
+  window.saveLogRetention = async function () {
+    const input = document.getElementById('settingLogRetention');
+    let days = parseInt(input?.value, 10);
+    if (isNaN(days) || days < 20) { days = 20; if (input) input.value = 20; }
+    try {
+      const resp = await fetch('/api/settings/log-retention', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days }),
+      });
+      const data = await resp.json();
+      if (resp.ok) showToast('Log 保留天數已設定為 ' + days + ' 天', 'success');
+      else showToast('設定失敗: ' + (data.detail || ''), 'error');
+    } catch (e) { showToast('設定錯誤: ' + e.message, 'error'); }
+  };
+
+  // Load current log retention setting
+  (async function () {
+    try {
+      const resp = await fetch('/api/settings/log-retention');
+      if (resp.ok) {
+        const data = await resp.json();
+        const el = document.getElementById('settingLogRetention');
+        if (el && data.days) el.value = data.days;
+      }
+    } catch (_) {}
+  })();
 
   /* ── Logout ───────────────────────────────────────────────── */
   window.logout = function () {

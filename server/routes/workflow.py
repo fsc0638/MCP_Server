@@ -55,9 +55,11 @@ def list_workflows(scope: str = "", owner: str = ""):
         for f in sorted(directory.glob("*.json")):
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
+                _ctx = data.get("context", {})
                 workflows.append({
                     "id": f.stem,
                     "name": data.get("name", f.stem),
+                    "workflow_key": _ctx.get("workflow_key", ""),
                     "block_count": len(data.get("blocks", [])),
                     "connection_count": len(data.get("connections", [])),
                     "updated_at": data.get("updated_at", ""),

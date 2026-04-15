@@ -120,6 +120,7 @@ class TokenTracker:
             "by_skill": {},
             "by_group": {},
             "daily": {},
+            "monthly": {},
         }
 
         for r in records:
@@ -198,6 +199,27 @@ class TokenTracker:
                     summary["daily"][day]["chat_calls"] += 1
                 elif skill:
                     summary["daily"][day]["skill_calls"] += 1
+
+            # Monthly (YYYY-MM)
+            month = day[:7] if day else ""
+            if month:
+                if month not in summary["monthly"]:
+                    summary["monthly"][month] = {
+                        "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                        "skill_calls": 0, "chat_calls": 0, "days": 0,
+                    }
+                m = summary["monthly"][month]
+                m["input_tokens"] += inp
+                m["output_tokens"] += out
+                m["total_tokens"] += tot + si
+                if is_chat:
+                    m["chat_calls"] += 1
+                elif skill:
+                    m["skill_calls"] += 1
+
+        # Monthly: set days count from daily data
+        for month, mv in summary["monthly"].items():
+            mv["days"] = sum(1 for d in summary["daily"] if d.startswith(month))
 
         # Calculate averages
         for sk, sv in summary["by_skill"].items():

@@ -1,13 +1,16 @@
 """Workspace routes."""
 
+import json
 import logging
 import os
 import shutil
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from main import PROJECT_ROOT
 
@@ -15,6 +18,8 @@ router = APIRouter(tags=["Workspace"])
 logger = logging.getLogger("MCP_Server.Router.Workspace")
 WORKSPACE_DIR = PROJECT_ROOT / "workspace"
 WORKSPACE_DIR.mkdir(exist_ok=True)
+
+_SETTINGS_FILE = WORKSPACE_DIR / ".server_settings.json"
 
 
 def sanitize_filename(filename: str) -> str:
@@ -119,4 +124,186 @@ async def serve_image(filename: str):
         filename=safe_name,
         media_type=content_type,
     )
+
+
+# ── Server Settings: Log Retention ─────────────────────────────────────────
+
+def _load_settings() -> dict:
+    if _SETTINGS_FILE.exists():
+        try:
+            return json.loads(_SETTINGS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _save_settings(data: dict):
+    _SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class LogRetentionRequest(BaseModel):
+    days: int = 30
+
+
+@router.get("/api/settings/log-retention")
+def get_log_retention():
+    settings = _load_settings()
+    return {"days": settings.get("log_retention_days", 30)}
+
+
+@router.post("/api/settings/log-retention")
+def set_log_retention(req: LogRetentionRequest):
+    days = max(req.days, 20)  # Minimum 20 days
+    settings = _load_settings()
+    settings["log_retention_days"] = days
+    _save_settings(settings)
+    # Run cleanup immediately
+    cleaned = _cleanup_old_logs(days)
+    logger.info(f"[Settings] Log retention set to {days} days. Cleaned: {cleaned}")
+    return {"status": "success", "days": days, "cleaned_files": cleaned}
+
+
+def _cleanup_old_logs(retention_days: int) -> list:
+    """Delete log files older than retention_days."""
+    cleaned = []
+    cutoff = time.time() - (retention_days * 86400)
+    log_file = PROJECT_ROOT / "uma_server.log"
+
+    # Trim the main log file: keep only lines within retention period
+    if log_file.exists() and log_file.stat().st_mtime < cutoff:
+        # Entire file is older than cutoff — archive and truncate
+        archive = PROJECT_ROOT / f"uma_server.log.{datetime.now().strftime('%Y%m%d')}.bak"
+        shutil.copy2(log_file, archive)
+        log_file.write_text("", encoding="utf-8")
+        cleaned.append(str(archive))
+
+    # Clean old .bak log files
+    for f in PROJECT_ROOT.glob("uma_server.log.*.bak"):
+        if f.stat().st_mtime < cutoff:
+            f.unlink()
+            cleaned.append(str(f))
+
+    # Clean old analytics JSONL
+    analytics_dir = WORKSPACE_DIR / "analytics"
+    if analytics_dir.exists():
+        for f in analytics_dir.glob("*.jsonl"):
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                cleaned.append(str(f))
+
+    # Clean old session cache files
+    sessions_dir = WORKSPACE_DIR / "sessions"
+    if sessions_dir.exists():
+        for f in sessions_dir.glob("*_msg_cache.json"):
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                cleaned.append(str(f))
+
+    return cleaned
+
+
+# ── Schedule Management API ────────────────────────────────────────────────
+
+@router.get("/api/session-names")
+def get_session_names():
+    """Resolve session IDs to human-readable names (user name or group name)."""
+    users_dir = WORKSPACE_DIR / "users"
+    names = {}
+    # 1. From workspace/users/*.json (LINE users)
+    if users_dir.exists():
+        for f in users_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                sid = f.stem
+                name = d.get("name", "")
+                if name:
+                    names[sid] = name
+                    # Also map without prefix
+                    if sid.startswith("line_"):
+                        names[sid.replace("line_", "")] = name
+            except Exception:
+                pass
+
+    # 2. From workspace/profiles/*group*.profile.md (LINE groups — extract from profile title)
+    profiles_dir = WORKSPACE_DIR / "profiles"
+    if profiles_dir.exists():
+        for f in profiles_dir.glob("*group*.profile.md"):
+            try:
+                sid = f.stem.replace(".profile", "")
+                content = f.read_text(encoding="utf-8")
+                # Try to find group name in profile (look for 群組名稱 or first heading)
+                for line in content.split("\n"):
+                    if "群組" in line and "：" in line:
+                        gname = line.split("：", 1)[1].strip()
+                        if gname:
+                            names[sid] = gname
+                            break
+                if sid not in names:
+                    names[sid] = sid.replace("line_group_", "群組 ")[:20]
+            except Exception:
+                pass
+
+    return {"names": names}
+
+
+@router.get("/api/schedules")
+def list_all_schedules():
+    """List all scheduled tasks across all sessions for admin dashboard."""
+    schedules_dir = WORKSPACE_DIR / "schedules"
+    if not schedules_dir.exists():
+        return {"total": 0, "sessions": [], "tasks": []}
+
+    sessions = []
+    all_tasks = []
+    for f in sorted(schedules_dir.glob("*.json")):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            sid = data.get("session_id", f.stem)
+            tasks = data.get("tasks", [])
+            active = sum(1 for t in tasks if t.get("enabled"))
+            paused = sum(1 for t in tasks if not t.get("enabled"))
+            sessions.append({"session_id": sid, "task_count": len(tasks), "active": active, "paused": paused})
+            for t in tasks:
+                t["_session_id"] = sid
+                all_tasks.append(t)
+        except Exception:
+            pass
+
+    return {
+        "total": len(all_tasks),
+        "active": sum(1 for t in all_tasks if t.get("enabled")),
+        "paused": sum(1 for t in all_tasks if not t.get("enabled")),
+        "sessions": sessions,
+        "tasks": all_tasks,
+    }
+
+
+@router.post("/api/schedules/{session_id}/{task_id}/toggle")
+def toggle_schedule_task(session_id: str, task_id: str):
+    """Toggle a task's enabled state (pause/resume)."""
+    sched_file = WORKSPACE_DIR / "schedules" / f"{session_id}.json"
+    if not sched_file.exists():
+        raise HTTPException(status_code=404, detail="Session schedule not found")
+    data = json.loads(sched_file.read_text(encoding="utf-8"))
+    for t in data.get("tasks", []):
+        if t.get("id") == task_id:
+            t["enabled"] = not t.get("enabled", True)
+            sched_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            return {"status": "success", "task_id": task_id, "enabled": t["enabled"]}
+    raise HTTPException(status_code=404, detail="Task not found")
+
+
+@router.delete("/api/schedules/{session_id}/{task_id}")
+def delete_schedule_task(session_id: str, task_id: str):
+    """Delete a scheduled task."""
+    sched_file = WORKSPACE_DIR / "schedules" / f"{session_id}.json"
+    if not sched_file.exists():
+        raise HTTPException(status_code=404, detail="Session schedule not found")
+    data = json.loads(sched_file.read_text(encoding="utf-8"))
+    original_len = len(data.get("tasks", []))
+    data["tasks"] = [t for t in data.get("tasks", []) if t.get("id") != task_id]
+    if len(data["tasks"]) == original_len:
+        raise HTTPException(status_code=404, detail="Task not found")
+    sched_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"status": "success", "task_id": task_id}
 

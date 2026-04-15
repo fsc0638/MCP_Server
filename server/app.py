@@ -220,8 +220,28 @@ def _setup_scheduler():
             replace_existing=True,
         )
 
+        # Log cleanup — daily at 02:00
+        def _scheduled_log_cleanup():
+            try:
+                from server.routes.workspace import _load_settings, _cleanup_old_logs
+                settings = _load_settings()
+                days = settings.get("log_retention_days", 30)
+                cleaned = _cleanup_old_logs(days)
+                if cleaned:
+                    logger.info(f"[Scheduler] Log cleanup: removed {len(cleaned)} old files (retention={days}d)")
+            except Exception as e:
+                logger.error(f"[Scheduler] Log cleanup error: {e}")
+
+        __scheduler.add_job(
+            _scheduled_log_cleanup,
+            CronTrigger(hour=2, minute=0, timezone=__tz),
+            id="log_cleanup",
+            name="Log Cleanup",
+            replace_existing=True,
+        )
+
         __scheduler.start()
-        logger.info("[Scheduler] APScheduler started with 6 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), line_uploads_cleanup(00:05), push_tick(1min), continuous_learner(10min)")
+        logger.info("[Scheduler] APScheduler started with 7 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), line_uploads_cleanup(00:05), push_tick(1min), continuous_learner(10min), log_cleanup(02h)")
 
     except ImportError:
         logger.warning(
@@ -277,7 +297,10 @@ async def shutdown():
     if __watcher is not None:
         __watcher.stop()
     if __scheduler is not None:
-        __scheduler.shutdown(wait=False)
-        logger.info("[Scheduler] APScheduler shut down.")
+        try:
+            __scheduler.shutdown(wait=False)
+            logger.info("[Scheduler] APScheduler shut down.")
+        except Exception:
+            pass
     session_mgr = get_session_manager()
     session_mgr.flush_all_sessions(make_llm_callable())

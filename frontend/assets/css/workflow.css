@@ -10,12 +10,137 @@
 .wf-dashboard-wrap { display: none; }
 
 .page-chat-body.wf-mode .page-chat-sidebar-left > *:not(.wf-palette-wrap) { display: none; }
-.page-chat-body.wf-mode .page-chat-main > *:not(.wf-canvas-area) { display: none; }
+.page-chat-body.wf-mode .page-chat-main > *:not(.wf-canvas-area):not(.wf-skill-edit-area) { display: none; }
 .page-chat-body.wf-mode .page-chat-sidebar-right > *:not(.wf-dashboard-wrap) { display: none; }
 
 .page-chat-body.wf-mode .wf-palette-wrap,
 .page-chat-body.wf-mode .wf-canvas-area,
 .page-chat-body.wf-mode .wf-dashboard-wrap { display: flex; flex-direction: column; height: 100%; }
+
+/* ── Workflow Landing Overlay ─────────────────────────────────── */
+/* Fixed overlay below header, covers entire viewport — no layout conflicts */
+.wf-landing-overlay {
+  display: none; position: fixed;
+  top: 52px; left: 0; right: 0; bottom: 0;
+  z-index: 100; background: var(--bg-main, #F8F9FB);
+  flex-direction: row;
+}
+.wf-landing-overlay.open { display: flex; }
+
+.wf-landing-left {
+  width: 200px; flex-shrink: 0; overflow-y: auto;
+  padding: 20px 14px; border-right: 1px solid var(--border-subtle, #E2E8F0);
+  background: var(--bg-surface, #fff);
+}
+.wf-landing-center {
+  flex: 1; overflow-y: auto; padding: 28px 32px;
+}
+.wf-landing-right {
+  width: 260px; flex-shrink: 0; overflow-y: auto;
+  padding: 20px 16px; border-left: 1px solid var(--border-subtle, #E2E8F0);
+  background: var(--bg-surface, #fff);
+}
+.wf-landing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+/* Left panel */
+.wf-lp-section { margin-bottom: 20px; }
+.wf-lp-title {
+  font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-tertiary, #94A3B8);
+  padding: 0 4px 8px;
+}
+.wf-lp-search {
+  width: 100%; padding: 7px 10px; border: 1px solid var(--border-subtle);
+  border-radius: 8px; font-size: 0.76rem; background: var(--bg-main);
+  outline: none; transition: border-color 0.15s; box-sizing: border-box;
+}
+.wf-lp-search:focus { border-color: var(--kway-blue); }
+.wf-lp-filter { display: flex; flex-direction: column; gap: 2px; }
+.wf-lp-filter-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 8px; cursor: pointer;
+  font-size: 0.76rem; color: var(--text-secondary); transition: background 0.12s;
+}
+.wf-lp-filter-item:hover { background: var(--bg-hover, #f1f5f9); }
+.wf-lp-filter-item.active {
+  background: var(--kway-blue-pale, #e6f6f8);
+  color: var(--kway-blue, #1a9aaa); font-weight: 600;
+}
+.wf-lp-filter-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.wf-lp-filter-count {
+  margin-left: auto; font-size: 0.63rem; color: var(--text-tertiary);
+  background: var(--bg-hover, #f1f5f9); border-radius: 8px; padding: 1px 6px;
+}
+.wf-lp-recent { display: flex; flex-direction: column; gap: 2px; }
+.wf-lp-recent-item {
+  padding: 5px 8px; border-radius: 6px; cursor: pointer;
+  font-size: 0.72rem; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 0.12s;
+}
+.wf-lp-recent-item:hover { background: var(--bg-hover); }
+
+/* Right panel */
+.wf-rp-section { margin-bottom: 22px; }
+.wf-rp-title {
+  font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-tertiary);
+  padding: 0 0 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border-subtle);
+}
+.wf-rp-empty { font-size: 0.72rem; color: var(--text-tertiary); padding: 6px 0; }
+.wf-rp-line-cmd {
+  padding: 5px 8px; background: var(--bg-main); border-radius: 6px;
+  font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 4px; font-family: monospace;
+}
+
+/* Cards */
+.wf-landing-card-new {
+  border: 2px dashed var(--border-medium, #CBD5E1);
+  border-radius: 14px; min-height: 118px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: border-color 0.2s, background 0.2s, transform 0.15s;
+  background: var(--bg-surface, #fff);
+}
+.wf-landing-card-new:hover {
+  border-color: var(--kway-blue, #1a9aaa);
+  background: var(--kway-blue-pale, #e6f6f8); transform: translateY(-2px);
+}
+.wf-landing-card-new-inner { text-align: center; color: var(--text-secondary); }
+.wf-landing-card-new-icon {
+  width: 34px; height: 34px; border-radius: 10px;
+  background: var(--kway-blue-light, #b2e4ea); color: var(--kway-blue, #1a9aaa);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 6px; font-size: 1.1rem; font-weight: 700;
+}
+.wf-landing-card-new-label { font-size: 0.78rem; font-weight: 600; }
+.wf-landing-card {
+  background: var(--bg-surface, #fff); border: 1px solid var(--border-subtle, #E2E8F0);
+  border-radius: 14px; overflow: hidden;
+  cursor: pointer; transition: box-shadow 0.2s, border-color 0.2s, transform 0.15s;
+}
+.wf-landing-card:hover {
+  box-shadow: var(--shadow-hover);
+  border-color: var(--border-medium, #CBD5E1); transform: translateY(-2px);
+}
+.wf-landing-card-header {
+  padding: 12px 14px 8px; color: #fff;
+  font-size: 0.82rem; font-weight: 700; line-height: 1.3;
+}
+.wf-landing-card-key {
+  font-size: 0.52rem; font-weight: 400; opacity: 0.7;
+  font-family: monospace; margin-top: 2px; word-break: break-all;
+}
+.wf-landing-card-body { padding: 8px 14px 12px; }
+.wf-landing-card-meta {
+  font-size: 0.66rem; color: var(--text-muted, #64748B);
+  display: flex; align-items: center; gap: 6px;
+}
+.wf-landing-card-meta-dot {
+  width: 3px; height: 3px; border-radius: 50%; background: var(--border-medium, #CBD5E1);
+}
 
 /* Skill edit area overrides canvas display */
 .page-chat-body.wf-mode .wf-skill-edit-area.visible { display: flex; flex: 1; height: 100%; }
@@ -42,10 +167,32 @@
   color: var(--text-tertiary); letter-spacing: 0.05em;
   padding: 4px 6px; margin-bottom: 4px;
 }
-.wf-palette-scope-title {
-  font-size: 0.7rem; font-weight: 700;
-  color: var(--text-secondary); padding: 6px 6px 4px;
-  border-top: 1px solid var(--border-subtle); margin-top: 4px;
+/* ── Collapsible scope sections (Skill Edit mode) ──────── */
+.wf-palette-scope { margin-bottom: 2px; }
+.wf-palette-scope-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 8px; cursor: pointer; user-select: none;
+  font-size: 0.72rem; font-weight: 700; color: var(--text-secondary);
+  border-top: 1px solid var(--border-subtle);
+  transition: background 0.15s;
+}
+.wf-palette-scope-header:first-child { border-top: none; }
+.wf-palette-scope-header:hover { background: var(--bg-hover); }
+.wf-palette-scope-count {
+  font-size: 0.6rem; font-weight: 600; color: var(--text-tertiary);
+  background: var(--bg-hover, #f1f5f9); border-radius: 8px; padding: 1px 6px;
+  margin-left: auto;
+}
+.wf-palette-scope-arrow {
+  transition: transform 0.2s; flex-shrink: 0;
+}
+.wf-palette-scope-header.open .wf-palette-scope-arrow { transform: rotate(180deg); }
+.wf-palette-scope-body {
+  overflow: hidden; transition: max-height 0.25s ease, opacity 0.2s;
+  max-height: 2000px; opacity: 1;
+}
+.wf-palette-scope-body.collapsed {
+  max-height: 0; opacity: 0;
 }
 
 .wf-palette-item {
@@ -175,9 +322,9 @@
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--border-medium, #ccc);
 }
-.wf-block-status.ok { background: #34a853; }
+.wf-block-status.ok { background: var(--color-success); }
 .wf-block-status.running { background: var(--kway-blue); animation: wf-blink 1s infinite; }
-.wf-block-status.error { background: #ea4335; }
+.wf-block-status.error { background: var(--color-error); }
 
 /* Ports — 4 directions */
 .wf-port {
@@ -288,7 +435,7 @@
   margin-bottom: 8px; display: flex; align-items: center; gap: 6px;
 }
 .wf-live-dot {
-  width: 6px; height: 6px; border-radius: 50%; background: #34a853;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--color-success);
   animation: wf-blink 1s infinite;
 }
 .wf-log-list {
@@ -306,9 +453,9 @@
 .wf-log-dot {
   width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
 }
-.wf-log-dot.success { background: #34a853; }
+.wf-log-dot.success { background: var(--color-success); }
 .wf-log-dot.running { background: var(--kway-blue); animation: wf-blink 1s infinite; }
-.wf-log-dot.failed { background: #ea4335; }
+.wf-log-dot.failed { background: var(--color-error); }
 .wf-log-name { font-weight: 600; flex: 1; }
 .wf-log-time { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 
@@ -414,21 +561,21 @@
 }
 .wf-editor-btn-secondary:hover { background: var(--bg-hover); }
 .wf-editor-btn-danger {
-  background: var(--bg-surface); color: #ea4335; border-color: #ea4335;
+  background: var(--bg-surface); color: var(--color-error); border-color: var(--color-error);
 }
-.wf-editor-btn-danger:hover { background: #ea4335; color: #fff; }
+.wf-editor-btn-danger:hover { background: var(--color-error); color: #fff; }
 
 /* ── Delete Confirmation Modal ────────────────────────────── */
 .wf-delete-overlay {
   position: fixed; inset: 0; z-index: 9999;
-  background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center;
+  background: var(--overlay-bg); display: flex; align-items: center; justify-content: center;
 }
 .wf-delete-modal {
   background: var(--bg-surface, #fff); border-radius: 14px; padding: 28px 32px;
-  width: 420px; max-width: 90vw; box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  width: 420px; max-width: 90vw; box-shadow: var(--shadow-modal);
 }
 .wf-delete-modal h3 {
-  margin: 0 0 4px; font-size: 1rem; color: #ea4335;
+  margin: 0 0 4px; font-size: 1rem; color: var(--color-error);
 }
 .wf-delete-modal .wf-delete-skill-name {
   font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 16px;
@@ -442,7 +589,7 @@
   border-radius: 8px; padding: 8px 10px; font-size: 0.78rem; resize: vertical;
   font-family: inherit; box-sizing: border-box;
 }
-.wf-delete-modal textarea:focus { outline: none; border-color: #ea4335; }
+.wf-delete-modal textarea:focus { outline: none; border-color: var(--color-error); }
 .wf-delete-modal .wf-delete-hint {
   font-size: 0.65rem; color: var(--text-tertiary); margin: 4px 0 16px;
 }
@@ -458,7 +605,7 @@
 }
 .wf-delete-modal .wf-delete-cancel:hover { background: var(--bg-hover); }
 .wf-delete-modal .wf-delete-confirm {
-  background: #ea4335; color: #fff; border-color: #ea4335;
+  background: var(--color-error); color: #fff; border-color: var(--color-error);
 }
 .wf-delete-modal .wf-delete-confirm:hover { opacity: 0.9; }
 .wf-delete-modal .wf-delete-confirm:disabled {
@@ -468,11 +615,11 @@
 /* ── Save Status Modal ────────────────────────────────────── */
 .wf-save-overlay {
   position: fixed; inset: 0; z-index: 9999;
-  background: rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center;
+  background: var(--overlay-bg); display: flex; align-items: center; justify-content: center;
 }
 .wf-save-modal {
   background: var(--bg-surface, #fff); border-radius: 14px; padding: 20px 28px 18px;
-  width: 180px; text-align: center; box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+  width: 180px; text-align: center; box-shadow: var(--shadow-modal);
   animation: wfSaveIn 0.25s ease-out;
 }
 @keyframes wfSaveIn {
@@ -510,7 +657,7 @@
 }
 .wf-save-modal .wf-save-ok:hover { opacity: 0.9; }
 .wf-save-modal .wf-save-error {
-  margin-top: 10px; font-size: 0.72rem; color: #ea4335; font-weight: 600;
+  margin-top: 10px; font-size: 0.72rem; color: var(--color-error); font-weight: 600;
 }
 .wf-save-modal .wf-save-error button {
   margin-top: 8px; padding: 6px 24px; border-radius: 8px;
@@ -571,7 +718,7 @@
   cursor: pointer; color: var(--text-tertiary); background: none; border: none;
   font-size: 0.8rem; padding: 0 4px;
 }
-.wf-editor-file-del:hover { color: #ea4335; }
+.wf-editor-file-del:hover { color: var(--color-error); }
 
 /* Test chat pane */
 .wf-test-header {
@@ -670,14 +817,14 @@
   background: rgba(13,110,253,0.08); padding: 1px 6px; border-radius: 4px;
 }
 .wf-param-card-required {
-  font-size: 0.55rem; font-weight: 700; color: #ea4335;
+  font-size: 0.55rem; font-weight: 700; color: var(--color-error);
   background: rgba(234,67,53,0.08); padding: 1px 5px; border-radius: 3px;
 }
 .wf-param-card-del {
   cursor: pointer; color: var(--text-tertiary); background: none; border: none;
   font-size: 0.85rem; padding: 0 4px; line-height: 1;
 }
-.wf-param-card-del:hover { color: #ea4335; }
+.wf-param-card-del:hover { color: var(--color-error); }
 .wf-param-card-row {
   display: flex; gap: 6px; margin-bottom: 4px;
 }
@@ -711,14 +858,14 @@
 /* ── Confirm Dialog ──────────────────────────────────────────── */
 .wf-confirm-overlay {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  background: rgba(0,0,0,0.3); z-index: 9000;
+  background: var(--overlay-bg); z-index: 9000;
   display: flex; align-items: center; justify-content: center;
   animation: wf-fadeIn 0.15s ease;
 }
 .wf-confirm-box {
   background: var(--bg-surface); border-radius: 16px;
   padding: 28px 32px; min-width: 320px; max-width: 400px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  box-shadow: var(--shadow-modal);
   text-align: center;
 }
 .wf-confirm-icon { font-size: 2rem; margin-bottom: 10px; }
@@ -737,7 +884,7 @@
 }
 .wf-confirm-cancel:hover { background: var(--bg-hover); }
 .wf-confirm-ok {
-  background: #ea4335; color: #fff;
+  background: var(--color-error); color: #fff;
 }
 .wf-confirm-ok:hover { opacity: 0.9; }
 @keyframes wf-fadeIn { from { opacity: 0; } to { opacity: 1; } }
