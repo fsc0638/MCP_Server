@@ -19,6 +19,70 @@ router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 
+
+def _auto_bind_line_user_context(user: dict) -> None:
+    """Best-effort: bind LINE Login identity to employee context."""
+    user_id = str((user or {}).get("id") or "").strip()
+    if not user_id:
+        return
+
+    from server.services.employee_lookup import (
+        build_user_context,
+        get_user_context,
+        lookup,
+        save_user_context,
+    )
+
+    existing_ctx = get_user_context(user_id) or {}
+    candidates = []
+
+    line_email = str((user or {}).get("email") or "").strip().lower()
+    if line_email:
+        candidates.append(("line_email", line_email))
+
+    existing_email = str(existing_ctx.get("email") or "").strip().lower()
+    if existing_email and existing_email != line_email:
+        candidates.append(("stored_email", existing_email))
+
+    existing_employee_id = str(existing_ctx.get("employee_id") or "").strip()
+    if existing_employee_id:
+        candidates.append(("stored_employee_id", existing_employee_id))
+
+    employee = None
+    match_hint = ""
+    for hint, query in candidates:
+        candidate = lookup(query)
+        if candidate:
+            employee = candidate
+            match_hint = f"{hint}:{query}"
+            break
+
+    if not employee:
+        _auth_logger.info("[LINE callback] auto-bind skipped for user=%s (no employee match)", user_id)
+        return
+
+    merged_ctx = dict(build_user_context(employee, user_id))
+
+    # Preserve user-managed settings from existing context.
+    if isinstance(existing_ctx.get("preferences"), dict):
+        merged_ctx["preferences"] = existing_ctx["preferences"]
+    if isinstance(existing_ctx.get("groups"), list):
+        merged_ctx["groups"] = existing_ctx["groups"]
+    if isinstance(existing_ctx.get("skill_access"), dict):
+        merged_ctx["skill_access"] = existing_ctx["skill_access"]
+    if existing_ctx.get("role"):
+        merged_ctx["role"] = existing_ctx["role"]
+
+    merged_ctx["source"] = "line_login"
+    save_user_context(merged_ctx)
+
+    _auth_logger.info(
+        "[LINE callback] auto-bound user=%s employee_id=%s via %s",
+        user_id,
+        merged_ctx.get("employee_id", ""),
+        match_hint or "unknown",
+    )
+
 @router.post("/google")
 async def google_login(req: GoogleLoginRequest):
     if not GOOGLE_CLIENT_ID:
@@ -139,6 +203,12 @@ def line_callback(code: str = "", state: str = "", error: str = "", error_descri
     try:
         _auth_logger.info("[LINE callback] received code=%s… state=%s…", code[:6] if code else "", state[:8] if state else "")
         user = consume_callback(code=code, state=state)
+
+        # Best-effort auto bind for settings profile enrichment.
+        try:
+            _auto_bind_line_user_context(user)
+        except Exception as bind_err:
+            _auth_logger.warning("[LINE callback] auto-bind error user=%s: %s", user.get("id"), bind_err)
 
         # Store minimal session in cookie (same-origin flow).
         # SECURITY: sign the cookie to prevent tampering.
