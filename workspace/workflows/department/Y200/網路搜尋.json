@@ -1,0 +1,88 @@
+{
+  "id": "網路搜尋",
+  "name": "網路搜尋",
+  "description": "當使用者提出需要查找量子計算相關新聞時，利用此工作流執行",
+  "icon": "",
+  "tags": [],
+  "trigger_keywords": [
+    "量子新聞，量子計算新聞，查找量子相關新聞"
+  ],
+  "variables": [
+    {
+      "name": "搜尋主體",
+      "type": "string",
+      "source": "fixed",
+      "default_value": "量子運算",
+      "description": "",
+      "required": false
+    }
+  ],
+  "blocks": [
+    {
+      "id": 1,
+      "type": "start",
+      "x": 30,
+      "y": 80,
+      "label": "開始",
+      "config": {}
+    },
+    {
+      "id": 2,
+      "type": "web-search",
+      "x": 30,
+      "y": 240,
+      "label": "網路搜尋",
+      "config": {
+        "params": {
+          "input": {
+            "source": "variable",
+            "value": "{{搜尋主體}}"
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "end",
+      "x": 30,
+      "y": 400,
+      "label": "結束",
+      "config": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": 1,
+      "to": 2
+    },
+    {
+      "from": 2,
+      "to": 3
+    }
+  ],
+  "trigger": {
+    "enabled": true,
+    "mode": "auto",
+    "priority": 10,
+    "cron": ""
+  },
+  "execution": {
+    "default_model": "",
+    "timeout": 120,
+    "token_budget": 0,
+    "on_error": "retry",
+    "max_retries": 3
+  },
+  "security": {
+    "require_auth": true,
+    "allowed_roles": [],
+    "rate_limit": 0,
+    "audit_log": true,
+    "encrypt_variables": false
+  },
+  "context": {},
+  "scope": "department",
+  "owner": "Y200",
+  "updated_at": "2026-04-16T16:49:27.940869",
+  "created_at": "2026-04-16T16:33:58.552278"
+}
