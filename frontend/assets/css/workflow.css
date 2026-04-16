@@ -1117,6 +1117,14 @@
 .wf-param-map-auto-hint {
   font-size: 0.62rem; color: var(--text-tertiary); font-style: italic;
 }
+.wf-param-schema-hint {
+  background: #f0f7ff; border: 1px solid #c3daf9; border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 6px;
+}
+.wf-param-schema-hint code {
+  background: #deeeff; border-radius: 3px; padding: 1px 4px;
+  font-size: 0.68rem; font-family: "SFMono-Regular", Consolas, monospace;
+}
 
 /* ── Workflow Card Delete Button ─────────────────────────────── */
 .wf-landing-card-header { position: relative; }

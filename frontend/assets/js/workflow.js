@@ -550,8 +550,16 @@
 
     // ── Run Flow (Backend execution + Frontend animation) ────
     async runFlow() {
-      // Save first to ensure backend has latest
-      await this.save("default");
+      const wfId    = this._currentWfId || "default";
+      const scope   = this._currentScope || "personal";
+      const owner   = this._currentOwner || "";
+      const wfName  = this._wfData?.name || wfId;
+
+      // Ask user for initial prompt (optional)
+      const prompt = window.prompt(`執行工作流「${wfName}」\n\n輸入測試訊息（可留空直接使用工作流變數）：`, "") ?? "";
+
+      // Save current state first (skip validation so partial edits don't block test)
+      await this.save(null, true);
 
       // Start frontend animation
       const order = this._topoSort();
@@ -564,12 +572,13 @@
         await sleep(300);
       }
 
-      // Call backend execution
+      // Call backend execution with correct scope/owner
+      const _eq = new URLSearchParams({ scope, owner });
       try {
-        const resp = await fetch("/api/workflows/default/execute", {
+        const resp = await fetch(`/api/workflows/${encodeURIComponent(wfId)}/execute?${_eq}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ initial_prompt: "", model: null }),
+          body: JSON.stringify({ initial_prompt: prompt, model: null }),
         });
         const data = await resp.json();
 
@@ -590,22 +599,36 @@
           });
         }
 
-        // Log results
+        // Log results + show output
+        const success = data.results?.filter(r => r.status === "success").length || 0;
+        const errors  = data.results?.filter(r => r.status === "error").length || 0;
+        const skipped = data.results?.filter(r => r.status === "skipped").length || 0;
+
         if (window._wfDashboard) {
-          const success = data.results?.filter(r => r.status === "success").length || 0;
-          const errors = data.results?.filter(r => r.status === "error").length || 0;
           window._wfDashboard.addLog(
-            `Flow 執行完成 (${success} 成功, ${errors} 錯誤)`,
+            `「${wfName}」執行完成 — ${success} 成功 / ${errors} 失敗 / ${skipped} 略過`,
             errors > 0 ? "failed" : "success"
           );
+          // Show per-block errors
+          data.results?.filter(r => r.status === "error").forEach(r => {
+            window._wfDashboard.addLog(`  ✗ ${r.skill || r.type}: ${r.error || ""}`, "failed");
+          });
         }
 
         if (window.showToast) {
-          window.showToast(`執行完成：${data.blocks_executed} 個節點`, "success");
+          const msg = errors > 0
+            ? `執行完成：${success} 成功 / ${errors} 失敗`
+            : `✓ 執行完成：${data.blocks_executed} 個節點`;
+          window.showToast(msg, errors > 0 ? "warning" : "success");
+        }
+
+        // Show final output in a result panel if there's meaningful output
+        if (data.final_output && data.final_output.trim()) {
+          _showWfRunResult(wfName, data);
         }
       } catch (e) {
         if (window.showToast) window.showToast("執行失敗: " + e.message, "error");
-        if (window._wfDashboard) window._wfDashboard.addLog("Flow 執行失敗", "failed");
+        if (window._wfDashboard) window._wfDashboard.addLog(`「${wfName}」執行失敗: ${e.message}`, "failed");
       }
 
       // Clean up animations
@@ -1199,44 +1222,19 @@
       if (isControl) {
         paramsDiv.innerHTML = `<div style="padding:10px;font-size:0.72rem;color:var(--text-tertiary);">控制節點無參數</div>`;
       } else {
-        const cfg = block.config || {};
-        const params = cfg.params || {};
-        const wfVars = fd._wfData?.variables || [];
-        const varOpts = wfVars.map(v => `<option value="{{${v.name}}}">${v.name}</option>`).join("");
-
-        // Get skill parameters from registry
         const skillName = block.type.startsWith("mcp-") ? block.type : "mcp-" + block.type;
-        const skillInfo = _dynamicSkills[skillName] || {};
-        const skillDesc = skillInfo.description || "";
 
-        let pHtml = `<div style="padding:8px 0 4px;font-size:0.68rem;color:var(--text-tertiary);">參數來源映射</div>`;
+        // Render params immediately with current config, then enrich with skill schema
+        _renderBlockParams(block, paramsDiv, fd, skillName, null);
 
-        // Show known param: "input" (most skills have this)
-        const knownParams = ["input", "query", "prompt", "text", "code", "url"];
-        const activeParams = Object.keys(params).length > 0 ? Object.keys(params) : knownParams.slice(0, 1);
-
-        // Build param mapping cards
-        const allParams = [...new Set([...activeParams, ...knownParams.slice(0, 2)])];
-        allParams.forEach(pName => {
-          const pv = params[pName] || { source: "auto", value: "" };
-          pHtml += `<div class="wf-param-map-card">
-            <div class="wf-param-map-name">${pName}</div>
-            <div class="wf-param-map-row">
-              <select class="wf-param-map-source" data-param="${pName}" onchange="window._updateBlockParam(${block.id},'${pName}','source',this.value)">
-                <option value="auto" ${pv.source === "auto" ? "selected" : ""}>自動 (LLM)</option>
-                <option value="variable" ${pv.source === "variable" ? "selected" : ""}>變數</option>
-                <option value="fixed" ${pv.source === "fixed" ? "selected" : ""}>固定值</option>
-                <option value="previous_step" ${pv.source === "previous_step" ? "selected" : ""}>上一步輸出</option>
-              </select>
-              ${pv.source === "variable" ? `<select class="wf-param-map-val" onchange="window._updateBlockParam(${block.id},'${pName}','value',this.value)">
-                <option value="">選擇變數</option>${varOpts}</select>` :
-                pv.source === "fixed" ? `<input class="wf-param-map-val" type="text" value="${_escHtml(pv.value || "")}" onchange="window._updateBlockParam(${block.id},'${pName}','value',this.value)" placeholder="固定值" />` :
-                `<span class="wf-param-map-auto-hint">${pv.source === "previous_step" ? "使用前一節點輸出" : "由 LLM 自動推斷"}</span>`}
-            </div>
-          </div>`;
-        });
-
-        paramsDiv.innerHTML = pHtml;
+        // Async: fetch skill parameter schema and re-render with real param names
+        fetch(`/skills/${skillName}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(skillData => {
+            const schema = skillData?.metadata?.parameters || null;
+            _renderBlockParams(block, paramsDiv, fd, skillName, schema);
+          })
+          .catch(() => {});
       }
     }
 
@@ -1474,6 +1472,47 @@
       const match = (scope === "all" || c.dataset.scope === scope) && (!q || (c.dataset.name || "").toLowerCase().includes(q));
       c.style.display = match ? "" : "none";
     });
+  }
+
+  // ── Workflow Run Result Panel ──
+  function _showWfRunResult(wfName, data) {
+    document.getElementById("wfRunResultOverlay")?.remove();
+    const overlay = document.createElement("div");
+    overlay.id = "wfRunResultOverlay";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:8000;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;";
+    const blockRows = (data.results || [])
+      .filter(r => r.type !== "start" && r.type !== "end")
+      .map(r => {
+        const icon   = r.status === "success" ? "✓" : r.status === "error" ? "✗" : "—";
+        const color  = r.status === "success" ? "#34a853" : r.status === "error" ? "#ea4335" : "#999";
+        const preview = r.output_preview ? `<div style="font-size:0.72rem;color:#555;margin-top:3px;white-space:pre-wrap;max-height:60px;overflow:hidden;">${_escHtml(r.output_preview)}</div>` : "";
+        return `<div style="padding:8px 0;border-bottom:1px solid #eee;">
+          <span style="color:${color};font-weight:700;">${icon}</span>
+          <span style="font-size:0.8rem;font-weight:600;margin-left:6px;">${_escHtml(r.skill || r.type)}</span>
+          <span style="font-size:0.72rem;color:#888;margin-left:6px;">${r.status}${r.model_used ? " · " + r.model_used : ""}</span>
+          ${preview}
+          ${r.error ? `<div style="font-size:0.72rem;color:#ea4335;margin-top:3px;">${_escHtml(r.error)}</div>` : ""}
+        </div>`;
+      }).join("");
+    const outputHtml = data.final_output
+      ? `<div style="margin-top:12px;"><div style="font-size:0.75rem;font-weight:700;color:#555;margin-bottom:6px;">最終輸出</div>
+         <div style="background:#f8f9fb;border-radius:8px;padding:12px;font-size:0.8rem;white-space:pre-wrap;max-height:220px;overflow-y:auto;">${_escHtml(data.final_output)}</div></div>`
+      : "";
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:24px 24px 18px;width:520px;max-width:92vw;max-height:85vh;overflow-y:auto;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <div style="font-size:1rem;font-weight:700;">⚡ ${_escHtml(wfName)} 執行結果</div>
+          <button onclick="document.getElementById('wfRunResultOverlay')?.remove()"
+            style="border:none;background:none;font-size:1.2rem;cursor:pointer;color:#888;">✕</button>
+        </div>
+        <div style="font-size:0.75rem;color:#888;margin-bottom:10px;">
+          ${data.blocks_executed} 個節點 · ${new Date(data.executed_at).toLocaleTimeString("zh-TW")}
+        </div>
+        ${blockRows}
+        ${outputHtml}
+      </div>`;
+    overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
   }
 
   // ── Workflow Delete Confirm Dialog ──
@@ -2872,6 +2911,128 @@
     if (!block.config) block.config = {};
     if (value === null || value === "") delete block.config[field];
     else block.config[field] = value;
+  };
+
+  // ── Block Params Renderer (used by prop panel Tab 2) ──
+  function _renderBlockParams(block, container, fd, skillName, schema) {
+    const cfg    = block.config || {};
+    const params = cfg.params || {};
+    const wfVars = fd._wfData?.variables || [];
+    const varOpts = wfVars.map(v => `<option value="{{${v.name}}}">${v.name}</option>`).join("");
+
+    // Determine which param names to display:
+    // Priority: 1) already-configured params  2) skill schema properties  3) generic fallback
+    let schemaParams = [];
+    if (schema?.properties) {
+      schemaParams = Object.keys(schema.properties);
+    }
+    const configuredParams = Object.keys(params);
+    // Union: configured first, then any schema-defined ones not yet configured
+    const allParams = [...new Set([...configuredParams, ...schemaParams])];
+    // If nothing, show one editable empty row
+    if (allParams.length === 0) allParams.push("input");
+
+    // Schema hint header
+    let schemaHint = "";
+    if (schema?.properties && schemaParams.length > 0) {
+      const reqList = schema.required || [];
+      const hints = schemaParams.map(p => {
+        const def = schema.properties[p] || {};
+        const req = reqList.includes(p) ? '<span style="color:#e53e3e;">*</span>' : "";
+        const desc = def.description ? ` — ${def.description}` : "";
+        return `<li><code>${p}</code>${req}${desc}</li>`;
+      }).join("");
+      schemaHint = `<div class="wf-param-schema-hint">
+        <div style="font-size:0.68rem;font-weight:700;color:#4a90d9;margin-bottom:4px;">📋 此 Skill 支援的參數</div>
+        <ul style="margin:0;padding-left:16px;font-size:0.67rem;color:var(--text-secondary);">${hints}</ul>
+        <div style="font-size:0.63rem;color:var(--text-tertiary);margin-top:4px;"><span style="color:#e53e3e;">*</span> 必填</div>
+      </div>`;
+    } else if (schema === null) {
+      // Still loading
+      schemaHint = `<div style="font-size:0.67rem;color:var(--text-tertiary);padding:4px 0;">載入參數定義中...</div>`;
+    } else {
+      // schema fetched but no properties found — show generic note
+      schemaHint = `<div style="font-size:0.67rem;color:var(--text-tertiary);padding:4px 0;">⚠️ 參數名稱需對應 Skill 的 SKILL.md 定義</div>`;
+    }
+
+    // Build param rows
+    let pHtml = `<div style="margin-bottom:8px;">${schemaHint}</div>`;
+    allParams.forEach(pName => {
+      const pv = params[pName] || { source: "auto", value: "" };
+      const isFromSchema = schemaParams.includes(pName);
+      const badge = isFromSchema
+        ? `<span style="font-size:0.6rem;background:#e8f4fd;color:#4a90d9;border-radius:4px;padding:1px 5px;margin-left:5px;">Skill</span>`
+        : `<span style="font-size:0.6rem;background:#f0fdf4;color:#16a34a;border-radius:4px;padding:1px 5px;margin-left:5px;">自訂</span>`;
+      pHtml += `<div class="wf-param-map-card" data-param-key="${pName}">
+        <div class="wf-param-map-name">${pName}${badge}
+          <button title="移除此參數" onclick="window._removeBlockParam(${block.id},'${pName}')"
+            style="float:right;border:none;background:none;color:#aaa;cursor:pointer;font-size:0.75rem;padding:0;">✕</button>
+        </div>
+        <div class="wf-param-map-row">
+          <select class="wf-param-map-source" data-param="${pName}" onchange="window._updateBlockParam(${block.id},'${pName}','source',this.value)">
+            <option value="auto" ${pv.source === "auto" ? "selected" : ""}>自動 (LLM)</option>
+            <option value="variable" ${pv.source === "variable" ? "selected" : ""}>變數</option>
+            <option value="fixed" ${pv.source === "fixed" ? "selected" : ""}>固定值</option>
+            <option value="previous_step" ${pv.source === "previous_step" ? "selected" : ""}>上一步輸出</option>
+          </select>
+          ${pv.source === "variable"
+            ? `<select class="wf-param-map-val" onchange="window._updateBlockParam(${block.id},'${pName}','value',this.value)">
+                <option value="">選擇變數</option>${varOpts.replace(
+                  `value="${_escHtml(pv.value || '')}"`,
+                  `value="${_escHtml(pv.value || '')}" selected`
+                )}</select>`
+            : pv.source === "fixed"
+              ? `<input class="wf-param-map-val" type="text" value="${_escHtml(pv.value || "")}" onchange="window._updateBlockParam(${block.id},'${pName}','value',this.value)" placeholder="固定值" />`
+              : `<span class="wf-param-map-auto-hint">${pv.source === "previous_step" ? "使用前一節點輸出" : "由 LLM 自動推斷"}</span>`}
+        </div>
+      </div>`;
+    });
+
+    // Add new param row
+    pHtml += `<div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
+      <input id="wfNewParamKey_${block.id}" style="flex:1;padding:4px 8px;border:1px solid var(--border-subtle);border-radius:6px;font-size:0.72rem;" placeholder="新增參數名 (如 query)" />
+      <button onclick="window._addBlockParam(${block.id})"
+        style="padding:4px 10px;border-radius:6px;border:none;background:var(--kway-blue,#4a90d9);color:#fff;font-size:0.72rem;cursor:pointer;">+</button>
+    </div>`;
+
+    container.innerHTML = pHtml;
+
+    // Re-select the correct option in variable selects (innerHTML replaces DOM)
+    container.querySelectorAll(".wf-param-map-val select").forEach(sel => {
+      const pn = sel.closest(".wf-param-map-card")?.dataset?.paramKey;
+      if (pn && params[pn]?.value) sel.value = params[pn].value;
+    });
+  }
+
+  window._removeBlockParam = function (blockId, paramName) {
+    const fd = window._wfDesigner; if (!fd) return;
+    const block = fd.blocks.get(blockId); if (!block) return;
+    if (!block.config.params) return;
+    delete block.config.params[paramName];
+    // Re-render
+    const paramsDiv = document.getElementById("wfPropTabParams");
+    const skillName = block.type.startsWith("mcp-") ? block.type : "mcp-" + block.type;
+    if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, null);
+    fetch(`/skills/${skillName}`).then(r => r.ok ? r.json() : null)
+      .then(d => { if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, d?.metadata?.parameters || {}); }).catch(() => {});
+  };
+
+  window._addBlockParam = function (blockId) {
+    const fd = window._wfDesigner; if (!fd) return;
+    const block = fd.blocks.get(blockId); if (!block) return;
+    const inp = document.getElementById(`wfNewParamKey_${blockId}`);
+    const pName = (inp?.value || "").trim();
+    if (!pName) return;
+    if (!block.config) block.config = {};
+    if (!block.config.params) block.config.params = {};
+    if (!block.config.params[pName]) block.config.params[pName] = { source: "auto", value: "" };
+    if (inp) inp.value = "";
+    // Re-render
+    const paramsDiv = document.getElementById("wfPropTabParams");
+    const skillName = block.type.startsWith("mcp-") ? block.type : "mcp-" + block.type;
+    if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, null);
+    fetch(`/skills/${skillName}`).then(r => r.ok ? r.json() : null)
+      .then(d => { if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, d?.metadata?.parameters || {}); }).catch(() => {});
   };
 
   window._updateBlockParam = function (blockId, paramName, field, value) {

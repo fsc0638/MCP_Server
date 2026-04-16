@@ -34,7 +34,7 @@
       "label": "網路搜尋",
       "config": {
         "params": {
-          "input": {
+          "query": {
             "source": "variable",
             "value": "{{搜尋主體}}"
           }
@@ -83,6 +83,6 @@
   "context": {},
   "scope": "department",
   "owner": "Y200",
-  "updated_at": "2026-04-16T16:49:27.940869",
+  "updated_at": "2026-04-16T17:28:21.100536",
   "created_at": "2026-04-16T16:33:58.552278"
 }

@@ -142,6 +142,15 @@ class WorkflowExecutor:
                         json.dumps(block_params, ensure_ascii=False),
                     )
 
+                    # ── Detect skill-level errors ──
+                    # Skills may return {"status": "error", "message": "..."}
+                    # even though the subprocess itself exited cleanly.
+                    # Treat this as a real execution error so the block
+                    # is marked failed and on_error policy is respected.
+                    if isinstance(result, dict) and result.get("status") == "error":
+                        skill_err_msg = result.get("message", result.get("error", "Skill returned error status"))
+                        raise Exception(f"Skill error: {skill_err_msg}")
+
                     # Extract output text
                     output_text = ""
                     if isinstance(result, dict):
