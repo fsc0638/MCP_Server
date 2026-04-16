@@ -35,6 +35,8 @@ class UMA:
         """
         tools = []
         _open_params = {"type": "object", "properties": {}, "additionalProperties": True}
+        by_name: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
 
         for skill_key, data in self.registry.skills.items():
             meta = data["metadata"]
@@ -58,6 +60,28 @@ class UMA:
             if not meta.get("_env_ready", False):
                 desc += " [UNAVAILABLE: Missing dependencies]"
 
+            # Dedupe by short tool name. Prefer the most specific scope:
+            # user > department > system.
+            if scope.startswith("user:"):
+                scope_priority = 3
+            elif scope.startswith("dept:"):
+                scope_priority = 2
+            else:
+                scope_priority = 1
+
+            current = by_name.get(tool_name)
+            if current is None:
+                by_name[tool_name] = {
+                    "description": desc,
+                    "scope_priority": scope_priority,
+                }
+                order.append(tool_name)
+            elif scope_priority > current["scope_priority"]:
+                current["description"] = desc
+                current["scope_priority"] = scope_priority
+
+        for tool_name in order:
+            desc = by_name[tool_name]["description"]
             if model_type.lower() == "openai":
                 tools.append({
                     "type": "function",

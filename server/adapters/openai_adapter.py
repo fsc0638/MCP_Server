@@ -245,12 +245,29 @@ class OpenAIAdapter:
         )
         force_pipeline_tool_use = _meeting_todo_intent and _meeting_pipeline_tools_ready
         force_tool_use = force_tool_use or force_pipeline_tool_use
+        _notion_tool_ready = "mcp-notion-crud" in _tool_names
+        _notion_anchor_keywords = ("notion", "todo", "to do", "任務", "待辦", "待辦事項", "清單", "紀錄")
+        _notion_action_keywords = ("查詢", "列出", "刪除", "封存", "更新", "幾筆", "總共")
+        _notion_index_action = ("刪除第" in _query_lower) or ("更新第" in _query_lower)
+        force_notion_tool_use = (
+            bool(user_query)
+            and _notion_tool_ready
+            and (
+                (
+                    any(kw in _query_lower for kw in _notion_anchor_keywords)
+                    and any(kw in _query_lower for kw in _notion_action_keywords)
+                )
+                or _notion_index_action
+            )
+        )
+        force_tool_use = force_tool_use or force_notion_tool_use
 
         logger.info(
             f"[OpenAI Adapter] Tools: {len(tools)} injected "
             f"({[t.get('name') for t in tools]}), "
             f"force_tool_use={force_tool_use}, "
-            f"force_pipeline_tool_use={force_pipeline_tool_use}"
+            f"force_pipeline_tool_use={force_pipeline_tool_use}, "
+            f"force_notion_tool_use={force_notion_tool_use}"
         )
 
         # We will track the latest response id generated in this multi-round loop
@@ -360,21 +377,31 @@ class OpenAIAdapter:
                         raise e  # Fatal or retries exhausted
 
                 if tool_calls_dict:
-                    # ── Serial execution: process only ONE tool call per round ──
-                    # If the LLM emits multiple function_calls in a single response
-                    # (e.g. "produce PDF and DOCX"), execute only the first one now
-                    # and defer the rest to the next iteration. This reduces API
-                    # complexity per round and avoids OpenAI 500 errors.
+                    # ── Serial execution: process all tool calls in current round ──
+                    # If one call fails, subsequent calls in the same round are marked
+                    # as skipped to avoid contradictory state updates.
                     _tc_items = list(tool_calls_dict.items())
                     if len(_tc_items) > 1:
-                        logger.info(f"[OpenAI Adapter] {len(_tc_items)} tool calls in one round — serialising: execute first, defer rest")
-                    _deferred_calls = _tc_items[1:]  # Will be sent as stub results
+                        logger.info(f"[OpenAI Adapter] {len(_tc_items)} tool calls in one round — serialising in current round")
 
                     tool_results = []
-                    for item_id, tc_data in _tc_items[:1]:  # Execute only the first
+                    _blocked_reason = None
+                    for item_id, tc_data in _tc_items:
                         fn_name = tc_data.get("name")
                         fn_args_str = tc_data.get("arguments", "{}")
                         call_id = tc_data.get("call_id") or item_id
+
+                        if _blocked_reason:
+                            tool_results.append({
+                                "type": "function_call_output",
+                                "call_id": call_id,
+                                "output": json.dumps({
+                                    "status": "skipped",
+                                    "reason": _blocked_reason,
+                                    "message": "Skipped due to a prior tool-call error in the same round."
+                                }, ensure_ascii=False)
+                            })
+                            continue
                         
                         import json
                         try:
@@ -539,6 +566,8 @@ class OpenAIAdapter:
                             "output": result_str
                         })
                         tool_calls_made += 1
+                        if isinstance(result, dict) and str(result.get("status", "")).lower() == "error":
+                            _blocked_reason = f"previous_call_error:{fn_name}"
 
                         # ── Phase D1: Token Usage Tracking ─────────────────────
                         try:
@@ -569,15 +598,6 @@ class OpenAIAdapter:
                             )
                         except Exception as _d1e:
                             logger.debug(f"[D1] Token tracking failed: {_d1e}")
-
-                    # ── Deferred tool calls: return placeholder so LLM re-plans ──
-                    for _def_id, _def_tc in _deferred_calls:
-                        _def_call_id = _def_tc.get("call_id") or _def_id
-                        tool_results.append({
-                            "type": "function_call_output",
-                            "call_id": _def_call_id,
-                            "output": json.dumps({"status": "deferred", "message": "此工具呼叫已排入下一輪執行，請先處理目前的結果，再繼續呼叫。"}, ensure_ascii=False)
-                        })
 
                     input_payload = tool_results
                     continue
