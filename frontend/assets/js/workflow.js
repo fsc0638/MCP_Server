@@ -33,6 +33,21 @@
   const snap = v => Math.round(v / GRID) * GRID;
   const snapL = v => Math.round(v / GRID_L) * GRID_L;
 
+  /**
+   * Convert a workflow display name → safe file-system ID (used as JSON filename stem).
+   * Rules: strip Windows-invalid chars, collapse spaces→underscore, max 60 chars.
+   * Chinese / alphanumeric / hyphens are all preserved.
+   */
+  function _sanitizeWfId(name) {
+    if (!name || !name.trim()) return "";
+    return name.trim()
+      .replace(/[/\\:*?"<>|]/g, "")    // Windows-invalid filename chars
+      .replace(/\s+/g, "_")             // spaces → underscore (URL-safe)
+      .replace(/_{2,}/g, "_")           // collapse consecutive underscores
+      .replace(/^_+|_+$/g, "")         // strip leading / trailing underscores
+      .substring(0, 60);
+  }
+
   // ── FlowDesigner ──────────────────────────────────────────────
   class FlowDesigner {
     constructor(surfaceEl, svgEl, viewportEl) {
@@ -47,6 +62,16 @@
       this.scale = 1;
       this.dragging = null;   // {id, ox, oy}
       this.connecting = null; // {fromId, tempPath}
+      // Store bound handlers so they can be removed by destroy()
+      this._handlers = {
+        dragover:        e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; },
+        drop:            e => this._onDrop(e),
+        mousemove:       e => this._onMouseMove(e),
+        mouseup:         e => this._onMouseUp(e),
+        surfaceMousedown:e => { if (e.target === this.surface) this.select(null); },
+        keydown:         e => { if (e.key === "Delete" && this.selectedId != null) this.deleteBlock(this.selectedId); },
+        wheel:           e => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); this.zoom(e.deltaY > 0 ? -0.1 : 0.1); } },
+      };
       this._setup();
     }
 
@@ -69,28 +94,35 @@
         defs.appendChild(marker);
       }
 
-      // Drop from palette
-      this.surface.addEventListener("dragover", e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
-      this.surface.addEventListener("drop", e => this._onDrop(e));
+      // Drop from palette (using stored handlers for removability)
+      this.surface.addEventListener("dragover", this._handlers.dragover);
+      this.surface.addEventListener("drop",    this._handlers.drop);
 
       // Mouse events for drag + connect
-      document.addEventListener("mousemove", e => this._onMouseMove(e));
-      document.addEventListener("mouseup", e => this._onMouseUp(e));
+      document.addEventListener("mousemove", this._handlers.mousemove);
+      document.addEventListener("mouseup",   this._handlers.mouseup);
 
       // Deselect on canvas click
-      this.surface.addEventListener("mousedown", e => {
-        if (e.target === this.surface) this.select(null);
-      });
+      this.surface.addEventListener("mousedown", this._handlers.surfaceMousedown);
 
       // Delete key
-      document.addEventListener("keydown", e => {
-        if (e.key === "Delete" && this.selectedId != null) this.deleteBlock(this.selectedId);
-      });
+      document.addEventListener("keydown", this._handlers.keydown);
 
       // Zoom
-      this.viewport.addEventListener("wheel", e => {
-        if (e.ctrlKey || e.metaKey) { e.preventDefault(); this.zoom(e.deltaY > 0 ? -0.1 : 0.1); }
-      }, { passive: false });
+      this.viewport.addEventListener("wheel", this._handlers.wheel, { passive: false });
+    }
+
+    /** Remove all event listeners added by _setup(). Call before discarding this instance. */
+    destroy() {
+      this.surface.removeEventListener("dragover",   this._handlers.dragover);
+      this.surface.removeEventListener("drop",       this._handlers.drop);
+      this.surface.removeEventListener("mousedown",  this._handlers.surfaceMousedown);
+      document.removeEventListener("mousemove", this._handlers.mousemove);
+      document.removeEventListener("mouseup",   this._handlers.mouseup);
+      document.removeEventListener("keydown",   this._handlers.keydown);
+      this.viewport.removeEventListener("wheel", this._handlers.wheel);
+      // Clean up any in-progress temp path
+      if (this.connecting) { try { this.connecting.tempPath.remove(); } catch (_) {} this.connecting = null; }
     }
 
     // ── Block CRUD ────────────────────────────────────────────
@@ -102,7 +134,7 @@
       el.style.left = snap(x) + "px";
       el.style.top = snap(y) + "px";
       this.surface.appendChild(el);
-      const block = { id, type, x: snap(x), y: snap(y), label: label || def.label, el };
+      const block = { id, type, x: snap(x), y: snap(y), label: label || def.label, config: {}, el };
       this.blocks.set(id, block);
       this._updateInfo();
       return block;
@@ -518,8 +550,16 @@
 
     // ── Run Flow (Backend execution + Frontend animation) ────
     async runFlow() {
-      // Save first to ensure backend has latest
-      await this.save("default");
+      const wfId    = this._currentWfId || "default";
+      const scope   = this._currentScope || "personal";
+      const owner   = this._currentOwner || "";
+      const wfName  = this._wfData?.name || wfId;
+
+      // Ask user for initial prompt (optional)
+      const prompt = window.prompt(`執行工作流「${wfName}」\n\n輸入測試訊息（可留空直接使用工作流變數）：`, "") ?? "";
+
+      // Save current state first (skip validation so partial edits don't block test)
+      await this.save(null, true);
 
       // Start frontend animation
       const order = this._topoSort();
@@ -532,12 +572,13 @@
         await sleep(300);
       }
 
-      // Call backend execution
+      // Call backend execution with correct scope/owner
+      const _eq = new URLSearchParams({ scope, owner });
       try {
-        const resp = await fetch("/api/workflows/default/execute", {
+        const resp = await fetch(`/api/workflows/${encodeURIComponent(wfId)}/execute?${_eq}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ initial_prompt: "", model: null }),
+          body: JSON.stringify({ initial_prompt: prompt, model: null }),
         });
         const data = await resp.json();
 
@@ -558,22 +599,36 @@
           });
         }
 
-        // Log results
+        // Log results + show output
+        const success = data.results?.filter(r => r.status === "success").length || 0;
+        const errors  = data.results?.filter(r => r.status === "error").length || 0;
+        const skipped = data.results?.filter(r => r.status === "skipped").length || 0;
+
         if (window._wfDashboard) {
-          const success = data.results?.filter(r => r.status === "success").length || 0;
-          const errors = data.results?.filter(r => r.status === "error").length || 0;
           window._wfDashboard.addLog(
-            `Flow 執行完成 (${success} 成功, ${errors} 錯誤)`,
+            `「${wfName}」執行完成 — ${success} 成功 / ${errors} 失敗 / ${skipped} 略過`,
             errors > 0 ? "failed" : "success"
           );
+          // Show per-block errors
+          data.results?.filter(r => r.status === "error").forEach(r => {
+            window._wfDashboard.addLog(`  ✗ ${r.skill || r.type}: ${r.error || ""}`, "failed");
+          });
         }
 
         if (window.showToast) {
-          window.showToast(`執行完成：${data.blocks_executed} 個節點`, "success");
+          const msg = errors > 0
+            ? `執行完成：${success} 成功 / ${errors} 失敗`
+            : `✓ 執行完成：${data.blocks_executed} 個節點`;
+          window.showToast(msg, errors > 0 ? "warning" : "success");
+        }
+
+        // Show final output in a result panel if there's meaningful output
+        if (data.final_output && data.final_output.trim()) {
+          _showWfRunResult(wfName, data);
         }
       } catch (e) {
         if (window.showToast) window.showToast("執行失敗: " + e.message, "error");
-        if (window._wfDashboard) window._wfDashboard.addLog("Flow 執行失敗", "failed");
+        if (window._wfDashboard) window._wfDashboard.addLog(`「${wfName}」執行失敗: ${e.message}`, "failed");
       }
 
       // Clean up animations
@@ -612,36 +667,107 @@
 
     _updateInfo() {
       const el = document.getElementById("wfInfoText");
-      if (el) el.textContent = `${this.blocks.size} 節點 · ${this.connections.length} 連接`;
+      if (el) {
+        const wfName = this._wfData?.name || "";
+        const stats = `${this.blocks.size} 節點 · ${this.connections.length} 連接`;
+        el.textContent = wfName ? `${wfName}  ·  ${stats}` : stats;
+      }
       if (window._wfDashboard) window._wfDashboard.updateStats(this.blocks.size, this.connections.length);
     }
 
     // ── Persistence (Backend API with localStorage fallback) ──
-    async save(name) {
-      const flowId = name || this._currentWfId || "default";
+    async save(name, skipValidation = false) {
+      const oldFlowId = name || this._currentWfId || "default";
+      const _wd = this._wfData || {};
+
+      // ── Validation (unless explicitly skipped) ──
+      if (!skipValidation) {
+        // 1. Required: workflow name
+        if (!_wd.name || !_wd.name.trim()) {
+          if (window.showToast) window.showToast("⚠️ 工作流名稱為必填欄位，請開啟「工作流設定」填寫", "error");
+          if (window._openWfSettings) window._openWfSettings();
+          return false;
+        }
+        // 2. Required: description
+        if (!_wd.description || !_wd.description.trim()) {
+          if (window.showToast) window.showToast("⚠️ 工作流描述為必填欄位，請開啟「工作流設定」填寫", "error");
+          if (window._openWfSettings) window._openWfSettings();
+          return false;
+        }
+        // 3. Must have at least one Start AND one End block
+        let hasStart = false, hasEnd = false;
+        this.blocks.forEach(b => {
+          if (b.type === "start") hasStart = true;
+          if (b.type === "end")   hasEnd = true;
+        });
+        if (!hasStart || !hasEnd) {
+          const missing = (!hasStart && !hasEnd) ? "[開始] 與 [結束]"
+                        : !hasStart ? "[開始]" : "[結束]";
+          if (window.showToast) window.showToast(`⚠️ 工作流必須包含 ${missing} 節點`, "error");
+          return false;
+        }
+      }
+
+      // ── Derive file ID from display name (filename = workflow name) ──
+      const displayName = (_wd.name || "").trim();
+      const nameBasedId = _sanitizeWfId(displayName);
+      // Use name-based ID if valid, otherwise keep the original ID (temp wf-xxx)
+      const targetFlowId = nameBasedId || oldFlowId;
+
+      const scope  = this._currentScope  || "personal";
+      const owner  = this._currentOwner  || "";
       const data = {
-        name: flowId,
-        blocks: Array.from(this.blocks.values()).map(b => ({ id: b.id, type: b.type, x: b.x, y: b.y, label: b.label })),
-        connections: this.connections.map(c => ({ from: c.from, to: c.to })),
-        scope: this._currentScope || "personal",
-        owner: this._currentOwner || "",
+        id:               targetFlowId,
+        name:             displayName || targetFlowId,
+        description:      _wd.description || "",
+        icon:             _wd.icon || "",
+        tags:             _wd.tags || [],
+        trigger_keywords: _wd.trigger_keywords || [],
+        variables:        _wd.variables || [],
+        blocks:           Array.from(this.blocks.values()).map(b => ({ id: b.id, type: b.type, x: b.x, y: b.y, label: b.label, config: b.config || {} })),
+        connections:      this.connections.map(c => ({ from: c.from, to: c.to })),
+        trigger:          _wd.trigger || {},
+        execution:        _wd.execution || {},
+        security:         _wd.security || {},
+        scope,
+        owner,
       };
-      // Save to backend
+
+      // ── Save to backend ──
       try {
-        const resp = await fetch(`/api/workflows/${flowId}`, {
+        const resp = await fetch(`/api/workflows/${encodeURIComponent(targetFlowId)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(data),
         });
-        if (resp.ok) {
-          if (window.showToast) window.showToast("工作流已儲存", "success");
-        } else {
-          throw new Error("API save failed");
+        if (!resp.ok) throw new Error("API save failed");
+
+        // If the workflow was renamed (ID changed), delete the old temp file
+        if (targetFlowId !== oldFlowId) {
+          try {
+            await fetch(
+              `/api/workflows/${encodeURIComponent(oldFlowId)}?scope=${encodeURIComponent(scope)}&owner=${encodeURIComponent(owner)}`,
+              { method: "DELETE" }
+            );
+          } catch (_) { /* ignore delete errors */ }
+          this._currentWfId = targetFlowId;   // update in-memory ID
         }
+
+        if (window.showToast) window.showToast(`「${data.name}」已儲存`, "success");
+        // Sync toolbar display
+        const infoEl = document.getElementById("wfInfoText");
+        if (infoEl) infoEl.textContent = `${data.name}  ·  ${this.blocks.size} 節點 · ${this.connections.length} 連接`;
+        return true;
+
       } catch (e) {
-        // Fallback to localStorage
-        localStorage.setItem("wf_flow_" + flowId, JSON.stringify(data));
-        if (window.showToast) window.showToast("工作流已儲存（本地）", "success");
+        // Fallback: localStorage (keyed by targetFlowId so old temp key is abandoned)
+        localStorage.setItem("wf_flow_" + targetFlowId, JSON.stringify(data));
+        if (targetFlowId !== oldFlowId) {
+          localStorage.removeItem("wf_flow_" + oldFlowId);
+          this._currentWfId = targetFlowId;
+        }
+        if (window.showToast) window.showToast(`「${data.name}」已儲存（本地）`, "success");
+        return true;
       }
     }
 
@@ -653,7 +779,7 @@
         const _q = new URLSearchParams();
         if (scope) _q.set("scope", scope);
         if (owner) _q.set("owner", owner);
-        const resp = await fetch(`/api/workflows/${flowId}?${_q}`);
+        const resp = await fetch(`/api/workflows/${encodeURIComponent(flowId)}?${_q}`);
         if (resp.ok) data = await resp.json();
       } catch (_) {}
       // Fallback to localStorage
@@ -670,10 +796,13 @@
       this.connections = [];
       this.nextId = 1;
       this.nextConnId = 1;
-      // Restore blocks
+      // Restore blocks (with config)
       data.blocks.forEach(b => {
-        this.addBlock(b.type, b.x, b.y, b.label);
+        const block = this.addBlock(b.type, b.x, b.y, b.label);
+        if (block && b.config) block.config = b.config;
       });
+      // Store workflow-level data for settings (include name for display)
+      this._wfData = { name: data.name || "", description: data.description || "", icon: data.icon || "", tags: data.tags || [], trigger_keywords: data.trigger_keywords || [], variables: data.variables || [], trigger: data.trigger || {}, execution: data.execution || {}, security: data.security || {} };
       // Map old IDs to new sequential IDs
       const idMap = new Map();
       let idx = 1;
@@ -985,11 +1114,11 @@
 
   function _guessLabel(name, desc) {
     const map = {
-      "mcp-txt-llm-analyzer": "TXT 分析",
-      "mcp-pdf-llm-analyzer": "PDF 分析",
-      "mcp-docx-llm-analyzer": "DOCX 分析",
-      "mcp-spreadsheet-llm-analyzer": "試算表分析",
-      "mcp-meeting-to-notion": "會議→Notion",
+      "mcp-txt-llm-analyzer": "TXT 分析", "mcp-pdf-llm-analyzer": "PDF 分析",
+      "mcp-docx-llm-analyzer": "DOCX 分析", "mcp-spreadsheet-llm-analyzer": "試算表分析",
+      "mcp-meeting-analyzer": "會議分析", "mcp-meeting-to-notion": "會議→Notion",
+      "mcp-notion-crud": "Notion 操作", "mcp-notion-query": "Notion 查詢",
+      "mcp-notion-todo-edit": "Notion ToDo", "mcp-transcribe": "音訊逐字稿",
       "mcp-high-risk-demo": "高風險示範",
     };
     return map[name] || name.replace("mcp-", "").replace(/-/g, " ");
@@ -998,7 +1127,10 @@
     const map = {
       "mcp-txt-llm-analyzer": "📄", "mcp-pdf-llm-analyzer": "📕",
       "mcp-docx-llm-analyzer": "📘", "mcp-spreadsheet-llm-analyzer": "📊",
-      "mcp-meeting-to-notion": "📝", "mcp-high-risk-demo": "⚠️",
+      "mcp-meeting-analyzer": "🎙", "mcp-meeting-to-notion": "📝",
+      "mcp-notion-crud": "📋", "mcp-notion-query": "🔎",
+      "mcp-notion-todo-edit": "✅", "mcp-transcribe": "🎤",
+      "mcp-high-risk-demo": "⚠️",
     };
     return map[name] || "🔧";
   }
@@ -1006,14 +1138,21 @@
     const map = {
       "mcp-txt-llm-analyzer": "#607d8b", "mcp-pdf-llm-analyzer": "#c62828",
       "mcp-docx-llm-analyzer": "#1565c0", "mcp-spreadsheet-llm-analyzer": "#2e7d32",
-      "mcp-meeting-to-notion": "#6200ea", "mcp-high-risk-demo": "#ff6f00",
+      "mcp-meeting-analyzer": "#6200ea", "mcp-meeting-to-notion": "#6200ea",
+      "mcp-notion-crud": "#000000", "mcp-notion-query": "#000000",
+      "mcp-notion-todo-edit": "#000000", "mcp-transcribe": "#00897b",
+      "mcp-high-risk-demo": "#ff6f00",
     };
     return map[name] || "#546e7a";
   }
   function _guessCategory(name, desc) {
     if (name.includes("analyzer")) return "analysis";
     if (name.includes("notion") || name.includes("meeting")) return "analysis";
-    return "compute";
+    if (name.includes("transcribe")) return "analysis";
+    if (name.includes("schedule") || name.includes("calendar")) return "automation";
+    if (name.includes("search")) return "search";
+    if (name.includes("python") || name.includes("image") || name.includes("executor")) return "compute";
+    return "analysis";
   }
 
   // ── Palette Builder ───────────────────────────────────────────
@@ -1058,17 +1197,77 @@
     const def = BLOCK_DEFS[block.type] || {};
     panel.querySelector(".wf-prop-panel-title span").textContent = def.label || block.type;
 
+    // Reset to first tab
+    panel.querySelectorAll(".wf-prop-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === "props"));
+    ["wfPropTabProps", "wfPropTabParams", "wfPropTabExec"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = id === "wfPropTabProps" ? "" : "none";
+    });
+
+    // ── Tab 1: Properties ──
     const fieldsDiv = panel.querySelector(".wf-prop-fields");
     fieldsDiv.innerHTML = `
       <div class="wf-prop-field"><label>名稱</label><input type="text" value="${block.label}" data-field="label" /></div>
       <div class="wf-prop-field"><label>類型</label><input type="text" value="${block.type}" readonly /></div>
     `;
-
-    // Bind label change
     fieldsDiv.querySelector('[data-field="label"]').addEventListener("change", e => {
       block.label = e.target.value;
       block.el.querySelector(".wf-block-header span:last-child").textContent = e.target.value;
     });
+
+    // ── Tab 2: Parameters (Block param mapping) ──
+    const paramsDiv = document.getElementById("wfPropTabParams");
+    if (paramsDiv) {
+      const isControl = ["start", "end", "branch"].includes(block.type);
+      if (isControl) {
+        paramsDiv.innerHTML = `<div style="padding:10px;font-size:0.72rem;color:var(--text-tertiary);">控制節點無參數</div>`;
+      } else {
+        const skillName = block.type.startsWith("mcp-") ? block.type : "mcp-" + block.type;
+
+        // Render params immediately with current config, then enrich with skill schema
+        _renderBlockParams(block, paramsDiv, fd, skillName, null);
+
+        // Async: fetch skill parameter schema and re-render with real param names
+        fetch(`/skills/${skillName}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(skillData => {
+            const schema = skillData?.metadata?.parameters || null;
+            _renderBlockParams(block, paramsDiv, fd, skillName, schema);
+          })
+          .catch(() => {});
+      }
+    }
+
+    // ── Tab 3: Execution config ──
+    const execDiv = document.getElementById("wfPropTabExec");
+    if (execDiv) {
+      const cfg = block.config || {};
+      const hasCustomCfg = cfg.model || cfg.timeout || cfg.on_error;
+      execDiv.innerHTML = `
+        <div class="wf-prop-field"><label>模型 (留空=全域設定)</label>
+          <select data-field="model" onchange="window._updateBlockConfig(${block.id},'model',this.value)">
+            <option value="" ${!cfg.model ? "selected" : ""}>自動</option>
+            <option value="gpt-4o" ${cfg.model === "gpt-4o" ? "selected" : ""}>gpt-4o</option>
+            <option value="gpt-4.1" ${cfg.model === "gpt-4.1" ? "selected" : ""}>gpt-4.1</option>
+            <option value="gpt-4.1-mini" ${cfg.model === "gpt-4.1-mini" ? "selected" : ""}>gpt-4.1-mini</option>
+            <option value="gpt-4.1-nano" ${cfg.model === "gpt-4.1-nano" ? "selected" : ""}>gpt-4.1-nano</option>
+          </select></div>
+        <div class="wf-prop-field"><label>逾時 (秒)</label>
+          <input type="number" value="${cfg.timeout || ""}" placeholder="預設 30"
+            onchange="window._updateBlockConfig(${block.id},'timeout',this.value?parseInt(this.value):null)"
+            oninput="window._updateBlockConfig(${block.id},'timeout',this.value?parseInt(this.value):null)" /></div>
+        <div class="wf-prop-field"><label>失敗處理</label>
+          <select onchange="window._updateBlockConfig(${block.id},'on_error',this.value)">
+            <option value="" ${!cfg.on_error ? "selected" : ""}>跟隨全域</option>
+            <option value="stop" ${cfg.on_error === "stop" ? "selected" : ""}>停止</option>
+            <option value="skip" ${cfg.on_error === "skip" ? "selected" : ""}>跳過</option>
+            <option value="retry" ${cfg.on_error === "retry" ? "selected" : ""}>重試</option>
+          </select></div>
+        <div class="wf-prop-hint" style="margin-top:8px;font-size:0.78rem;color:var(--text-tertiary);">
+          ※ 節點設定在儲存後生效；模型設定影響此節點的 LLM 呼叫。${hasCustomCfg ? ' <span style="color:#34a853;">✓ 已有自訂設定</span>' : ""}
+        </div>
+      `;
+    }
 
     // Position near block
     const rect = block.el.getBoundingClientRect();
@@ -1118,12 +1317,14 @@
       // Close property panel
       const _propPanel = document.getElementById("wfPropPanel");
       if (_propPanel) _propPanel.classList.add("hidden");
-      // Clean up designer blocks from DOM
+      // Clean up designer — destroy removes all event listeners, preventing accumulation
       if (window._wfDesigner) {
+        window._wfDesigner.destroy();
         window._wfDesigner.blocks.forEach(b => b.el.remove());
         window._wfDesigner.blocks.clear();
         window._wfDesigner.connections.forEach(c => c.el.remove());
         window._wfDesigner.connections = [];
+        window._wfDesigner = null;
       }
       _showWorkflowLanding();
 
@@ -1143,13 +1344,24 @@
     const overlay = document.getElementById("wfLandingOverlay");
     if (!overlay) return;
     overlay.classList.add("open");
+    // Remove anti-flash if present
+    const af = document.getElementById("wfAntiFlash"); if (af) af.remove();
+    const body = document.querySelector(".page-chat-body"); if (body) body.style.visibility = "visible";
+
+    // Clear grid immediately so stale cards don't show while fetching
+    const _gridPre = document.getElementById("wfLandingGrid");
+    if (_gridPre) _gridPre.innerHTML = "";
 
     // Fetch workflow list
     const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
-    const _owner = _u.employee_id || _u.id || "";
+    const _owner    = _u.employee_id || _u.id || "";
+    const _deptCode = _u.dept_code || _u.department_code || _u.dept || "";
     let workflows = [];
     try {
-      const resp = await fetch(`/api/workflows?owner=${_owner}`);
+      const _lq = new URLSearchParams();
+      if (_owner)    _lq.set("owner",     _owner);
+      if (_deptCode) _lq.set("dept_code", _deptCode);
+      const resp = await fetch(`/api/workflows?${_lq}`);
       if (resp.ok) workflows = (await resp.json()).workflows || [];
     } catch (_) {}
 
@@ -1187,28 +1399,63 @@
       if (si) si.addEventListener("input", () => _filterWfCards());
     }
 
-    // ── Center Cards ──
+    // ── Center Cards (upgraded with description, trigger, updated_at) ──
     if (grid) {
-      let html = `<div class="wf-landing-card-new" onclick="_createNewWorkflow()">
+      let html = `<div class="wf-landing-card-new" onclick="_showNewWorkflowScopePicker()">
         <div class="wf-landing-card-new-inner"><div class="wf-landing-card-new-icon">+</div><div class="wf-landing-card-new-label">新增工作流</div></div></div>`;
       workflows.forEach((wf, i) => {
         const color = _WF_COLORS[i % _WF_COLORS.length];
-        const key = wf.workflow_key || wf.id;
         const scope = wf.scope || "personal";
         const sl = scope === "system" ? "系統" : scope === "department" ? "部門" : "個人";
-        html += `<div class="wf-landing-card" data-scope="${scope}" data-name="${_escHtml(wf.name || wf.id)}" onclick="_openWorkflow('${wf.id}','${scope}','${_owner}')">
-          <div class="wf-landing-card-header" style="background:${color};">${_escHtml(wf.name || wf.id)}<div class="wf-landing-card-key">${_escHtml(key)}</div></div>
-          <div class="wf-landing-card-body"><div class="wf-landing-card-meta">
-            <span>${sl}</span><span class="wf-landing-card-meta-dot"></span><span>${wf.block_count||0} 節點</span><span class="wf-landing-card-meta-dot"></span><span>${wf.connection_count||0} 連接</span>
-          </div></div></div>`;
+        const desc = wf.description ? `<div class="wf-landing-card-desc">${_escHtml(wf.description).substring(0, 60)}</div>` : "";
+        const trigBadge = wf.has_trigger ? '<span class="wf-landing-card-badge wf-badge-trigger">觸發</span>' : "";
+        const kwBadge = (wf.trigger_keywords?.length) ? `<span class="wf-landing-card-badge wf-badge-kw">${wf.trigger_keywords.length} 關鍵詞</span>` : "";
+        const varBadge = wf.variables_count ? `<span class="wf-landing-card-badge wf-badge-var">${wf.variables_count} 變數</span>` : "";
+        const updAt = wf.updated_at ? new Date(wf.updated_at).toLocaleDateString("zh-TW", {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
+        // Department workflows use dept_code as the directory key, not employee_id
+        const _cardOwner = scope === "department" ? _deptCode : scope === "system" ? "" : _owner;
+        const _wfNameEsc = _escHtml(wf.name || wf.id).replace(/'/g, "&#39;");
+        html += `<div class="wf-landing-card" data-scope="${scope}" data-name="${_escHtml(wf.name || wf.id)}" onclick="_openWorkflow('${wf.id}','${scope}','${_cardOwner}')">
+          <div class="wf-landing-card-header" style="background:${color};">
+            ${_escHtml(wf.name || wf.id)}${desc}
+            <button class="wf-card-delete-btn" title="刪除工作流"
+              onclick="event.stopPropagation();_showWfDeleteConfirm('${wf.id}','${_wfNameEsc}','${scope}','${_cardOwner}')">✕</button>
+          </div>
+          <div class="wf-landing-card-body">
+            <div class="wf-landing-card-badges">${trigBadge}${kwBadge}${varBadge}</div>
+            <div class="wf-landing-card-meta">
+              <span>${sl}</span><span class="wf-landing-card-meta-dot"></span><span>${wf.block_count||0} 節點</span><span class="wf-landing-card-meta-dot"></span><span>${wf.connection_count||0} 連接</span>
+              ${updAt ? `<span class="wf-landing-card-meta-dot"></span><span>${updAt}</span>` : ""}
+            </div>
+          </div></div>`;
       });
       grid.innerHTML = html;
     }
 
-    // ── Right Panel ──
+    // ── Right Panel (upgraded with real execution logs) ──
     if (rightPanel) {
+      // Fetch real execution logs
+      let logsHtml = '<div class="wf-rp-empty">尚無執行紀錄</div>';
+      try {
+        const logResp = await fetch("/api/workflows/logs/recent?limit=10");
+        if (logResp.ok) {
+          const logData = await logResp.json();
+          if (logData.logs?.length) {
+            logsHtml = logData.logs.map(log => {
+              const t = new Date(log.timestamp).toLocaleString("zh-TW", {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
+              const statusDot = log.status === "success" ? "success" : "failed";
+              return `<div class="wf-rp-log-item">
+                <span class="wf-rp-log-dot ${statusDot}"></span>
+                <span class="wf-rp-log-name">${_escHtml(log.workflow_name || log.workflow_id)}</span>
+                <span class="wf-rp-log-time">${t}</span>
+              </div>`;
+            }).join("");
+          }
+        }
+      } catch (_) {}
+
       rightPanel.innerHTML = `
-        <div class="wf-rp-section"><div class="wf-rp-title">執行紀錄</div><div class="wf-rp-empty">尚無執行紀錄</div></div>
+        <div class="wf-rp-section"><div class="wf-rp-title">最近執行紀錄</div>${logsHtml}</div>
         <div class="wf-rp-section"><div class="wf-rp-title">LINE Bot 觸發指令</div>
           ${workflows.length ? workflows.slice(0,5).map(wf => `<div class="wf-rp-line-cmd">「執行 ${_escHtml(wf.name||wf.id)}」</div>`).join("") : '<div class="wf-rp-empty">建立工作流後可透過 LINE 觸發</div>'}
         </div>
@@ -1227,16 +1474,186 @@
     });
   }
 
-  window._createNewWorkflow = async function () {
+  // ── Workflow Run Result Panel ──
+  function _showWfRunResult(wfName, data) {
+    document.getElementById("wfRunResultOverlay")?.remove();
+    const overlay = document.createElement("div");
+    overlay.id = "wfRunResultOverlay";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:8000;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;";
+    const blockRows = (data.results || [])
+      .filter(r => r.type !== "start" && r.type !== "end")
+      .map(r => {
+        const icon   = r.status === "success" ? "✓" : r.status === "error" ? "✗" : "—";
+        const color  = r.status === "success" ? "#34a853" : r.status === "error" ? "#ea4335" : "#999";
+        const preview = r.output_preview ? `<div style="font-size:0.72rem;color:#555;margin-top:3px;white-space:pre-wrap;max-height:60px;overflow:hidden;">${_escHtml(r.output_preview)}</div>` : "";
+        return `<div style="padding:8px 0;border-bottom:1px solid #eee;">
+          <span style="color:${color};font-weight:700;">${icon}</span>
+          <span style="font-size:0.8rem;font-weight:600;margin-left:6px;">${_escHtml(r.skill || r.type)}</span>
+          <span style="font-size:0.72rem;color:#888;margin-left:6px;">${r.status}${r.model_used ? " · " + r.model_used : ""}</span>
+          ${preview}
+          ${r.error ? `<div style="font-size:0.72rem;color:#ea4335;margin-top:3px;">${_escHtml(r.error)}</div>` : ""}
+        </div>`;
+      }).join("");
+    const outputHtml = data.final_output
+      ? `<div style="margin-top:12px;"><div style="font-size:0.75rem;font-weight:700;color:#555;margin-bottom:6px;">最終輸出</div>
+         <div style="background:#f8f9fb;border-radius:8px;padding:12px;font-size:0.8rem;white-space:pre-wrap;max-height:220px;overflow-y:auto;">${_escHtml(data.final_output)}</div></div>`
+      : "";
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:24px 24px 18px;width:520px;max-width:92vw;max-height:85vh;overflow-y:auto;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+          <div style="font-size:1rem;font-weight:700;">⚡ ${_escHtml(wfName)} 執行結果</div>
+          <button onclick="document.getElementById('wfRunResultOverlay')?.remove()"
+            style="border:none;background:none;font-size:1.2rem;cursor:pointer;color:#888;">✕</button>
+        </div>
+        <div style="font-size:0.75rem;color:#888;margin-bottom:10px;">
+          ${data.blocks_executed} 個節點 · ${new Date(data.executed_at).toLocaleTimeString("zh-TW")}
+        </div>
+        ${blockRows}
+        ${outputHtml}
+      </div>`;
+    overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  }
+
+  // ── Workflow Delete Confirm Dialog ──
+  window._showWfDeleteConfirm = function (wfId, wfName, scope, owner) {
+    const overlay = document.createElement("div");
+    overlay.className = "wf-delete-overlay";
+    overlay.innerHTML = `
+      <div class="wf-delete-modal">
+        <h3>確認刪除工作流</h3>
+        <div class="wf-delete-skill-name">${wfName}</div>
+        <label for="wfWfDeleteReason">刪除原因（必填，至少 5 個字）</label>
+        <textarea id="wfWfDeleteReason" placeholder="請輸入刪除原因..."></textarea>
+        <div class="wf-delete-hint">此操作不可復原，將完全移除該工作流，並同步 Commit 至遠端。</div>
+        <div class="wf-delete-actions">
+          <button class="wf-delete-cancel" id="wfWfDeleteCancel">取消</button>
+          <button class="wf-delete-confirm" id="wfWfDeleteConfirm" disabled>確認刪除</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const textarea   = overlay.querySelector("#wfWfDeleteReason");
+    const confirmBtn = overlay.querySelector("#wfWfDeleteConfirm");
+    const cancelBtn  = overlay.querySelector("#wfWfDeleteCancel");
+
+    textarea.addEventListener("input", () => {
+      confirmBtn.disabled = textarea.value.trim().length < 5;
+    });
+    textarea.focus();
+
+    cancelBtn.addEventListener("click", () => overlay.remove());
+    overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+
+    confirmBtn.addEventListener("click", async () => {
+      const reason = textarea.value.trim();
+      if (reason.length < 5) return;
+
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = "刪除中...";
+
+      const user = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+      const _q = new URLSearchParams({ scope: scope || "personal", owner: owner || "" });
+      try {
+        const resp = await fetch(`/api/workflows/${encodeURIComponent(wfId)}?${_q}`, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reason,
+            user_name: user.name || user.employee_id || "unknown",
+            user_id:   user.employee_id || user.id || "unknown",
+          }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        overlay.remove();
+        if (!resp.ok) {
+          if (window.showToast) window.showToast("刪除失敗: " + (data.detail || resp.status), "error");
+          return;
+        }
+        const gitOk = data.git_sync?.status === "success";
+        const gitMsg = gitOk ? "，已同步 Commit" : (data.git_sync?.status === "skipped" ? "" : "，Git 同步失敗請手動處理");
+        if (window.showToast) window.showToast(`已刪除「${wfName}」${gitMsg}`, gitOk ? "success" : "warning");
+        // Refresh landing grid
+        await _showWorkflowLanding();
+      } catch (e) {
+        overlay.remove();
+        if (window.showToast) window.showToast("刪除錯誤: " + e.message, "error");
+      }
+    });
+  };
+
+  // ── Scope Picker Dialog ──
+  window._showNewWorkflowScopePicker = function () {
+    const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+    const role      = (_u.role || "").toLowerCase();          // admin / editor / viewer / guest
+    const deptCode  = _u.dept_code || _u.department_code || "";
+    const userId    = _u.employee_id || _u.id || "";
+
+    // Permission checks
+    const canSystem = role === "admin";
+    const canDept   = (role === "admin" || role === "editor") && !!deptCode;
+    const canPerson = role !== "guest";
+
+    function _lockMsg(scope) {
+      if (scope === "system") return "僅限系統管理員";
+      if (scope === "department") return role === "guest" ? "需登入編輯者帳號" : "需部門代碼與編輯者權限";
+      return "需登入帳號";
+    }
+
+    function _card(icon, nameTW, path, desc, scope, allowed) {
+      const dis = allowed ? "" : " disabled";
+      const lock = allowed ? "" : `<div class="wf-scope-card-lock">🔒 ${_lockMsg(scope)}</div>`;
+      const click = allowed ? `onclick="window._createNewWorkflow('${scope}', '${scope==='department'?deptCode:scope==='personal'?userId:''}')"` : "";
+      return `<div class="wf-scope-card${dis}" ${click}>
+        <div class="wf-scope-card-icon">${icon}</div>
+        <div class="wf-scope-card-body">
+          <div class="wf-scope-card-name">${nameTW}</div>
+          <div class="wf-scope-card-path">${path}</div>
+          <div class="wf-scope-card-desc">${desc}</div>
+          ${lock}
+        </div>
+      </div>`;
+    }
+
+    const overlay = document.createElement("div");
+    overlay.className = "wf-scope-overlay";
+    overlay.id = "wfScopeOverlay";
+    overlay.innerHTML = `
+      <div class="wf-scope-modal">
+        <div class="wf-scope-modal-title">選擇工作流類型</div>
+        <div class="wf-scope-modal-sub">選擇儲存位置，建立後可透過設定頁更改描述與觸發條件</div>
+        <div class="wf-scope-cards">
+          ${_card("🌐", "系統工作流", "workspace/workflows/system/", "對所有使用者開放，需管理員權限", "system", canSystem)}
+          ${_card("🏢", "部門工作流", `workspace/workflows/department/${deptCode||"(部門代碼)"}/`, "限本部門成員使用，需編輯者權限", "department", canDept)}
+          ${_card("👤", "個人工作流", `workspace/workflows/personal/${userId||"(帳號ID)"}/`, "僅限自己使用，任何登入帳號可建立", "personal", canPerson)}
+        </div>
+        <div class="wf-scope-modal-footer">
+          <button class="wf-scope-cancel-btn" onclick="document.getElementById('wfScopeOverlay')?.remove()">取消</button>
+        </div>
+      </div>`;
+
+    // Close on backdrop click
+    overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  };
+
+  window._createNewWorkflow = async function (scope, owner) {
+    // Close scope picker if open
+    document.getElementById("wfScopeOverlay")?.remove();
+
+    scope = scope || "personal";
+    const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+    owner = owner || _u.employee_id || _u.id || "";
+
     const _chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let _r = ""; for (let i = 0; i < 20; i++) _r += _chars.charAt(Math.floor(Math.random() * _chars.length));
     const wfKey = "WorkflowK_" + _r, wfId = "wf-" + Date.now();
-    const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+
     try {
       await fetch(`/api/workflows/${wfId}`, { method: "POST", headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ name: "新工作流", blocks: [], connections: [], scope: "personal", owner: _u.employee_id || _u.id || "", context: { workflow_key: wfKey } }) });
+        body: JSON.stringify({ name: "新工作流", blocks: [], connections: [], scope, owner, context: { workflow_key: wfKey } }) });
     } catch (_) {}
-    _enterWorkflowCanvas(wfId, "personal", _u.employee_id || _u.id || "");
+    _enterWorkflowCanvas(wfId, scope, owner);
   };
 
   window._openWorkflow = function (id, scope, owner) { _enterWorkflowCanvas(id, scope, owner); };
@@ -1256,12 +1673,14 @@
     const paletteWrap = document.getElementById("wfPaletteWrap");
     if (paletteWrap) await _rebuildPaletteForFlow(paletteWrap);
 
-    // Clean up old designer if exists (prevent block accumulation)
+    // Clean up old designer — destroy() removes all event listeners to prevent accumulation
     if (window._wfDesigner) {
+      window._wfDesigner.destroy();
       window._wfDesigner.blocks.forEach(b => b.el.remove());
       window._wfDesigner.blocks.clear();
       window._wfDesigner.connections.forEach(c => c.el.remove());
       window._wfDesigner.connections = [];
+      window._wfDesigner = null;
     }
 
     // Init FlowDesigner
@@ -1274,7 +1693,12 @@
       window._wfDesigner._currentScope = scope;
       window._wfDesigner._currentOwner = owner;
       await window._wfDesigner.load(wfId, scope, owner);
-      if (window._wfDesigner.blocks.size === 0) window._wfDesigner.addBlock("start", 200, 250);
+      // If new workflow (no blocks), initialize _wfData so settings modal shows blank name
+      if (window._wfDesigner.blocks.size === 0) {
+        if (!window._wfDesigner._wfData) window._wfDesigner._wfData = {};
+        // Don't pre-fill name — force user to set it via settings modal
+        window._wfDesigner.addBlock("start", 200, 250);
+      }
     }
 
     // Init Dashboard
@@ -2159,6 +2583,475 @@
     });
   }
 
+  // ── Workflow Settings Modal ──────────────────────────────────
+  let _settingsActiveTab = "basic";
+
+  window._openWfSettings = function () {
+    const overlay = document.getElementById("wfSettingsOverlay");
+    if (!overlay) return;
+    overlay.classList.add("open");
+    _settingsActiveTab = "basic";
+    // Reset tab buttons
+    overlay.querySelectorAll(".wf-settings-tab").forEach(t => t.classList.toggle("active", t.dataset.stab === "basic"));
+    _renderSettingsTab("basic");
+  };
+
+  window._closeWfSettings = function () {
+    const overlay = document.getElementById("wfSettingsOverlay");
+    if (overlay) overlay.classList.remove("open");
+  };
+
+  window._switchSettingsTab = function (btn, tab) {
+    const overlay = document.getElementById("wfSettingsOverlay");
+    if (!overlay) return;
+    // Collect current tab data before switching
+    const fd = window._wfDesigner;
+    if (fd && fd._wfData) _collectSettingsFromDOM(fd._wfData);
+    overlay.querySelectorAll(".wf-settings-tab").forEach(t => t.classList.remove("active"));
+    btn.classList.add("active");
+    _settingsActiveTab = tab;
+    _renderSettingsTab(tab);
+  };
+
+  function _renderSettingsTab(tab) {
+    const body = document.getElementById("wfSettingsBody");
+    if (!body) return;
+    const fd = window._wfDesigner;
+    if (!fd) return;
+    const wd = fd._wfData || {};
+
+    if (tab === "basic") {
+      body.innerHTML = `
+        <div class="wf-settings-field"><label>工作流名稱 <span style="color:#ea4335">*</span></label>
+          <input type="text" id="wfSetName" value="${_escHtml(wd.name || "")}" placeholder="請輸入工作流名稱" /></div>
+        <div class="wf-settings-field"><label>描述 <span style="color:#ea4335">*</span></label>
+          <textarea id="wfSetDesc" rows="3" placeholder="請簡述此工作流的用途">${_escHtml(wd.description || "")}</textarea></div>
+        <div class="wf-settings-field"><label>圖示</label>
+          <input type="text" id="wfSetIcon" value="${_escHtml(wd.icon || "")}" placeholder="例如: chart, document" /></div>
+        <div class="wf-settings-field"><label>標籤 (逗號分隔)</label>
+          <input type="text" id="wfSetTags" value="${(wd.tags || []).join(", ")}" /></div>
+        <div class="wf-settings-field"><label>觸發關鍵詞 (逗號分隔)</label>
+          <input type="text" id="wfSetKeywords" value="${(wd.trigger_keywords || []).join(", ")}" />
+          <div class="wf-settings-hint">使用者說出這些關鍵詞時，系統自動匹配此工作流（0 Token 匹配）</div></div>
+      `;
+    } else if (tab === "variables") {
+      _renderVariablesTab(body, wd);
+    } else if (tab === "trigger") {
+      const tr = wd.trigger || {};
+      body.innerHTML = `
+        <div class="wf-settings-field">
+          <label class="wf-settings-toggle-label">
+            <input type="checkbox" id="wfSetTriggerEnabled" ${tr.enabled ? "checked" : ""} />
+            啟用自動觸發
+          </label></div>
+        <div class="wf-settings-field"><label>觸發模式</label>
+          <select id="wfSetTriggerMode">
+            <option value="auto" ${tr.mode === "auto" ? "selected" : ""}>自動執行</option>
+            <option value="confirm" ${tr.mode === "confirm" ? "selected" : ""}>確認後執行</option>
+          </select>
+          <div class="wf-settings-hint">confirm 模式下匹配後會先詢問使用者</div></div>
+        <div class="wf-settings-field"><label>優先順序 (1=最高)</label>
+          <input type="number" id="wfSetTriggerPriority" value="${tr.priority || 10}" min="1" max="99" /></div>
+        <div class="wf-settings-field"><label>排程 Cron 表達式</label>
+          <input type="text" id="wfSetTriggerCron" value="${_escHtml(tr.cron || "")}" placeholder="例如: 0 9 * * 1-5" />
+          <div class="wf-settings-hint">留空表示不啟用排程自動觸發</div></div>
+      `;
+    } else if (tab === "execution") {
+      const ex = wd.execution || {};
+      body.innerHTML = `
+        <div class="wf-settings-field"><label>預設模型</label>
+          <select id="wfSetExecModel">
+            <option value="" ${!ex.default_model ? "selected" : ""}>自動選擇</option>
+            <option value="gpt-4o" ${ex.default_model === "gpt-4o" ? "selected" : ""}>gpt-4o</option>
+            <option value="gpt-4.1" ${ex.default_model === "gpt-4.1" ? "selected" : ""}>gpt-4.1</option>
+            <option value="gpt-4.1-mini" ${ex.default_model === "gpt-4.1-mini" ? "selected" : ""}>gpt-4.1-mini</option>
+            <option value="gpt-4.1-nano" ${ex.default_model === "gpt-4.1-nano" ? "selected" : ""}>gpt-4.1-nano</option>
+            <option value="gemini-2.0-flash" ${ex.default_model === "gemini-2.0-flash" ? "selected" : ""}>gemini-2.0-flash</option>
+          </select></div>
+        <div class="wf-settings-field"><label>全域逾時 (秒)</label>
+          <input type="number" id="wfSetExecTimeout" value="${ex.timeout || 120}" min="10" max="600" /></div>
+        <div class="wf-settings-field"><label>Token 預算上限</label>
+          <input type="number" id="wfSetExecTokenBudget" value="${ex.token_budget || 0}" min="0" />
+          <div class="wf-settings-hint">0 表示不限制</div></div>
+        <div class="wf-settings-field"><label>錯誤處理策略</label>
+          <select id="wfSetExecOnError">
+            <option value="stop" ${ex.on_error === "stop" ? "selected" : ""}>停止執行</option>
+            <option value="skip" ${ex.on_error === "skip" ? "selected" : ""}>跳過失敗節點</option>
+            <option value="retry" ${ex.on_error === "retry" ? "selected" : ""}>自動重試 (最多 3 次)</option>
+          </select></div>
+        <div class="wf-settings-field"><label>最大重試次數</label>
+          <input type="number" id="wfSetExecRetries" value="${ex.max_retries || 3}" min="1" max="10" /></div>
+      `;
+    } else if (tab === "security") {
+      const sec = wd.security || {};
+      body.innerHTML = `
+        <div class="wf-settings-field">
+          <label class="wf-settings-toggle-label">
+            <input type="checkbox" id="wfSetSecRequireAuth" ${sec.require_auth ? "checked" : ""} />
+            執行前需要身分驗證
+          </label></div>
+        <div class="wf-settings-field"><label>允許的角色 (逗號分隔)</label>
+          <input type="text" id="wfSetSecRoles" value="${(sec.allowed_roles || []).join(", ")}" placeholder="admin, editor" />
+          <div class="wf-settings-hint">留空表示所有角色皆可執行</div></div>
+        <div class="wf-settings-field"><label>頻率限制 (次/小時)</label>
+          <input type="number" id="wfSetSecRateLimit" value="${sec.rate_limit || 0}" min="0" />
+          <div class="wf-settings-hint">0 表示不限制</div></div>
+        <div class="wf-settings-field">
+          <label class="wf-settings-toggle-label">
+            <input type="checkbox" id="wfSetSecAudit" ${sec.audit_log !== false ? "checked" : ""} />
+            啟用審計日誌
+          </label></div>
+        <div class="wf-settings-field">
+          <label class="wf-settings-toggle-label">
+            <input type="checkbox" id="wfSetSecEncryptVars" ${sec.encrypt_variables ? "checked" : ""} />
+            加密敏感變數
+          </label></div>
+      `;
+    }
+  }
+
+  // ── Variables Tab ─────────────────────────────────────────────
+  const VAR_SOURCES = [
+    { value: "user_input", label: "使用者輸入" },
+    { value: "fixed", label: "固定值" },
+    { value: "system", label: "系統變數" },
+    { value: "previous_step", label: "上一步輸出" },
+    { value: "auto", label: "自動 (LLM)" },
+    { value: "secret", label: "機密值" },
+  ];
+
+  const SYSTEM_VARS = ["{{current_date}}", "{{current_time}}", "{{user_name}}", "{{user_dept}}", "{{session_id}}", "{{workflow_name}}"];
+
+  function _renderVariablesTab(body, wd) {
+    const vars = wd.variables || [];
+    let html = `
+      <div class="wf-var-header">
+        <span class="wf-var-title">自訂變數</span>
+        <span class="wf-var-count">${vars.length} / 20</span>
+        <button class="wf-var-add-btn" onclick="window._addWfVariable()" ${vars.length >= 20 ? "disabled" : ""}>+ 新增</button>
+      </div>
+      <div class="wf-var-list" id="wfVarList">`;
+    vars.forEach((v, i) => {
+      html += _renderVariableCard(v, i);
+    });
+    html += `</div>
+      <div class="wf-var-system-section">
+        <div class="wf-var-system-title">系統變數 (唯讀)</div>
+        <div class="wf-var-system-list">${SYSTEM_VARS.map(sv => `<span class="wf-var-system-tag">${sv}</span>`).join("")}</div>
+      </div>`;
+    body.innerHTML = html;
+  }
+
+  function _renderVariableCard(v, idx) {
+    const sourceOpts = VAR_SOURCES.map(s => `<option value="${s.value}" ${v.source === s.value ? "selected" : ""}>${s.label}</option>`).join("");
+    return `<div class="wf-var-card" data-idx="${idx}">
+      <div class="wf-var-card-row">
+        <div class="wf-var-card-field" style="flex:2"><label>變數名稱</label>
+          <input type="text" value="${_escHtml(v.name || "")}" onchange="window._updateWfVar(${idx},'name',this.value)" placeholder="my_variable" /></div>
+        <div class="wf-var-card-field" style="flex:1"><label>類型</label>
+          <select onchange="window._updateWfVar(${idx},'type',this.value)">
+            <option value="string" ${v.type === "string" ? "selected" : ""}>文字</option>
+            <option value="number" ${v.type === "number" ? "selected" : ""}>數字</option>
+            <option value="boolean" ${v.type === "boolean" ? "selected" : ""}>布林</option>
+            <option value="array" ${v.type === "array" ? "selected" : ""}>陣列</option>
+          </select></div>
+        <div class="wf-var-card-field" style="flex:1.5"><label>來源</label>
+          <select onchange="window._updateWfVar(${idx},'source',this.value)">${sourceOpts}</select></div>
+        <button class="wf-var-card-del" onclick="window._removeWfVar(${idx})">&times;</button>
+      </div>
+      <div class="wf-var-card-row">
+        <div class="wf-var-card-field" style="flex:2"><label>預設值</label>
+          <input type="text" value="${_escHtml(v.default_value || "")}" onchange="window._updateWfVar(${idx},'default_value',this.value)" placeholder="" /></div>
+        <div class="wf-var-card-field" style="flex:3"><label>描述</label>
+          <input type="text" value="${_escHtml(v.description || "")}" onchange="window._updateWfVar(${idx},'description',this.value)" placeholder="變數用途說明" /></div>
+      </div>
+      <div class="wf-var-card-row">
+        <label class="wf-var-card-check"><input type="checkbox" ${v.required ? "checked" : ""} onchange="window._updateWfVar(${idx},'required',this.checked)" /> 必填</label>
+      </div>
+    </div>`;
+  }
+
+  window._addWfVariable = function () {
+    const fd = window._wfDesigner;
+    if (!fd) return;
+    if (!fd._wfData) fd._wfData = {};
+    if (!fd._wfData.variables) fd._wfData.variables = [];
+    if (fd._wfData.variables.length >= 20) { if (window.showToast) window.showToast("最多 20 個變數", "error"); return; }
+    fd._wfData.variables.push({ name: "var_" + (fd._wfData.variables.length + 1), type: "string", source: "user_input", default_value: "", description: "", required: false });
+    _renderVariablesTab(document.getElementById("wfSettingsBody"), fd._wfData);
+  };
+
+  window._removeWfVar = function (idx) {
+    const fd = window._wfDesigner;
+    if (!fd || !fd._wfData?.variables) return;
+    fd._wfData.variables.splice(idx, 1);
+    _renderVariablesTab(document.getElementById("wfSettingsBody"), fd._wfData);
+  };
+
+  window._updateWfVar = function (idx, field, value) {
+    const fd = window._wfDesigner;
+    if (!fd || !fd._wfData?.variables?.[idx]) return;
+    fd._wfData.variables[idx][field] = value;
+  };
+
+  // ── Save Settings ────────────────────────────────────────────
+  window._saveWfSettings = function () {
+    const fd = window._wfDesigner;
+    if (!fd) return;
+    if (!fd._wfData) fd._wfData = {};
+
+    // Read from current tab's form inputs (all tabs accumulate into _wfData)
+    _collectSettingsFromDOM(fd._wfData);
+
+    // Validate required fields in settings before closing
+    const wd = fd._wfData;
+    if (!wd.name || !wd.name.trim()) {
+      if (window.showToast) window.showToast("⚠️ 工作流名稱為必填欄位", "error");
+      const nameEl = document.getElementById("wfSetName");
+      if (nameEl) nameEl.focus();
+      return;
+    }
+    if (!wd.description || !wd.description.trim()) {
+      if (window.showToast) window.showToast("⚠️ 工作流描述為必填欄位", "error");
+      const descEl = document.getElementById("wfSetDesc");
+      if (descEl) descEl.focus();
+      return;
+    }
+
+    // Update toolbar name display
+    const infoEl = document.getElementById("wfInfoText");
+    if (infoEl) infoEl.textContent = `${wd.name}  ·  ${fd.blocks.size} 節點 · ${fd.connections.length} 連接`;
+
+    // Close and save (validation in save() handles start/end block check)
+    window._closeWfSettings();
+    // Await so any validation toast from save() is visible before the UI settles
+    fd.save().catch(err => console.warn("[WF] save error:", err));
+  };
+
+  function _collectSettingsFromDOM(wd) {
+    // Basic — name is the user-facing display name (separate from workflow ID)
+    const nameEl = document.getElementById("wfSetName");
+    if (nameEl) wd.name = nameEl.value.trim();
+    const desc = document.getElementById("wfSetDesc");
+    if (desc) wd.description = desc.value;
+    const icon = document.getElementById("wfSetIcon");
+    if (icon) wd.icon = icon.value;
+    const tags = document.getElementById("wfSetTags");
+    if (tags) wd.tags = tags.value.split(",").map(t => t.trim()).filter(Boolean);
+    const kw = document.getElementById("wfSetKeywords");
+    if (kw) wd.trigger_keywords = kw.value.split(",").map(t => t.trim()).filter(Boolean);
+
+    // Trigger
+    const trigEnabled = document.getElementById("wfSetTriggerEnabled");
+    if (trigEnabled) {
+      if (!wd.trigger) wd.trigger = {};
+      wd.trigger.enabled = trigEnabled.checked;
+      const trigMode = document.getElementById("wfSetTriggerMode");
+      if (trigMode) wd.trigger.mode = trigMode.value;
+      const trigPri = document.getElementById("wfSetTriggerPriority");
+      if (trigPri) wd.trigger.priority = parseInt(trigPri.value) || 10;
+      const trigCron = document.getElementById("wfSetTriggerCron");
+      if (trigCron) wd.trigger.cron = trigCron.value.trim();
+    }
+
+    // Execution
+    const exModel = document.getElementById("wfSetExecModel");
+    if (exModel) {
+      if (!wd.execution) wd.execution = {};
+      wd.execution.default_model = exModel.value;
+      const exTimeout = document.getElementById("wfSetExecTimeout");
+      if (exTimeout) wd.execution.timeout = parseInt(exTimeout.value) || 120;
+      const exBudget = document.getElementById("wfSetExecTokenBudget");
+      if (exBudget) wd.execution.token_budget = parseInt(exBudget.value) || 0;
+      const exOnErr = document.getElementById("wfSetExecOnError");
+      if (exOnErr) wd.execution.on_error = exOnErr.value;
+      const exRetries = document.getElementById("wfSetExecRetries");
+      if (exRetries) wd.execution.max_retries = parseInt(exRetries.value) || 3;
+    }
+
+    // Security
+    const secAuth = document.getElementById("wfSetSecRequireAuth");
+    if (secAuth) {
+      if (!wd.security) wd.security = {};
+      wd.security.require_auth = secAuth.checked;
+      const secRoles = document.getElementById("wfSetSecRoles");
+      if (secRoles) wd.security.allowed_roles = secRoles.value.split(",").map(t => t.trim()).filter(Boolean);
+      const secRate = document.getElementById("wfSetSecRateLimit");
+      if (secRate) wd.security.rate_limit = parseInt(secRate.value) || 0;
+      const secAudit = document.getElementById("wfSetSecAudit");
+      if (secAudit) wd.security.audit_log = secAudit.checked;
+      const secEncrypt = document.getElementById("wfSetSecEncryptVars");
+      if (secEncrypt) wd.security.encrypt_variables = secEncrypt.checked;
+    }
+
+    // Variables are already live-updated via _updateWfVar
+  }
+
+  // ── Property Panel Tabs ──────────────────────────────────────
+  window._switchPropTab = function (btn, tab) {
+    const panel = document.getElementById("wfPropPanel");
+    if (!panel) return;
+    panel.querySelectorAll(".wf-prop-tab").forEach(t => t.classList.remove("active"));
+    btn.classList.add("active");
+    ["wfPropTabProps", "wfPropTabParams", "wfPropTabExec"].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = "none";
+    });
+    const targetId = tab === "props" ? "wfPropTabProps" : tab === "params" ? "wfPropTabParams" : "wfPropTabExec";
+    const target = document.getElementById(targetId);
+    if (target) target.style.display = "";
+  };
+
+  // ── Block Config Helpers ─────────────────────────────────────
+  window._updateBlockConfig = function (blockId, field, value) {
+    const fd = window._wfDesigner;
+    if (!fd) return;
+    const block = fd.blocks.get(blockId);
+    if (!block) return;
+    if (!block.config) block.config = {};
+    if (value === null || value === "") delete block.config[field];
+    else block.config[field] = value;
+  };
+
+  // ── Block Params Renderer (used by prop panel Tab 2) ──
+  function _renderBlockParams(block, container, fd, skillName, schema) {
+    const cfg    = block.config || {};
+    const params = cfg.params || {};
+    const wfVars = fd._wfData?.variables || [];
+    const varOpts = wfVars.map(v => `<option value="{{${v.name}}}">${v.name}</option>`).join("");
+
+    // Determine which param names to display:
+    // Priority: 1) already-configured params  2) skill schema properties  3) generic fallback
+    let schemaParams = [];
+    if (schema?.properties) {
+      schemaParams = Object.keys(schema.properties);
+    }
+    const configuredParams = Object.keys(params);
+    // Union: configured first, then any schema-defined ones not yet configured
+    const allParams = [...new Set([...configuredParams, ...schemaParams])];
+    // If nothing, show one editable empty row
+    if (allParams.length === 0) allParams.push("input");
+
+    // Schema hint header
+    let schemaHint = "";
+    if (schema?.properties && schemaParams.length > 0) {
+      const reqList = schema.required || [];
+      const hints = schemaParams.map(p => {
+        const def = schema.properties[p] || {};
+        const req = reqList.includes(p) ? '<span style="color:#e53e3e;">*</span>' : "";
+        const desc = def.description ? ` — ${def.description}` : "";
+        return `<li><code>${p}</code>${req}${desc}</li>`;
+      }).join("");
+      schemaHint = `<div class="wf-param-schema-hint">
+        <div style="font-size:0.68rem;font-weight:700;color:#4a90d9;margin-bottom:4px;">📋 此 Skill 支援的參數</div>
+        <ul style="margin:0;padding-left:16px;font-size:0.67rem;color:var(--text-secondary);">${hints}</ul>
+        <div style="font-size:0.63rem;color:var(--text-tertiary);margin-top:4px;"><span style="color:#e53e3e;">*</span> 必填</div>
+      </div>`;
+    } else if (schema === null) {
+      // Still loading
+      schemaHint = `<div style="font-size:0.67rem;color:var(--text-tertiary);padding:4px 0;">載入參數定義中...</div>`;
+    } else {
+      // schema fetched but no properties found — show generic note
+      schemaHint = `<div style="font-size:0.67rem;color:var(--text-tertiary);padding:4px 0;">⚠️ 參數名稱需對應 Skill 的 SKILL.md 定義</div>`;
+    }
+
+    // Build param rows
+    let pHtml = `<div style="margin-bottom:8px;">${schemaHint}</div>`;
+    allParams.forEach(pName => {
+      const pv = params[pName] || { source: "auto", value: "" };
+      const isFromSchema = schemaParams.includes(pName);
+      const badge = isFromSchema
+        ? `<span style="font-size:0.6rem;background:#e8f4fd;color:#4a90d9;border-radius:4px;padding:1px 5px;margin-left:5px;">Skill</span>`
+        : `<span style="font-size:0.6rem;background:#f0fdf4;color:#16a34a;border-radius:4px;padding:1px 5px;margin-left:5px;">自訂</span>`;
+      pHtml += `<div class="wf-param-map-card" data-param-key="${pName}">
+        <div class="wf-param-map-name">${pName}${badge}
+          <button title="移除此參數" onclick="window._removeBlockParam(${block.id},'${pName}')"
+            style="float:right;border:none;background:none;color:#aaa;cursor:pointer;font-size:0.75rem;padding:0;">✕</button>
+        </div>
+        <div class="wf-param-map-row">
+          <select class="wf-param-map-source" data-param="${pName}" onchange="window._updateBlockParam(${block.id},'${pName}','source',this.value)">
+            <option value="auto" ${pv.source === "auto" ? "selected" : ""}>自動 (LLM)</option>
+            <option value="variable" ${pv.source === "variable" ? "selected" : ""}>變數</option>
+            <option value="fixed" ${pv.source === "fixed" ? "selected" : ""}>固定值</option>
+            <option value="previous_step" ${pv.source === "previous_step" ? "selected" : ""}>上一步輸出</option>
+          </select>
+          ${pv.source === "variable"
+            ? `<select class="wf-param-map-val" onchange="window._updateBlockParam(${block.id},'${pName}','value',this.value)">
+                <option value="">選擇變數</option>${varOpts.replace(
+                  `value="${_escHtml(pv.value || '')}"`,
+                  `value="${_escHtml(pv.value || '')}" selected`
+                )}</select>`
+            : pv.source === "fixed"
+              ? `<input class="wf-param-map-val" type="text" value="${_escHtml(pv.value || "")}" onchange="window._updateBlockParam(${block.id},'${pName}','value',this.value)" placeholder="固定值" />`
+              : `<span class="wf-param-map-auto-hint">${pv.source === "previous_step" ? "使用前一節點輸出" : "由 LLM 自動推斷"}</span>`}
+        </div>
+      </div>`;
+    });
+
+    // Add new param row
+    pHtml += `<div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
+      <input id="wfNewParamKey_${block.id}" style="flex:1;padding:4px 8px;border:1px solid var(--border-subtle);border-radius:6px;font-size:0.72rem;" placeholder="新增參數名 (如 query)" />
+      <button onclick="window._addBlockParam(${block.id})"
+        style="padding:4px 10px;border-radius:6px;border:none;background:var(--kway-blue,#4a90d9);color:#fff;font-size:0.72rem;cursor:pointer;">+</button>
+    </div>`;
+
+    container.innerHTML = pHtml;
+
+    // Re-select the correct option in variable selects (innerHTML replaces DOM)
+    container.querySelectorAll(".wf-param-map-val select").forEach(sel => {
+      const pn = sel.closest(".wf-param-map-card")?.dataset?.paramKey;
+      if (pn && params[pn]?.value) sel.value = params[pn].value;
+    });
+  }
+
+  window._removeBlockParam = function (blockId, paramName) {
+    const fd = window._wfDesigner; if (!fd) return;
+    const block = fd.blocks.get(blockId); if (!block) return;
+    if (!block.config.params) return;
+    delete block.config.params[paramName];
+    // Re-render
+    const paramsDiv = document.getElementById("wfPropTabParams");
+    const skillName = block.type.startsWith("mcp-") ? block.type : "mcp-" + block.type;
+    if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, null);
+    fetch(`/skills/${skillName}`).then(r => r.ok ? r.json() : null)
+      .then(d => { if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, d?.metadata?.parameters || {}); }).catch(() => {});
+  };
+
+  window._addBlockParam = function (blockId) {
+    const fd = window._wfDesigner; if (!fd) return;
+    const block = fd.blocks.get(blockId); if (!block) return;
+    const inp = document.getElementById(`wfNewParamKey_${blockId}`);
+    const pName = (inp?.value || "").trim();
+    if (!pName) return;
+    if (!block.config) block.config = {};
+    if (!block.config.params) block.config.params = {};
+    if (!block.config.params[pName]) block.config.params[pName] = { source: "auto", value: "" };
+    if (inp) inp.value = "";
+    // Re-render
+    const paramsDiv = document.getElementById("wfPropTabParams");
+    const skillName = block.type.startsWith("mcp-") ? block.type : "mcp-" + block.type;
+    if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, null);
+    fetch(`/skills/${skillName}`).then(r => r.ok ? r.json() : null)
+      .then(d => { if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, d?.metadata?.parameters || {}); }).catch(() => {});
+  };
+
+  window._updateBlockParam = function (blockId, paramName, field, value) {
+    const fd = window._wfDesigner;
+    if (!fd) return;
+    const block = fd.blocks.get(blockId);
+    if (!block) return;
+    if (!block.config) block.config = {};
+    if (!block.config.params) block.config.params = {};
+    if (!block.config.params[paramName]) block.config.params[paramName] = { source: "auto", value: "" };
+    block.config.params[paramName][field] = value;
+
+    // Re-render params tab when source changes (to show/hide input field)
+    if (field === "source") {
+      showWfPropPanel(block, fd);
+      window._switchPropTab(document.querySelector('.wf-prop-tab[data-tab="params"]'), "params");
+    }
+  };
+
   // ── Utility ───────────────────────────────────────────────────
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -2167,9 +3060,25 @@
   window.toggleSkillEditMode = toggleSkillEditMode;
   window.closeWfPropPanel = closeWfPropPanel;
 
-  // Auto-open workflow if ?wf=xxx query param present (from admin.html)
+  // Auto-open workflow landing or specific workflow from query params
   (function () {
     const params = new URLSearchParams(window.location.search);
+
+    // ?openWorkflow=1 → open landing page
+    if (params.get("openWorkflow")) {
+      history.replaceState(null, "", window.location.pathname);
+      function _tryLanding() {
+        const btn = document.getElementById("btnWorkflowDesigner");
+        if (!btn) { requestAnimationFrame(_tryLanding); return; }
+        btn.classList.add("active");
+        _showWorkflowLanding();
+      }
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", _tryLanding);
+      else _tryLanding();
+      return;
+    }
+
+    // ?wf=xxx → open specific workflow canvas
     const wfId = params.get("wf");
     if (!wfId) return;
     const scope = params.get("scope") || "personal";

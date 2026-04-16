@@ -141,6 +141,37 @@
 .wf-landing-card-meta-dot {
   width: 3px; height: 3px; border-radius: 50%; background: var(--border-medium, #CBD5E1);
 }
+.wf-landing-card-desc {
+  font-size: 0.62rem; font-weight: 400; opacity: 0.85;
+  margin-top: 3px; line-height: 1.3;
+}
+.wf-landing-card-badges {
+  display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap;
+}
+.wf-landing-card-badge {
+  font-size: 0.55rem; font-weight: 600; padding: 1px 6px; border-radius: 4px;
+}
+.wf-badge-trigger { background: rgba(52,168,83,0.15); color: #34a853; }
+.wf-badge-kw { background: rgba(66,133,244,0.15); color: #4285f4; }
+.wf-badge-var { background: rgba(139,92,246,0.15); color: #8b5cf6; }
+
+/* Right panel log items */
+.wf-rp-log-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 0; font-size: 0.7rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.wf-rp-log-item:last-child { border-bottom: none; }
+.wf-rp-log-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.wf-rp-log-dot.success { background: var(--color-success, #34a853); }
+.wf-rp-log-dot.failed { background: var(--color-error, #ea4335); }
+.wf-rp-log-name {
+  flex: 1; font-weight: 600; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wf-rp-log-time { font-size: 0.62rem; color: var(--text-tertiary); flex-shrink: 0; }
 
 /* Skill edit area overrides canvas display */
 .page-chat-body.wf-mode .wf-skill-edit-area.visible { display: flex; flex: 1; height: 100%; }
@@ -894,3 +925,306 @@
 @keyframes wf-block-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
 @keyframes wf-flow { to { stroke-dashoffset: -12; } }
 @keyframes wf-slideIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+/* ── Settings Modal ─────────────────────────────────────────── */
+.wf-settings-overlay {
+  display: none; position: fixed; inset: 0; z-index: 9000;
+  background: var(--overlay-bg); align-items: center; justify-content: center;
+}
+.wf-settings-overlay.open { display: flex; }
+.wf-settings-modal {
+  background: var(--bg-surface, #fff); border-radius: 16px;
+  width: 580px; max-width: 90vw; max-height: 85vh;
+  display: flex; flex-direction: column;
+  box-shadow: var(--shadow-modal);
+  animation: wfSaveIn 0.2s ease-out;
+}
+.wf-settings-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px 12px; font-size: 0.92rem; font-weight: 700;
+  color: var(--text-primary); border-bottom: 1px solid var(--border-subtle);
+}
+.wf-settings-close {
+  background: none; border: none; font-size: 1.2rem;
+  color: var(--text-tertiary); cursor: pointer; line-height: 1;
+}
+.wf-settings-close:hover { color: var(--text-primary); }
+.wf-settings-tabs {
+  display: flex; gap: 0; padding: 0 20px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.wf-settings-tab {
+  padding: 10px 16px; background: none; border: none; border-bottom: 2px solid transparent;
+  font-size: 0.76rem; font-weight: 600; color: var(--text-tertiary);
+  cursor: pointer; transition: color 0.15s, border-color 0.15s;
+}
+.wf-settings-tab:hover { color: var(--text-primary); }
+.wf-settings-tab.active {
+  color: var(--kway-blue); border-bottom-color: var(--kway-blue);
+}
+.wf-settings-body {
+  flex: 1; overflow-y: auto; padding: 16px 20px;
+}
+.wf-settings-footer {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 20px; border-top: 1px solid var(--border-subtle);
+}
+.wf-settings-btn-primary {
+  padding: 7px 24px; border-radius: 8px; font-size: 0.76rem; font-weight: 600;
+  background: var(--kway-blue); color: #fff; border: none; cursor: pointer;
+  transition: opacity 0.15s;
+}
+.wf-settings-btn-primary:hover { opacity: 0.9; }
+.wf-settings-btn-secondary {
+  padding: 7px 24px; border-radius: 8px; font-size: 0.76rem; font-weight: 600;
+  background: var(--bg-surface); color: var(--text-secondary); border: 1px solid var(--border-subtle);
+  cursor: pointer; transition: background 0.15s;
+}
+.wf-settings-btn-secondary:hover { background: var(--bg-hover); }
+.wf-settings-field { margin-bottom: 14px; }
+.wf-settings-field > label {
+  display: block; font-size: 0.7rem; font-weight: 600;
+  color: var(--text-secondary); margin-bottom: 4px;
+}
+.wf-settings-field input[type="text"],
+.wf-settings-field input[type="number"],
+.wf-settings-field select,
+.wf-settings-field textarea {
+  width: 100%; padding: 7px 10px;
+  border: 1px solid var(--border-subtle); border-radius: 8px;
+  font-size: 0.76rem; font-family: inherit;
+  background: var(--bg-main); color: var(--text-primary);
+  box-sizing: border-box;
+}
+.wf-settings-field input:focus,
+.wf-settings-field select:focus,
+.wf-settings-field textarea:focus {
+  outline: none; border-color: var(--kway-blue);
+  box-shadow: 0 0 0 2px rgba(13,110,253,0.1);
+}
+.wf-settings-field textarea { min-height: 60px; resize: vertical; }
+.wf-settings-hint {
+  font-size: 0.62rem; color: var(--text-tertiary); margin-top: 3px;
+}
+.wf-settings-toggle-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.76rem; font-weight: 500; color: var(--text-primary);
+  cursor: pointer;
+}
+.wf-settings-toggle-label input[type="checkbox"] {
+  width: 16px; height: 16px; accent-color: var(--kway-blue);
+}
+
+/* ── Variable Cards ─────────────────────────────────────────── */
+.wf-var-header {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+}
+.wf-var-title { font-size: 0.76rem; font-weight: 700; color: var(--text-secondary); }
+.wf-var-count {
+  font-size: 0.62rem; color: var(--text-tertiary);
+  background: var(--bg-hover); border-radius: 8px; padding: 2px 8px;
+}
+.wf-var-add-btn {
+  margin-left: auto; padding: 4px 12px; border-radius: 6px;
+  background: var(--kway-blue); color: #fff; border: none;
+  font-size: 0.68rem; font-weight: 600; cursor: pointer;
+}
+.wf-var-add-btn:hover { opacity: 0.85; }
+.wf-var-add-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.wf-var-list { display: flex; flex-direction: column; gap: 8px; }
+.wf-var-card {
+  background: var(--bg-sidebar); border: 1px solid var(--border-subtle);
+  border-radius: 10px; padding: 10px 12px;
+}
+.wf-var-card:hover { border-color: var(--kway-blue); }
+.wf-var-card-row {
+  display: flex; gap: 8px; align-items: flex-end; margin-bottom: 6px;
+}
+.wf-var-card-row:last-child { margin-bottom: 0; }
+.wf-var-card-field { display: flex; flex-direction: column; }
+.wf-var-card-field label {
+  font-size: 0.6rem; font-weight: 600; color: var(--text-tertiary); margin-bottom: 2px;
+}
+.wf-var-card-field input,
+.wf-var-card-field select {
+  padding: 5px 8px; border: 1px solid var(--border-subtle); border-radius: 6px;
+  font-size: 0.72rem; background: var(--bg-surface); color: var(--text-primary);
+  box-sizing: border-box;
+}
+.wf-var-card-field input:focus,
+.wf-var-card-field select:focus {
+  outline: none; border-color: var(--kway-blue);
+}
+.wf-var-card-del {
+  background: none; border: none; color: var(--text-tertiary);
+  font-size: 1rem; cursor: pointer; padding: 0 4px; line-height: 1;
+  align-self: center;
+}
+.wf-var-card-del:hover { color: var(--color-error); }
+.wf-var-card-check {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.68rem; color: var(--text-secondary); cursor: pointer;
+}
+.wf-var-card-check input { width: 14px; height: 14px; accent-color: var(--kway-blue); }
+.wf-var-system-section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.wf-var-system-title {
+  font-size: 0.68rem; font-weight: 700; color: var(--text-tertiary); margin-bottom: 8px;
+}
+.wf-var-system-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.wf-var-system-tag {
+  padding: 3px 10px; border-radius: 6px;
+  background: var(--bg-hover); color: var(--text-secondary);
+  font-size: 0.65rem; font-family: monospace;
+}
+
+/* ── Property Panel Tabs ────────────────────────────────────── */
+.wf-prop-tabs {
+  display: flex; border-bottom: 1px solid var(--border-subtle); margin-bottom: 8px;
+}
+.wf-prop-tab {
+  flex: 1; padding: 7px 0; background: none; border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 0.68rem; font-weight: 600; color: var(--text-tertiary);
+  cursor: pointer; text-align: center; transition: color 0.15s;
+}
+.wf-prop-tab:hover { color: var(--text-primary); }
+.wf-prop-tab.active { color: var(--kway-blue); border-bottom-color: var(--kway-blue); }
+.wf-prop-tab-body { padding: 0 2px; }
+
+/* ── Param Mapping Cards (in property panel) ────────────────── */
+.wf-param-map-card {
+  margin-bottom: 8px; padding: 6px 8px;
+  background: var(--bg-sidebar); border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+}
+.wf-param-map-card:hover { border-color: var(--kway-blue); }
+.wf-param-map-name {
+  font-size: 0.68rem; font-weight: 700; color: var(--text-primary); margin-bottom: 4px;
+}
+.wf-param-map-row {
+  display: flex; gap: 6px; align-items: center;
+}
+.wf-param-map-source {
+  flex: 0 0 auto; padding: 3px 6px;
+  border: 1px solid var(--border-subtle); border-radius: 5px;
+  font-size: 0.65rem; background: var(--bg-surface); color: var(--text-primary);
+}
+.wf-param-map-val {
+  flex: 1; padding: 3px 6px;
+  border: 1px solid var(--border-subtle); border-radius: 5px;
+  font-size: 0.65rem; background: var(--bg-surface); color: var(--text-primary);
+}
+.wf-param-map-auto-hint {
+  font-size: 0.62rem; color: var(--text-tertiary); font-style: italic;
+}
+.wf-param-schema-hint {
+  background: #f0f7ff; border: 1px solid #c3daf9; border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 6px;
+}
+.wf-param-schema-hint code {
+  background: #deeeff; border-radius: 3px; padding: 1px 4px;
+  font-size: 0.68rem; font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+/* ── Workflow Card Delete Button ─────────────────────────────── */
+.wf-landing-card-header { position: relative; }
+
+.wf-card-delete-btn {
+  position: absolute; top: 6px; right: 6px;
+  width: 22px; height: 22px;
+  border: none; border-radius: 50%;
+  background: rgba(0,0,0,0.25);
+  color: #fff; font-size: 0.65rem; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity 0.15s, background 0.15s;
+  padding: 0;
+}
+.wf-landing-card:hover .wf-card-delete-btn { opacity: 1; }
+.wf-card-delete-btn:hover { background: rgba(220,38,38,0.85) !important; opacity: 1; }
+
+/* ── New Workflow Scope Picker Dialog ─────────────────────────── */
+.wf-scope-overlay {
+  position: fixed; inset: 0; z-index: 9000;
+  background: rgba(0,0,0,0.45); backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  animation: wfScopeFadeIn 0.18s ease;
+}
+@keyframes wfScopeFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.wf-scope-modal {
+  background: var(--bg-surface, #fff);
+  border-radius: 18px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.18), 0 4px 16px rgba(0,0,0,0.08);
+  padding: 28px 28px 22px;
+  width: 480px; max-width: 92vw;
+  animation: wfScopeSlideUp 0.22s cubic-bezier(0.34,1.56,0.64,1);
+}
+@keyframes wfScopeSlideUp {
+  from { transform: translateY(24px) scale(0.97); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+.wf-scope-modal-title {
+  font-size: 1.05rem; font-weight: 700; color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.wf-scope-modal-sub {
+  font-size: 0.78rem; color: var(--text-tertiary);
+  margin-bottom: 20px;
+}
+.wf-scope-cards {
+  display: flex; gap: 12px; flex-direction: column;
+}
+.wf-scope-card {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--border-subtle, #E2E8F0);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
+  background: var(--bg-main, #F8F9FB);
+  user-select: none;
+}
+.wf-scope-card:not(.disabled):hover {
+  border-color: var(--kway-blue, #4A90D9);
+  background: var(--bg-surface, #fff);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(74,144,217,0.12);
+}
+.wf-scope-card:not(.disabled):active {
+  transform: translateY(0);
+}
+.wf-scope-card.disabled {
+  opacity: 0.45; cursor: not-allowed; filter: grayscale(0.3);
+}
+.wf-scope-card-icon {
+  font-size: 1.6rem; line-height: 1; flex-shrink: 0; margin-top: 2px;
+}
+.wf-scope-card-body { flex: 1; }
+.wf-scope-card-name {
+  font-size: 0.9rem; font-weight: 700; color: var(--text-primary); margin-bottom: 3px;
+}
+.wf-scope-card-path {
+  font-size: 0.7rem; color: var(--text-tertiary);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  margin-bottom: 4px;
+}
+.wf-scope-card-desc {
+  font-size: 0.75rem; color: var(--text-secondary);
+}
+.wf-scope-card-lock {
+  font-size: 0.68rem; color: #e53e3e; background: #fff5f5;
+  border: 1px solid #fed7d7; border-radius: 6px;
+  padding: 2px 7px; margin-top: 4px; display: inline-block;
+}
+.wf-scope-modal-footer {
+  margin-top: 18px; display: flex; justify-content: flex-end;
+}
+.wf-scope-cancel-btn {
+  padding: 7px 18px; border-radius: 8px;
+  border: 1px solid var(--border-subtle); background: transparent;
+  color: var(--text-secondary); font-size: 0.82rem; cursor: pointer;
+  transition: background 0.12s;
+}
+.wf-scope-cancel-btn:hover { background: var(--bg-main, #F8F9FB); }

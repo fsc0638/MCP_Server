@@ -1193,6 +1193,42 @@ def _process_line_message(
                     _send_line_reply(line_api, reply_token, chat_id, pending_reply)
                     return
 
+                # ── Workflow Pending Confirmation Check ──────────────────
+                if extracted_text.strip() in ("確認", "確定", "執行", "是", "yes", "confirm"):
+                    try:
+                        _pending_wf = _session_mgr.get_metadata(session_id, "pending_workflow")
+                        if _pending_wf:
+                            _session_mgr.set_metadata(session_id, "pending_workflow", None)
+                            import asyncio
+                            from server.services.workflow_executor import get_workflow_executor
+                            _wf_exec = get_workflow_executor()
+                            _wf_uc = None
+                            try:
+                                _wf_uc_p = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
+                                if _wf_uc_p.exists():
+                                    _wf_uc = json.loads(_wf_uc_p.read_text(encoding="utf-8"))
+                            except Exception:
+                                pass
+                            _wf_uc = _wf_uc or {}
+                            _wf_uc["session_id"] = session_id
+                            _wf_result = asyncio.get_event_loop().run_until_complete(
+                                _wf_exec.execute(
+                                    workflow=_pending_wf["workflow"],
+                                    user_input=_pending_wf.get("user_input", ""),
+                                    user_context=_wf_uc,
+                                )
+                            )
+                            _wf_reply = _wf_result.get("final_output", "")
+                            if not _wf_reply:
+                                _wf_reply = f"工作流執行完成（{_wf_result.get('blocks_executed', 0)} 個節點）"
+                            _session_mgr.append_message(session_id, "user", extracted_text)
+                            _session_mgr.append_message(session_id, "assistant", _wf_reply)
+                            _send_line_reply(line_api, reply_token, chat_id, _wf_reply)
+                            logger.info(f"[LINE WF] Pending workflow executed, reply sent")
+                            return
+                    except Exception as _wf_pe:
+                        logger.warning(f"[LINE WF] Pending workflow execution failed: {_wf_pe}")
+
             attached_file_path = quoted_file_path
             _chunked_data = None  # Will be set if file exceeds 15,000 chars
             if isinstance(event_msg, TextMessageContent):
@@ -1216,6 +1252,57 @@ def _process_line_message(
                         logger.info(f"[LINE C1] Text signal recorded: {_text_signal['signal']} for {session_id}")
                 except Exception as _c1e:
                     logger.debug(f"[LINE C1] Text signal detection failed: {_c1e}")
+
+                # ── LINE「執行 {name}」Command Detection ─────────────────
+                # If user says "執行 XXX", find workflow by name and run it directly
+                _exec_match = re.match(r'^(?:執行|run)\s+(.+)$', extracted_text.strip(), re.IGNORECASE)
+                if _exec_match:
+                    _wf_name_query = _exec_match.group(1).strip()
+                    try:
+                        from server.services.workflow_matcher import get_workflow_matcher
+                        _wf_m = get_workflow_matcher()
+                        _all_wfs = _wf_m._scan_workflows()
+                        # Find by name (exact or partial match)
+                        _target_wf = None
+                        for _wf in _all_wfs:
+                            if _wf.get("name", "").lower() == _wf_name_query.lower():
+                                _target_wf = _wf
+                                break
+                        if not _target_wf:
+                            for _wf in _all_wfs:
+                                if _wf_name_query.lower() in _wf.get("name", "").lower():
+                                    _target_wf = _wf
+                                    break
+                        if _target_wf:
+                            import asyncio
+                            from server.services.workflow_executor import get_workflow_executor
+                            _wf_exec = get_workflow_executor()
+                            _wf_result = asyncio.get_event_loop().run_until_complete(
+                                _wf_exec.execute(
+                                    workflow=_target_wf,
+                                    user_input=_wf_name_query,
+                                    user_context={"session_id": session_id},
+                                )
+                            )
+                            _wf_reply = _wf_result.get("final_output", "")
+                            if not _wf_reply:
+                                _wf_reply = f"工作流「{_target_wf.get('name', '')}」執行完成"
+                            _session_mgr.append_message(session_id, "user", extracted_text)
+                            _session_mgr.append_message(session_id, "assistant", _wf_reply)
+                            _send_line_reply(line_api, reply_token, chat_id, _wf_reply)
+                            logger.info(f"[LINE WF] '執行 {_wf_name_query}' → {_target_wf['id']} executed")
+                            # Audit log
+                            try:
+                                from server.services.workflow_audit import log_workflow_execution
+                                log_workflow_execution(_target_wf["id"], _target_wf.get("name", ""), session_id, _wf_result, trigger="line_command", user_input=extracted_text)
+                            except Exception:
+                                pass
+                            return
+                        else:
+                            # No workflow found by that name, fall through to normal LLM
+                            logger.info(f"[LINE WF] '執行 {_wf_name_query}' — no matching workflow found, fallback to LLM")
+                    except Exception as _wf_cmd_err:
+                        logger.warning(f"[LINE WF] Execute command failed: {_wf_cmd_err}")
 
                 # ── Phase 2: Smart Clarification Injection ────────────────
                 # 偵測「建立檔案/報告」意圖 → 注入釐清指令讓 LLM 語意分析
@@ -1430,6 +1517,61 @@ def _process_line_message(
 
             _session_mgr.get_or_create_conversation(session_id, _base_system_prompt)
             _session_mgr._update_system_prompt(session_id, _base_system_prompt)
+
+            # 1.5 Workflow-First Matching — check before LLM call to save tokens
+            if os.getenv("WF_FIRST_ENABLED", "1").strip() not in ("0", "false", "no"):
+                try:
+                    from server.services.workflow_matcher import get_workflow_matcher
+                    _wf_matcher = get_workflow_matcher()
+                    # Load user context for scope filtering
+                    _wf_user_ctx = None
+                    try:
+                        _wf_uc_path = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
+                        if _wf_uc_path.exists():
+                            _wf_user_ctx = json.loads(_wf_uc_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+                    _wf_match = _wf_matcher.match(user_input, user_context=_wf_user_ctx)
+                    if _wf_match:
+                        _wf_mode = _wf_match["workflow"].get("trigger_mode", "auto")
+                        logger.info(f"[LINE WF-First] Matched: {_wf_match['workflow_id']} "
+                                    f"(score={_wf_match['score']:.2f}, method={_wf_match['method']}, mode={_wf_mode})")
+                        if _wf_mode == "auto":
+                            import asyncio
+                            from server.services.workflow_executor import get_workflow_executor
+                            _wf_exec = get_workflow_executor()
+                            _wf_user_ctx_exec = _wf_user_ctx or {}
+                            _wf_user_ctx_exec["session_id"] = session_id
+                            _wf_result = asyncio.get_event_loop().run_until_complete(
+                                _wf_exec.execute(
+                                    workflow=_wf_match["workflow"],
+                                    user_input=user_input,
+                                    user_context=_wf_user_ctx_exec,
+                                )
+                            )
+                            _wf_reply = _wf_result.get("final_output", "")
+                            if not _wf_reply:
+                                _wf_reply = f"工作流「{_wf_match['workflow'].get('name', '')}」執行完成"
+                            _session_mgr.append_message(session_id, "user", user_input)
+                            _session_mgr.append_message(session_id, "assistant", _wf_reply)
+                            _send_line_reply(line_api, reply_token, chat_id, _wf_reply)
+                            logger.info(f"[LINE WF-First] Workflow executed, reply sent ({len(_wf_reply)} chars)")
+                            return
+                        elif _wf_mode == "confirm":
+                            _wf_name = _wf_match["workflow"].get("name", _wf_match["workflow_id"])
+                            _wf_confirm_msg = f"找到匹配的工作流「{_wf_name}」。\n\n回覆「執行」確認執行，或繼續提問。"
+                            _session_mgr.set_metadata(session_id, "pending_workflow", {
+                                "workflow_id": _wf_match["workflow_id"],
+                                "workflow": _wf_match["workflow"],
+                                "user_input": user_input,
+                            })
+                            _session_mgr.append_message(session_id, "user", user_input)
+                            _session_mgr.append_message(session_id, "assistant", _wf_confirm_msg)
+                            _send_line_reply(line_api, reply_token, chat_id, _wf_confirm_msg)
+                            logger.info(f"[LINE WF-First] Confirm mode, awaiting user response")
+                            return
+                except Exception as _wf_err:
+                    logger.warning(f"[LINE WF-First] Match check failed (fallback to LLM): {_wf_err}")
 
             # 2. 初始化 Adapter（LLM-as-a-Router + Token 節省配置）
             from server.services.model_router import (

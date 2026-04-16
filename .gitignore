@@ -7,7 +7,8 @@ temp/
 Thumbs.db
 *.log
 Agent_workspace/
-workspace/
+workspace/*
+!workspace/workflows/
 downloads/
 uploads/
 memory/MEMORY.md
@@ -18,3 +19,7 @@ memory/MEMORY.md
 !tsconfig.json
 !composer.json
 !*.md
+# Track workflow definitions (system / department / personal), but NOT logs or versions
+!workspace/workflows/**
+workspace/workflows/logs/
+workspace/workflows/versions/

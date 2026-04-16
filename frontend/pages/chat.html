@@ -11,7 +11,7 @@
   <!-- Anti-FOUC: apply saved theme before first paint -->
   <script>(function(){var t=localStorage.getItem('kway_theme');if(t)document.documentElement.setAttribute('data-theme',t);
     // If ?wf= param present, pre-hide chat body to avoid flash before workflow loads
-    if(location.search.indexOf('wf=')>-1){document.write('<style id="wfAntiFlash">.page-chat-body{visibility:hidden;}</style>');}
+    if(location.search.indexOf('wf=')>-1||location.search.indexOf('openWorkflow')>-1){document.write('<style id="wfAntiFlash">.page-chat-body{visibility:hidden;}</style>');}
   })();</script>
 </head>
 <body>
@@ -304,6 +304,10 @@
       <!-- Workflow: Canvas Area (shown in wf-mode) -->
       <div class="wf-canvas-area" id="wfCanvasArea">
         <div class="wf-canvas-toolbar">
+          <button title="返回" onclick="window.toggleWorkflowView()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <div class="wf-toolbar-sep"></div>
           <button title="縮小" onclick="window._wfDesigner&&window._wfDesigner.zoom(-0.1)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
           </button>
@@ -323,6 +327,10 @@
           </button>
           <button title="重置" onclick="window._wfDesigner&&window._wfDesigner.reset()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+          </button>
+          <div class="wf-toolbar-sep"></div>
+          <button title="工作流設定" onclick="window._openWfSettings&&window._openWfSettings()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
           <span class="wf-toolbar-info" id="wfInfoText">0 節點 · 0 連接</span>
         </div>
@@ -428,7 +436,36 @@
 <!-- Workflow: Property Panel (floating) -->
 <div class="wf-prop-panel hidden" id="wfPropPanel">
   <div class="wf-prop-panel-title"><span>屬性</span><button class="wf-prop-panel-close" onclick="closeWfPropPanel()">&times;</button></div>
-  <div class="wf-prop-fields"></div>
+  <div class="wf-prop-tabs">
+    <button class="wf-prop-tab active" data-tab="props" onclick="window._switchPropTab(this,'props')">屬性</button>
+    <button class="wf-prop-tab" data-tab="params" onclick="window._switchPropTab(this,'params')">參數</button>
+    <button class="wf-prop-tab" data-tab="exec" onclick="window._switchPropTab(this,'exec')">執行</button>
+  </div>
+  <div class="wf-prop-tab-body" id="wfPropTabProps"><div class="wf-prop-fields"></div></div>
+  <div class="wf-prop-tab-body" id="wfPropTabParams" style="display:none;"></div>
+  <div class="wf-prop-tab-body" id="wfPropTabExec" style="display:none;"></div>
+</div>
+
+<!-- Workflow Settings Modal -->
+<div class="wf-settings-overlay" id="wfSettingsOverlay">
+  <div class="wf-settings-modal">
+    <div class="wf-settings-header">
+      <span>工作流設定</span>
+      <button class="wf-settings-close" onclick="window._closeWfSettings&&window._closeWfSettings()">&times;</button>
+    </div>
+    <div class="wf-settings-tabs">
+      <button class="wf-settings-tab active" data-stab="basic" onclick="window._switchSettingsTab(this,'basic')">基本</button>
+      <button class="wf-settings-tab" data-stab="variables" onclick="window._switchSettingsTab(this,'variables')">變數</button>
+      <button class="wf-settings-tab" data-stab="trigger" onclick="window._switchSettingsTab(this,'trigger')">觸發</button>
+      <button class="wf-settings-tab" data-stab="execution" onclick="window._switchSettingsTab(this,'execution')">執行</button>
+      <button class="wf-settings-tab" data-stab="security" onclick="window._switchSettingsTab(this,'security')">安全</button>
+    </div>
+    <div class="wf-settings-body" id="wfSettingsBody"></div>
+    <div class="wf-settings-footer">
+      <button class="wf-settings-btn-secondary" onclick="window._closeWfSettings&&window._closeWfSettings()">取消</button>
+      <button class="wf-settings-btn-primary" onclick="window._saveWfSettings&&window._saveWfSettings()">套用</button>
+    </div>
+  </div>
 </div>
 
 <!-- Toast notification -->

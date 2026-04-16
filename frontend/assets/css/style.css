@@ -429,7 +429,7 @@ body {
 .input-label   { display: block; font-size: 0.78rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 7px; letter-spacing: 0.04em; text-transform: uppercase; }
 .avatar        { width: 36px; height: 36px; border-radius: var(--radius-full); background: var(--kway-blue); display: flex; align-items: center; justify-content: center; font-size: 0.82rem; font-weight: 700; color: #fff; flex-shrink: 0; cursor: pointer; }
 .avatar-sm     { width: 28px; height: 28px; font-size: 0.70rem; }
-.avatar-ai     { background: var(--kway-blue); border: 2px solid var(--kway-orange); font-size: 0.65rem; font-weight: 800; }
+.avatar-ai     { background: #fff; border: none; padding: 0; overflow: hidden; }
 .badge         { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: var(--radius-full); font-size: 0.70rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
 .badge-blue    { background: var(--kway-blue-light); color: var(--kway-blue); }
 .badge-orange  { background: var(--kway-orange-light); color: var(--kway-orange-dark); }

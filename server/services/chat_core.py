@@ -1,8 +1,7 @@
 """Native chat service implementation with task-scoped streaming state."""
-import os
 import json
 import logging
-import re
+import os
 import uuid
 from typing import AsyncGenerator
 
@@ -17,84 +16,6 @@ from server.schemas.chat import ChatRequest
 from server.services.async_bridge import iterate_blocking_generator
 
 logger = logging.getLogger("MCP_Server.ChatCore")
-
-_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".opus", ".webm"}
-_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".heif"}
-_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
-
-
-def _is_audio_file_path(file_path: str | None) -> bool:
-    if not file_path:
-        return False
-    try:
-        return os.path.splitext(file_path)[1].lower() in _AUDIO_EXTENSIONS
-    except Exception:
-        return False
-
-
-def _detect_media_type_label(file_path: str | None) -> str:
-    if not file_path:
-        return "file"
-    try:
-        ext = os.path.splitext(file_path)[1].lower()
-    except Exception:
-        ext = ""
-    if ext in _AUDIO_EXTENSIONS:
-        return "audio file"
-    if ext in _IMAGE_EXTENSIONS:
-        return "image"
-    if ext in _VIDEO_EXTENSIONS:
-        return "video"
-    return "file"
-
-
-def _extract_file_path_from_text(text: str) -> str | None:
-    if not text:
-        return None
-    patterns = [
-        r"file_path\s*[:=]\s*(.+)",
-        r"檔案(?:絕對)?路徑\s*[:：]\s*(.+)",
-        r"文件(?:絕對)?路徑\s*[:：]\s*(.+)",
-    ]
-    for pat in patterns:
-        m = re.search(pat, text, flags=re.IGNORECASE)
-        if not m:
-            continue
-        candidate = m.group(1).splitlines()[0].strip()
-        candidate = candidate.strip("`\"' ")
-        candidate = candidate.rstrip("，。)]}>")
-        if candidate and os.path.exists(candidate):
-            return os.path.abspath(candidate)
-    return None
-
-
-def _register_original_file_context(session_mgr, session_id: str, file_path: str | None) -> str | None:
-    if not file_path:
-        return None
-    try:
-        abs_path = os.path.abspath(file_path)
-        if not os.path.exists(abs_path):
-            return None
-        session_mgr.set_metadata(session_id, "last_original_file", abs_path)
-        fname = os.path.basename(abs_path)
-        session_mgr.set_metadata(session_id, "last_original_filename", fname)
-        m = re.search(r"(\d{8})", fname)
-        if m:
-            session_mgr.set_metadata(session_id, "last_original_file_date", m.group(1))
-        return abs_path
-    except Exception:
-        return None
-
-
-def _needs_meeting_todo_pipeline(user_text: str, file_path: str | None = None) -> bool:
-    text = (user_text or "").lower()
-    has_audio_signal = _is_audio_file_path(file_path) or any(
-        kw in text for kw in ("錄音", "音檔", "audio", "transcribe", "逐字稿")
-    )
-    has_todo_signal = any(
-        kw in text for kw in ("todo", "to do", "待辦", "notion", "上傳", "寫入", "匯入")
-    )
-    return has_audio_signal and has_todo_signal
 
 
 async def process_chat_native(req: ChatRequest):
@@ -150,32 +71,6 @@ async def process_chat_native(req: ChatRequest):
     except Exception:
         session_id = "default"
 
-    # Register file context for downstream tools (WebUI parity with LINE pipeline).
-    active_original_file = None
-    for candidate in (
-        (req.attached_file or "").strip() or None,
-        _extract_file_path_from_text(req.user_input or ""),
-    ):
-        saved = _register_original_file_context(session_mgr, session_id, candidate)
-        if saved:
-            active_original_file = saved
-
-    if not active_original_file:
-        try:
-            stored = session_mgr.get_metadata(session_id, "last_original_file")
-            if stored and os.path.exists(stored):
-                active_original_file = stored
-        except Exception:
-            pass
-
-    # Adapter-level context injection (used by openai_adapter tool arg enrichment).
-    setattr(
-        adapter,
-        "_original_file_path",
-        active_original_file if active_original_file and os.path.exists(active_original_file) else None,
-    )
-    setattr(adapter, "_original_file_date", session_mgr.get_metadata(session_id, "last_original_file_date"))
-
     task_registry = get_task_registry()
     resolved_model = (
         req.model
@@ -204,7 +99,113 @@ async def process_chat_native(req: ChatRequest):
     session_mgr._update_system_prompt(session_id, dynamic_prompt)
 
     user_content = req.user_input
-    _upload_handoff = bool(req.upload_handoff)
+
+    # ── Workflow-First Matching ─────────────────────────────────────
+    # Before LLM call, check if a workflow matches the user input.
+    # If matched, execute the workflow directly (saves 93%+ tokens).
+    if os.getenv("WF_FIRST_ENABLED", "1").strip() not in ("0", "false", "no"):
+        try:
+            from server.services.workflow_matcher import get_workflow_matcher
+            wf_matcher = get_workflow_matcher()
+            wf_match = wf_matcher.match(req.user_input, user_context=_user_context)
+            if wf_match:
+                wf_mode = wf_match["workflow"].get("trigger_mode", "auto")
+                logger.info(f"[WF-First] Matched: {wf_match['workflow_id']} "
+                            f"(score={wf_match['score']:.2f}, method={wf_match['method']}, mode={wf_mode})")
+
+                if wf_mode == "auto":
+                    # Auto-execute: run workflow and return result as SSE
+                    async def _wf_event_generator():
+                        yield {"data": json.dumps({"status": "task_started", "task_id": task_id,
+                                                   "session_id": session_id, "turn_id": turn_id}, ensure_ascii=False)}
+                        session_mgr.append_message(session_id, "user", req.user_input)
+                        try:
+                            from server.services.workflow_executor import get_workflow_executor
+                            executor = get_workflow_executor()
+                            wf_result = await executor.execute(
+                                workflow=wf_match["workflow"],
+                                user_input=req.user_input,
+                                user_context=_user_context,
+                            )
+                            final_text = wf_result.get("final_output", "")
+                            if not final_text:
+                                final_text = f"工作流 {wf_match['workflow'].get('name', '')} 執行完成（{wf_result.get('blocks_executed', 0)} 個節點）"
+                            session_mgr.append_message(session_id, "assistant", final_text)
+                            task_registry.mark_completed(task_id, final_text=final_text, assistant_message_persisted=True)
+                            yield {"data": json.dumps({"status": "success", "content": final_text,
+                                                       "workflow_match": {"id": wf_match["workflow_id"],
+                                                                         "method": wf_match["method"],
+                                                                         "score": wf_match["score"]},
+                                                       "task_id": task_id, "session_id": session_id,
+                                                       "turn_id": turn_id}, ensure_ascii=False)}
+                        except Exception as e:
+                            logger.error(f"[WF-First] Execution failed: {e}")
+                            error_msg = f"工作流執行失敗: {str(e)}"
+                            session_mgr.append_message(session_id, "assistant", error_msg)
+                            task_registry.mark_completed(task_id, final_text=error_msg, assistant_message_persisted=True)
+                            yield {"data": json.dumps({"status": "error", "content": error_msg,
+                                                       "task_id": task_id, "session_id": session_id}, ensure_ascii=False)}
+                    return EventSourceResponse(_wf_event_generator(), media_type="text/event-stream")
+
+                elif wf_mode == "confirm":
+                    # Confirm mode: tell user a workflow was matched, ask for confirmation
+                    wf_name = wf_match["workflow"].get("name", wf_match["workflow_id"])
+                    confirm_msg = f"找到匹配的工作流「{wf_name}」（匹配方式：{wf_match['method']}，分數：{wf_match['score']:.2f}）。\n\n是否要執行此工作流？請回覆「確認」或繼續提問。"
+                    # Store pending workflow in session metadata
+                    session_mgr.set_metadata(session_id, "pending_workflow", {
+                        "workflow_id": wf_match["workflow_id"],
+                        "workflow": wf_match["workflow"],
+                        "user_input": req.user_input,
+                    })
+                    async def _wf_confirm_gen():
+                        yield {"data": json.dumps({"status": "task_started", "task_id": task_id,
+                                                   "session_id": session_id, "turn_id": turn_id}, ensure_ascii=False)}
+                        session_mgr.append_message(session_id, "user", req.user_input)
+                        session_mgr.append_message(session_id, "assistant", confirm_msg)
+                        task_registry.mark_completed(task_id, final_text=confirm_msg, assistant_message_persisted=True)
+                        yield {"data": json.dumps({"status": "success", "content": confirm_msg,
+                                                   "workflow_confirm": True,
+                                                   "task_id": task_id, "session_id": session_id,
+                                                   "turn_id": turn_id}, ensure_ascii=False)}
+                    return EventSourceResponse(_wf_confirm_gen(), media_type="text/event-stream")
+        except Exception as wf_err:
+            logger.warning(f"[WF-First] Match check failed (fallback to LLM): {wf_err}")
+
+    # ── Check for pending workflow confirmation ──
+    if req.user_input.strip() in ("確認", "確定", "執行", "是", "yes", "confirm"):
+        try:
+            pending_wf = session_mgr.get_metadata(session_id, "pending_workflow")
+            if pending_wf:
+                session_mgr.set_metadata(session_id, "pending_workflow", None)
+                async def _wf_exec_gen():
+                    yield {"data": json.dumps({"status": "task_started", "task_id": task_id,
+                                               "session_id": session_id, "turn_id": turn_id}, ensure_ascii=False)}
+                    session_mgr.append_message(session_id, "user", req.user_input)
+                    try:
+                        from server.services.workflow_executor import get_workflow_executor
+                        executor = get_workflow_executor()
+                        wf_result = await executor.execute(
+                            workflow=pending_wf["workflow"],
+                            user_input=pending_wf.get("user_input", ""),
+                            user_context=_user_context,
+                        )
+                        final_text = wf_result.get("final_output", "")
+                        if not final_text:
+                            final_text = f"工作流執行完成（{wf_result.get('blocks_executed', 0)} 個節點）"
+                        session_mgr.append_message(session_id, "assistant", final_text)
+                        task_registry.mark_completed(task_id, final_text=final_text, assistant_message_persisted=True)
+                        yield {"data": json.dumps({"status": "success", "content": final_text,
+                                                   "task_id": task_id, "session_id": session_id,
+                                                   "turn_id": turn_id}, ensure_ascii=False)}
+                    except Exception as e:
+                        error_msg = f"工作流執行失敗: {str(e)}"
+                        session_mgr.append_message(session_id, "assistant", error_msg)
+                        task_registry.mark_completed(task_id, final_text=error_msg, assistant_message_persisted=True)
+                        yield {"data": json.dumps({"status": "error", "content": error_msg,
+                                                   "task_id": task_id, "session_id": session_id}, ensure_ascii=False)}
+                return EventSourceResponse(_wf_exec_gen(), media_type="text/event-stream")
+        except Exception:
+            pass
 
     session_summary = ""
     try:
@@ -260,35 +261,6 @@ async def process_chat_native(req: ChatRequest):
             "If input is in another language, translate your answer.)"
         )
 
-    if _upload_handoff:
-        _file_name = os.path.basename(active_original_file) if active_original_file else "uploaded file"
-        _media_type = _detect_media_type_label(active_original_file)
-        user_content += (
-            "\n\n[Handoff Instruction]\n"
-            f"User has just uploaded {_media_type} '{_file_name}'. "
-            "First, acknowledge receipt and ask what they want to do next.\n"
-            "Offer 2-4 concise options relevant to this media type.\n"
-            "Do not execute any tool in this turn, and do not ask the user to provide absolute path again."
-        )
-        logger.info(
-            f"[ChatCore Upload] handoff requested. session={session_id} file={active_original_file or 'N/A'}"
-        )
-
-    _meeting_todo_pipeline = (not _upload_handoff) and _needs_meeting_todo_pipeline(user_content, active_original_file)
-    if _meeting_todo_pipeline:
-        user_content += (
-            "\n\n[流程指令：若使用者需求是把錄音整理成會議待辦，請按順序執行]\n"
-            "1) 呼叫 mcp-transcribe（必填 file_path，使用系統通知或使用者提供的絕對路徑）\n"
-            "2) 呼叫 mcp-meeting-analyzer（transcript 使用逐字稿全文）\n"
-            "3) 呼叫 mcp-notion-crud（action=create_batch，並傳 cleaned_text + org_data_json）\n"
-            "4) 最後回報上傳結果與建立筆數\n"
-            "請勿跳步、請勿只做口頭摘要。"
-        )
-        logger.info(f"[ChatCore Pipeline] meeting_todo intent detected. session={session_id}")
-
-    _tools_enabled = not _upload_handoff
-    _max_tools = 0 if _upload_handoff else (15 if _meeting_todo_pipeline else 10)
-
     try:
         from server.services.budget_profiles import get_budget_for_model
         from server.services.prompt_builder import Budget, PromptParts, build_prompt_messages
@@ -311,6 +283,8 @@ async def process_chat_native(req: ChatRequest):
                 user=user_content,
             ),
         )
+
+        import os
 
         if os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
             logger.info(f"[PromptBuilder] meta={prompt_meta}")
@@ -365,8 +339,6 @@ async def process_chat_native(req: ChatRequest):
                     attached_file=req.attached_file,
                     temperature=req.temperature or 0.7,
                     visual_docs=req.selected_docs or [],
-                    tools_enabled=_tools_enabled,
-                    max_tools=_max_tools,
                 )
             ):
                 status = chunk.get("status")
@@ -439,8 +411,10 @@ async def process_chat_native(req: ChatRequest):
                                     else:
                                         tag_user = make_web_bridge_tag(session_id, req.user_input)
                                         tag_ai = make_web_bridge_tag(session_id, final)
-                                        msg_user = f"[Web User]\n{req.user_input}\n\n{tag_user}"
-                                        msg_ai = f"[Web AI]\n{final}\n\n{tag_ai}"
+                                        # Bridge tag appended as invisible suffix (zero-width chars wrap it)
+                                        _hide = "\u200b\u200b\u200b"  # zero-width spaces to separate from content
+                                        msg_user = f"[Web User]\n{req.user_input}{_hide}{tag_user}"
+                                        msg_ai = f"[Web AgentK]\n{final}{_hide}{tag_ai}"
                                         try:
                                             line_api.push_message(
                                                 PushMessageRequest(
