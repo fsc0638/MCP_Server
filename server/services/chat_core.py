@@ -1,6 +1,7 @@
 """Native chat service implementation with task-scoped streaming state."""
 import json
 import logging
+import os
 import uuid
 from typing import AsyncGenerator
 
@@ -98,6 +99,113 @@ async def process_chat_native(req: ChatRequest):
     session_mgr._update_system_prompt(session_id, dynamic_prompt)
 
     user_content = req.user_input
+
+    # ── Workflow-First Matching ─────────────────────────────────────
+    # Before LLM call, check if a workflow matches the user input.
+    # If matched, execute the workflow directly (saves 93%+ tokens).
+    if os.getenv("WF_FIRST_ENABLED", "1").strip() not in ("0", "false", "no"):
+        try:
+            from server.services.workflow_matcher import get_workflow_matcher
+            wf_matcher = get_workflow_matcher()
+            wf_match = wf_matcher.match(req.user_input, user_context=_user_context)
+            if wf_match:
+                wf_mode = wf_match["workflow"].get("trigger_mode", "auto")
+                logger.info(f"[WF-First] Matched: {wf_match['workflow_id']} "
+                            f"(score={wf_match['score']:.2f}, method={wf_match['method']}, mode={wf_mode})")
+
+                if wf_mode == "auto":
+                    # Auto-execute: run workflow and return result as SSE
+                    async def _wf_event_generator():
+                        yield {"data": json.dumps({"status": "task_started", "task_id": task_id,
+                                                   "session_id": session_id, "turn_id": turn_id}, ensure_ascii=False)}
+                        session_mgr.append_message(session_id, "user", req.user_input)
+                        try:
+                            from server.services.workflow_executor import get_workflow_executor
+                            executor = get_workflow_executor()
+                            wf_result = await executor.execute(
+                                workflow=wf_match["workflow"],
+                                user_input=req.user_input,
+                                user_context=_user_context,
+                            )
+                            final_text = wf_result.get("final_output", "")
+                            if not final_text:
+                                final_text = f"工作流 {wf_match['workflow'].get('name', '')} 執行完成（{wf_result.get('blocks_executed', 0)} 個節點）"
+                            session_mgr.append_message(session_id, "assistant", final_text)
+                            task_registry.mark_completed(task_id, final_text=final_text, assistant_message_persisted=True)
+                            yield {"data": json.dumps({"status": "success", "content": final_text,
+                                                       "workflow_match": {"id": wf_match["workflow_id"],
+                                                                         "method": wf_match["method"],
+                                                                         "score": wf_match["score"]},
+                                                       "task_id": task_id, "session_id": session_id,
+                                                       "turn_id": turn_id}, ensure_ascii=False)}
+                        except Exception as e:
+                            logger.error(f"[WF-First] Execution failed: {e}")
+                            error_msg = f"工作流執行失敗: {str(e)}"
+                            session_mgr.append_message(session_id, "assistant", error_msg)
+                            task_registry.mark_completed(task_id, final_text=error_msg, assistant_message_persisted=True)
+                            yield {"data": json.dumps({"status": "error", "content": error_msg,
+                                                       "task_id": task_id, "session_id": session_id}, ensure_ascii=False)}
+                    return EventSourceResponse(_wf_event_generator(), media_type="text/event-stream")
+
+                elif wf_mode == "confirm":
+                    # Confirm mode: tell user a workflow was matched, ask for confirmation
+                    wf_name = wf_match["workflow"].get("name", wf_match["workflow_id"])
+                    confirm_msg = f"找到匹配的工作流「{wf_name}」（匹配方式：{wf_match['method']}，分數：{wf_match['score']:.2f}）。\n\n是否要執行此工作流？請回覆「確認」或繼續提問。"
+                    # Store pending workflow in session metadata
+                    session_mgr.set_metadata(session_id, "pending_workflow", {
+                        "workflow_id": wf_match["workflow_id"],
+                        "workflow": wf_match["workflow"],
+                        "user_input": req.user_input,
+                    })
+                    async def _wf_confirm_gen():
+                        yield {"data": json.dumps({"status": "task_started", "task_id": task_id,
+                                                   "session_id": session_id, "turn_id": turn_id}, ensure_ascii=False)}
+                        session_mgr.append_message(session_id, "user", req.user_input)
+                        session_mgr.append_message(session_id, "assistant", confirm_msg)
+                        task_registry.mark_completed(task_id, final_text=confirm_msg, assistant_message_persisted=True)
+                        yield {"data": json.dumps({"status": "success", "content": confirm_msg,
+                                                   "workflow_confirm": True,
+                                                   "task_id": task_id, "session_id": session_id,
+                                                   "turn_id": turn_id}, ensure_ascii=False)}
+                    return EventSourceResponse(_wf_confirm_gen(), media_type="text/event-stream")
+        except Exception as wf_err:
+            logger.warning(f"[WF-First] Match check failed (fallback to LLM): {wf_err}")
+
+    # ── Check for pending workflow confirmation ──
+    if req.user_input.strip() in ("確認", "確定", "執行", "是", "yes", "confirm"):
+        try:
+            pending_wf = session_mgr.get_metadata(session_id, "pending_workflow")
+            if pending_wf:
+                session_mgr.set_metadata(session_id, "pending_workflow", None)
+                async def _wf_exec_gen():
+                    yield {"data": json.dumps({"status": "task_started", "task_id": task_id,
+                                               "session_id": session_id, "turn_id": turn_id}, ensure_ascii=False)}
+                    session_mgr.append_message(session_id, "user", req.user_input)
+                    try:
+                        from server.services.workflow_executor import get_workflow_executor
+                        executor = get_workflow_executor()
+                        wf_result = await executor.execute(
+                            workflow=pending_wf["workflow"],
+                            user_input=pending_wf.get("user_input", ""),
+                            user_context=_user_context,
+                        )
+                        final_text = wf_result.get("final_output", "")
+                        if not final_text:
+                            final_text = f"工作流執行完成（{wf_result.get('blocks_executed', 0)} 個節點）"
+                        session_mgr.append_message(session_id, "assistant", final_text)
+                        task_registry.mark_completed(task_id, final_text=final_text, assistant_message_persisted=True)
+                        yield {"data": json.dumps({"status": "success", "content": final_text,
+                                                   "task_id": task_id, "session_id": session_id,
+                                                   "turn_id": turn_id}, ensure_ascii=False)}
+                    except Exception as e:
+                        error_msg = f"工作流執行失敗: {str(e)}"
+                        session_mgr.append_message(session_id, "assistant", error_msg)
+                        task_registry.mark_completed(task_id, final_text=error_msg, assistant_message_persisted=True)
+                        yield {"data": json.dumps({"status": "error", "content": error_msg,
+                                                   "task_id": task_id, "session_id": session_id}, ensure_ascii=False)}
+                return EventSourceResponse(_wf_exec_gen(), media_type="text/event-stream")
+        except Exception:
+            pass
 
     session_summary = ""
     try:
