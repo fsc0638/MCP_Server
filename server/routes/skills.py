@@ -656,16 +656,82 @@ def move_skill(skill_name: str, request: Request, target_scope: str = "system", 
 # ── Workflow Dashboard API ──────────────────────────────────────────────────
 
 @router.get("/skills/workflow/stats")
-async def workflow_stats():
-    """Return token analytics for workflow dashboard (by_skill + daily)."""
-    import json, os
-    # Resolve from project root (same as main.py CWD)
+async def workflow_stats(live: bool = True):
+    """Return token analytics. live=True reads JSONL directly for real-time data."""
+    import json as _json
     project_root = Path(os.getenv("PROJECT_ROOT", Path(__file__).resolve().parents[2]))
+
+    if live:
+        # Real-time: parse token_usage.jsonl directly
+        usage_path = project_root / "workspace" / "analytics" / "token_usage.jsonl"
+        if not usage_path.exists():
+            return {"by_skill": {}, "daily": {}, "monthly": {}, "total": {}}
+        try:
+            total = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "skill_calls": 0, "chat_calls": 0}
+            by_skill = {}
+            daily = {}
+            monthly = {}
+
+            for line in usage_path.read_text(encoding="utf-8", errors="replace").strip().split("\n"):
+                if not line.strip():
+                    continue
+                try:
+                    r = _json.loads(line)
+                except Exception:
+                    continue
+
+                inp = r.get("input_tokens", 0)
+                out = r.get("output_tokens", 0)
+                tot = r.get("total_tokens", 0)
+                skill = r.get("skill", "")
+                day = r.get("ts", "")[:10]
+                month = day[:7] if day else ""
+                is_chat = (skill == "(chat)")
+
+                total["input_tokens"] += inp
+                total["output_tokens"] += out
+                total["total_tokens"] += tot
+                if is_chat:
+                    total["chat_calls"] += 1
+                elif skill:
+                    total["skill_calls"] += 1
+
+                if skill:
+                    if skill not in by_skill:
+                        by_skill[skill] = {"calls": 0, "total_tokens": 0}
+                    by_skill[skill]["calls"] += 1
+                    by_skill[skill]["total_tokens"] += tot
+
+                if day:
+                    if day not in daily:
+                        daily[day] = {"total_tokens": 0, "skill_calls": 0, "chat_calls": 0}
+                    daily[day]["total_tokens"] += tot
+                    if is_chat:
+                        daily[day]["chat_calls"] += 1
+                    elif skill:
+                        daily[day]["skill_calls"] += 1
+
+                if month:
+                    if month not in monthly:
+                        monthly[month] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "skill_calls": 0, "chat_calls": 0}
+                    monthly[month]["input_tokens"] += inp
+                    monthly[month]["output_tokens"] += out
+                    monthly[month]["total_tokens"] += tot
+                    if is_chat:
+                        monthly[month]["chat_calls"] += 1
+                    elif skill:
+                        monthly[month]["skill_calls"] += 1
+
+            return {"by_skill": by_skill, "daily": daily, "monthly": monthly, "total": total}
+        except Exception as e:
+            return {"by_skill": {}, "daily": {}, "monthly": {}, "total": {}, "_error": str(e)}
+
+    # Fallback: read cached summary
     summary_path = project_root / "workspace" / "analytics" / "token_summary.json"
     if not summary_path.exists():
-        return {"by_skill": {}, "daily": {}, "total": {}, "_debug": str(summary_path)}
+        return {"by_skill": {}, "daily": {}, "monthly": {}, "total": {}}
     try:
-        data = json.loads(summary_path.read_text(encoding="utf-8"))
+        data = _json.loads(summary_path.read_text(encoding="utf-8"))
         return {
             "by_skill": data.get("by_skill", {}),
             "daily": data.get("daily", {}),

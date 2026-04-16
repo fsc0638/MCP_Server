@@ -69,17 +69,25 @@
 
   async function hydrateAuthFromServer() {
     try {
-      const existing = sessionStorage.getItem("kway_user");
-      if (existing) return;
-
       const res = await fetch("/api/auth/me", { credentials: "include" });
       if (!res.ok) return;
 
       const data = await res.json();
       if (data && data.status === "success" && data.user && data.user.id) {
-        sessionStorage.setItem("kway_user", JSON.stringify(data.user));
+        // Merge server data with existing sessionStorage (server is authoritative)
+        const existing = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+        const merged = { ...existing, ...data.user };
+        sessionStorage.setItem("kway_user", JSON.stringify(merged));
         localStorage.setItem("kway_chat_session", data.user.id);
         state.sessionId = data.user.id;
+
+        // Update avatar if picture available
+        const avatar = document.querySelector(".page-chat-topbar-avatar");
+        if (avatar && merged.picture) {
+          avatar.style.backgroundImage = `url(${merged.picture})`;
+          avatar.style.backgroundSize = "cover";
+          avatar.textContent = "";
+        }
       }
     } catch (_err) {
       // best effort
@@ -785,12 +793,21 @@
     const initials = role === "user" ? safeInitials || "U" : "AI";
     const bubbleId = "bubble-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
 
+    // Build avatar HTML — user: LINE picture or initials; AI: AgentK logo
+    let avatarHtml;
+    if (role === "user") {
+      const pic = userData && typeof userData.picture === "string" && userData.picture.trim() ? userData.picture.trim() : "";
+      if (pic) {
+        avatarHtml = '<div class="avatar avatar-sm"><img src="' + escapeHtml(pic) + '" referrerpolicy="no-referrer" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" onerror="this.parentElement.textContent=\'' + escapeHtml(initials) + '\'" /></div>';
+      } else {
+        avatarHtml = '<div class="avatar avatar-sm">' + escapeHtml(initials) + '</div>';
+      }
+    } else {
+      avatarHtml = '<div class="avatar avatar-sm avatar-ai"><img src="../assets/images/kw_logo.png" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" /></div>';
+    }
+
     row.innerHTML =
-      '<div class="avatar avatar-sm ' +
-      (role === "ai" ? "avatar-ai" : "") +
-      '">' +
-      escapeHtml(initials) +
-      '</div>' +
+      avatarHtml +
       '<div class="page-chat-msg-body">' +
       '<div class="page-chat-msg-bubble" id="' + bubbleId + '">' + formatText(text) + '</div>' +
       '<div class="page-chat-msg-meta">' +
@@ -815,7 +832,7 @@
     row.className = "page-chat-typing-row";
     row.id = getTypingIndicatorId(sessionId);
     row.innerHTML =
-      '<div class="avatar avatar-sm avatar-ai">AI</div>' +
+      '<div class="avatar avatar-sm avatar-ai"><img src="../assets/images/kw_logo.png" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" /></div>' +
       '<div class="page-chat-typing-bubble">' +
       '<div class="page-chat-typing-dot"></div>' +
       '<div class="page-chat-typing-dot"></div>' +

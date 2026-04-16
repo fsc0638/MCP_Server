@@ -71,11 +71,12 @@
       <h1 class="admin-page-title">Dashboard</h1>
       <p class="admin-page-desc">系統總覽與即時監控</p>
 
-      <div class="admin-kpi-grid" id="adminKpiGrid">
-        <div class="admin-kpi-card admin-kpi-accent"><div class="admin-kpi-label">Skills 啟用數</div><div class="admin-kpi-value" id="kpiSkills">--</div><div class="admin-kpi-sub">System + Department</div></div>
-        <div class="admin-kpi-card admin-kpi-accent-orange"><div class="admin-kpi-label">Workflow 總數</div><div class="admin-kpi-value" id="kpiWorkflows">--</div><div class="admin-kpi-sub">全部 scope</div></div>
-        <div class="admin-kpi-card admin-kpi-accent-green"><div class="admin-kpi-label">本月 Token 用量</div><div class="admin-kpi-value" id="kpiTokens">--</div><div class="admin-kpi-sub">prompt + completion</div></div>
-        <div class="admin-kpi-card admin-kpi-accent-red"><div class="admin-kpi-label">排程任務</div><div class="admin-kpi-value" id="kpiSchedules">--</div><div class="admin-kpi-sub">active 任務數</div></div>
+      <div class="admin-kpi-grid" style="grid-template-columns:repeat(5,1fr);">
+        <div class="admin-kpi-card admin-kpi-accent"><div class="admin-kpi-label">Skills 啟用數</div><div class="admin-kpi-value" id="kpiSkills">--</div><div class="admin-kpi-sub" id="kpiSkillsSub">System + Department</div></div>
+        <div class="admin-kpi-card admin-kpi-accent-orange"><div class="admin-kpi-label">Workflow 總數</div><div class="admin-kpi-value" id="kpiWorkflows">--</div><div class="admin-kpi-sub" id="kpiWfSub">全部 scope</div></div>
+        <div class="admin-kpi-card admin-kpi-accent-green"><div class="admin-kpi-label">本月 Token</div><div class="admin-kpi-value" id="kpiTokens">--</div><div class="admin-kpi-sub" id="kpiTokensSub">—</div></div>
+        <div class="admin-kpi-card" style="border-left:3px solid var(--color-info);"><div class="admin-kpi-label">排程任務</div><div class="admin-kpi-value" id="kpiSchedules">--</div><div class="admin-kpi-sub" id="kpiSchedSub">—</div></div>
+        <div class="admin-kpi-card" style="border-left:3px solid #8b5cf6;"><div class="admin-kpi-label">今日 Calls</div><div class="admin-kpi-value" id="kpiCalls">--</div><div class="admin-kpi-sub" id="kpiCallsSub">—</div></div>
       </div>
 
       <div class="admin-row">
@@ -93,69 +94,135 @@
             </div>
             <div class="admin-chart-wrap"><canvas id="adminTokenChart"></canvas></div>
           </div>
-          <div class="admin-chart-card">
-            <div class="admin-chart-title">Skill 呼叫 Top 5</div>
-            <div class="admin-chart-wrap"><canvas id="adminSkillChart"></canvas></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+            <div class="admin-chart-card">
+              <div class="admin-chart-title">Skill 呼叫 Top 5</div>
+              <div class="admin-chart-wrap" style="height:200px;"><canvas id="adminSkillChart"></canvas></div>
+            </div>
+            <div class="admin-chart-card">
+              <div class="admin-chart-title">Skill Token 分佈</div>
+              <div class="admin-chart-wrap" style="height:200px;"><canvas id="adminSkillDonut"></canvas></div>
+            </div>
           </div>
         </div>
         <div class="admin-col-side">
+          <div class="admin-chart-card" style="margin-bottom:16px;">
+            <div class="admin-chart-title">系統快訊</div>
+            <div id="adminHealthPanel"></div>
+          </div>
           <div class="admin-chart-card">
             <div class="admin-chart-title">最近活動</div>
             <div class="admin-feed" id="adminFeed"></div>
           </div>
         </div>
       </div>
+
+      <div class="admin-chart-card" style="margin-top:16px;">
+        <div class="admin-chart-title">Quick Actions</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <a class="admin-btn" href="#/skills" style="text-decoration:none;">Skills 管理</a>
+          <a class="admin-btn" href="#/workflows" style="text-decoration:none;">Workflows</a>
+          <a class="admin-btn" href="#/tokens" style="text-decoration:none;">Token 用量</a>
+          <a class="admin-btn" href="#/schedules" style="text-decoration:none;">排程監控</a>
+          <a class="admin-btn" href="#/users" style="text-decoration:none;">使用者</a>
+          <a class="admin-btn" href="#/settings" style="text-decoration:none;">系統設定</a>
+        </div>
+      </div>
     `;
 
-    // Load data
-    await Promise.all([loadKpis(), loadTokenChart(), loadSkillChart(), loadFeed()]);
+    await Promise.all([loadKpis(), loadTokenChart(), loadSkillChart(), loadSkillDonut(), loadHealth(), loadFeed()]);
   }
 
-  // ── KPI Data ───────────────────────────────────────────────
+  // ── KPI Data (5 cards) ─────────────────────────────────────
   async function loadKpis() {
-    try {
-      // Skills count
-      const skillResp = await fetch("/skills/list");
-      if (skillResp.ok) {
-        const d = await skillResp.json();
-        document.getElementById("kpiSkills").textContent = d.total || 0;
-      }
-    } catch (_) {}
+    const fmt = n => n > 100000 ? Math.round(n / 1000) + "K" : n.toLocaleString();
+    const el = id => document.getElementById(id);
 
     try {
-      // Workflow count
-      const wfResp = await fetch("/api/workflows?owner=" + (_user.employee_id || _user.id || ""));
-      if (wfResp.ok) {
-        const d = await wfResp.json();
-        document.getElementById("kpiWorkflows").textContent = d.total || 0;
-      }
-    } catch (_) {}
+      const [skillResp, wfResp, tokenResp, schedResp] = await Promise.all([
+        fetch("/skills/list"),
+        fetch("/api/workflows?owner=" + (_user.employee_id || _user.id || "")),
+        fetch("/skills/workflow/stats"),
+        fetch("/api/schedules"),
+      ]);
 
-    try {
-      // Token summary — use monthly data for current month
-      const tokenResp = await fetch("/skills/workflow/stats");
+      if (skillResp.ok) { const d = await skillResp.json(); if (el("kpiSkills")) el("kpiSkills").textContent = d.total || 0; }
+      if (wfResp.ok) { const d = await wfResp.json(); if (el("kpiWorkflows")) el("kpiWorkflows").textContent = d.total || 0; }
+
       if (tokenResp.ok) {
         const d = await tokenResp.json();
-        const fmt = n => n > 100000 ? Math.round(n / 1000) + "K" : n.toLocaleString();
-        // Get current month YYYY-MM
+        _dashTokenData = d; // store for chart
         const now = new Date();
         const curMonth = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
+        const today = now.toISOString().slice(0, 10);
+        const yesterday = new Date(now - 86400000).toISOString().slice(0, 10);
         const monthly = d.monthly || {};
+        const daily = d.daily || {};
         const thisMonth = monthly[curMonth];
+        const todayData = daily[today] || {};
+        const yesterdayData = daily[yesterday] || {};
+
+        // KPI: 本月 Token
         if (thisMonth) {
-          document.getElementById("kpiTokens").textContent = fmt(thisMonth.total_tokens || 0);
-          // Update sub text with details
-          const subEl = document.getElementById("kpiTokens")?.nextElementSibling;
-          if (subEl) subEl.textContent = `${curMonth} | ${thisMonth.skill_calls||0} skill + ${thisMonth.chat_calls||0} chat`;
+          if (el("kpiTokens")) el("kpiTokens").textContent = fmt(thisMonth.total_tokens || 0);
+          if (el("kpiTokensSub")) el("kpiTokensSub").textContent = `${curMonth} | ${thisMonth.skill_calls||0} skill + ${thisMonth.chat_calls||0} chat`;
         } else {
-          document.getElementById("kpiTokens").textContent = fmt(d.total?.total_tokens || 0);
+          if (el("kpiTokens")) el("kpiTokens").textContent = fmt(d.total?.total_tokens || 0);
+        }
+
+        // KPI: 今日 Calls
+        const todayCalls = (todayData.skill_calls || 0) + (todayData.chat_calls || 0);
+        const yesterdayCalls = (yesterdayData.skill_calls || 0) + (yesterdayData.chat_calls || 0);
+        if (el("kpiCalls")) el("kpiCalls").textContent = todayCalls;
+        if (el("kpiCallsSub")) {
+          const diff = todayCalls - yesterdayCalls;
+          const arrow = diff > 0 ? "▲" : diff < 0 ? "▼" : "—";
+          const color = diff > 0 ? "var(--color-success)" : diff < 0 ? "var(--color-error)" : "var(--text-tertiary)";
+          el("kpiCallsSub").innerHTML = `<span style="color:${color};">${arrow} ${Math.abs(diff)}</span> vs 昨日`;
         }
       }
-    } catch (_) {}
 
-    // Schedules — placeholder
-    const sEl = document.getElementById("kpiSchedules");
-    if (sEl) sEl.textContent = "—";
+      if (schedResp.ok) {
+        const d = await schedResp.json();
+        if (el("kpiSchedules")) el("kpiSchedules").textContent = d.active || 0;
+        if (el("kpiSchedSub")) el("kpiSchedSub").textContent = `${d.active||0} active / ${d.total||0} total`;
+      }
+    } catch (_) {}
+  }
+
+  // ── Skill Donut Chart ──────────────────────────────────────
+  async function loadSkillDonut() {
+    if (!_dashTokenData || typeof Chart === "undefined") return;
+    const bySkill = _dashTokenData.by_skill || {};
+    const sorted = Object.entries(bySkill).map(([k, v]) => [k.replace("mcp-",""), typeof v === "object" ? (v.total_tokens||0) : v]).sort((a,b) => b[1]-a[1]).slice(0,6);
+    if (!sorted.length) return;
+    const ctx = document.getElementById("adminSkillDonut");
+    if (!ctx) return;
+    const colors = ["#1A9AAA","#F5A623","#4285f4","#ea4335","#8b5cf6","#059669"];
+    new Chart(ctx, {
+      type: "doughnut",
+      data: { labels: sorted.map(([k])=>k), datasets: [{ data: sorted.map(([,v])=>v), backgroundColor: colors, borderWidth: 0 }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom", labels: { font: { size: 10 } } } } },
+    });
+  }
+
+  // ── System Health Panel ────────────────────────────────────
+  async function loadHealth() {
+    const panel = document.getElementById("adminHealthPanel");
+    if (!panel) return;
+    try {
+      const resp = await fetch("/api/system/health");
+      if (!resp.ok) return;
+      const h = await resp.json();
+      const logWarn = h.log_size_mb > 50;
+      panel.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:6px;font-size:0.75rem;">
+          <div style="display:flex;align-items:center;gap:8px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--color-success);"></span> Server 正常運行</div>
+          <div style="display:flex;align-items:center;gap:8px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--color-success);"></span> Skills ${h.skills_count} 個已載入</div>
+          <div style="display:flex;align-items:center;gap:8px;"><span style="width:8px;height:8px;border-radius:50%;background:${logWarn?"var(--color-warning)":"var(--color-success)"};"></span> Log 檔案 ${h.log_size_mb} MB${logWarn?" ⚠":""}</div>
+          <div style="display:flex;align-items:center;gap:8px;"><span style="width:8px;height:8px;border-radius:50%;background:var(--color-info);"></span> 排程 ${h.schedules_active}/${h.schedules_total} active</div>
+        </div>`;
+    } catch (_) { panel.innerHTML = '<div style="font-size:0.72rem;color:var(--text-tertiary);">無法取得系統狀態</div>'; }
   }
 
   // ── Token Chart (dynamic range) ─────────────────────────────
@@ -186,10 +253,23 @@
     _renderDashTokenChart();
   };
 
+  // Fill date range up to today, inserting 0 for missing days
+  function _fillDailyRange(dailyDict, days) {
+    const today = new Date();
+    const result = [];
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const val = dailyDict[key] || {};
+      result.push({ date: key, total_tokens: val.total_tokens || 0, skill_calls: val.skill_calls || 0, chat_calls: val.chat_calls || 0 });
+    }
+    return result;
+  }
+
   function _renderDashTokenChart() {
     if (!_dashTokenData) return;
-    const allDaily = _dailyToArray(_dashTokenData.daily);
-    const daily = allDaily.slice(-_dashTokenDays);
+    const daily = _fillDailyRange(_dashTokenData.daily || {}, _dashTokenDays);
     if (!daily.length) return;
 
     // Update title
@@ -270,19 +350,23 @@
   async function loadFeed() {
     const feed = document.getElementById("adminFeed");
     if (!feed) return;
-    // Placeholder — will be replaced with real activity data
-    feed.innerHTML = `
-      <div class="admin-feed-item">
-        <span class="admin-feed-dot" class="admin-bg-success"></span>
-        <span class="admin-feed-text">系統啟動完成</span>
-        <span class="admin-feed-time">剛剛</span>
-      </div>
-      <div class="admin-feed-item">
-        <span class="admin-feed-dot" class="admin-bg-teal"></span>
-        <span class="admin-feed-text">Skills 掃描完成（${document.getElementById("kpiSkills")?.textContent || "?"} 個技能）</span>
-        <span class="admin-feed-time">啟動時</span>
-      </div>
-    `;
+    try {
+      const resp = await fetch("/api/activity-feed?limit=10");
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const acts = data.activities || [];
+      if (!acts.length) { feed.innerHTML = '<div style="font-size:0.72rem;color:var(--text-tertiary);">尚無活動紀錄</div>'; return; }
+      const typeColors = { token: "var(--kway-blue)", git: "var(--color-success)" };
+      feed.innerHTML = acts.map(a => `
+        <div class="admin-feed-item">
+          <span class="admin-feed-dot" style="background:${typeColors[a.type]||"var(--text-tertiary)"};"></span>
+          <span class="admin-feed-text">${_esc(a.text)}</span>
+          <span class="admin-feed-time">${a.time ? a.time.slice(11,16) : ""}</span>
+        </div>
+      `).join("");
+    } catch (_) {
+      feed.innerHTML = '<div style="font-size:0.72rem;color:var(--text-tertiary);">無法載入</div>';
+    }
   }
 
   // ── Token Page (placeholder with chart) ─────────────────────
@@ -348,8 +432,8 @@
 
   function _drawTokenCharts() {
     if (!_tokenData) return;
-    // daily is dict(date→{total_tokens, skill_calls, chat_calls})
-    const daily = _dailyToArray(_tokenData.daily).slice(-_tokenRange);
+    // Fill date range up to today (same as dashboard)
+    const daily = _fillDailyRange(_tokenData.daily || {}, _tokenRange);
     const bySkill = _tokenData.by_skill || {};
     const totalObj = _tokenData.total || {};
 
@@ -982,7 +1066,7 @@
   }
 
   function _esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
-  function _fmtExt(ext) { if (!ext || ext.length <= 3) return _esc(ext); return _esc(ext.substring(0,3)) + ' / ' + _esc(ext.substring(3)); }
+  function _fmtExt(ext) { if (!ext || ext.length <= 3) return _esc(ext); return _esc(ext.match(/.{1,3}/g).join(" / ")); }
   function _resolveSessionName(sid) {
     const names = window._sessionNames || {};
     if (names[sid]) return names[sid];

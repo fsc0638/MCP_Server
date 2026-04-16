@@ -11,7 +11,7 @@
   <!-- Anti-FOUC: apply saved theme before first paint -->
   <script>(function(){var t=localStorage.getItem('kway_theme');if(t)document.documentElement.setAttribute('data-theme',t);
     // If ?wf= param present, pre-hide chat body to avoid flash before workflow loads
-    if(location.search.indexOf('wf=')>-1){document.write('<style id="wfAntiFlash">.page-chat-body{visibility:hidden;}</style>');}
+    if(location.search.indexOf('wf=')>-1||location.search.indexOf('openWorkflow')>-1){document.write('<style id="wfAntiFlash">.page-chat-body{visibility:hidden;}</style>');}
   })();</script>
 </head>
 <body>

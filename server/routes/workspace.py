@@ -170,12 +170,26 @@ def _cleanup_old_logs(retention_days: int) -> list:
     log_file = PROJECT_ROOT / "uma_server.log"
 
     # Trim the main log file: keep only lines within retention period
-    if log_file.exists() and log_file.stat().st_mtime < cutoff:
-        # Entire file is older than cutoff — archive and truncate
-        archive = PROJECT_ROOT / f"uma_server.log.{datetime.now().strftime('%Y%m%d')}.bak"
-        shutil.copy2(log_file, archive)
-        log_file.write_text("", encoding="utf-8")
-        cleaned.append(str(archive))
+    # Parse timestamp from each line (format: "2026-04-10 15:30:00,123")
+    if log_file.exists():
+        cutoff_date = (datetime.now() - timedelta(days=retention_days)).strftime("%Y-%m-%d")
+        try:
+            original_size = log_file.stat().st_size
+            lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            retained = []
+            for line in lines:
+                # Keep lines whose timestamp >= cutoff_date, or lines without timestamp (continuation)
+                if len(line) >= 10 and line[:4].isdigit() and line[4] == "-":
+                    if line[:10] >= cutoff_date:
+                        retained.append(line)
+                elif retained:  # continuation line (stack trace, etc.) — keep if previous was kept
+                    retained.append(line)
+            log_file.write_text("\n".join(retained) + "\n" if retained else "", encoding="utf-8")
+            new_size = log_file.stat().st_size
+            if original_size != new_size:
+                cleaned.append(f"uma_server.log: {original_size//1048576}MB → {new_size//1048576}MB")
+        except Exception as e:
+            logger.error(f"[LogCleanup] Failed to trim log: {e}")
 
     # Clean old .bak log files
     for f in PROJECT_ROOT.glob("uma_server.log.*.bak"):
@@ -306,4 +320,115 @@ def delete_schedule_task(session_id: str, task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
     sched_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"status": "success", "task_id": task_id}
+
+
+# ── System Health + Activity Feed ──────────────────────────────────────────
+
+@router.get("/api/system/health")
+def system_health():
+    """Return system health indicators for admin dashboard."""
+    import subprocess as _sp
+    pr = Path(os.getenv("PROJECT_ROOT", str(Path(__file__).resolve().parents[2])))
+
+    # Log file size
+    log_path = pr / "uma_server.log"
+    log_size_mb = round(log_path.stat().st_size / 1048576, 1) if log_path.exists() else 0
+
+    # Uptime (server start time from log first line)
+    uptime_str = "unknown"
+    try:
+        with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+            first = f.readline()
+            if first and len(first) > 19:
+                uptime_str = first[:19]
+    except Exception:
+        pass
+
+    # Skills count
+    skills_count = 0
+    try:
+        from main import get_uma
+        uma = get_uma()
+        skills_count = len(uma.registry.skills)
+    except Exception:
+        pass
+
+    # Schedules
+    sched_dir = WORKSPACE_DIR / "schedules"
+    sched_active = 0
+    sched_total = 0
+    if sched_dir.exists():
+        for f in sched_dir.glob("*.json"):
+            try:
+                d = json.loads(f.read_text(encoding="utf-8"))
+                for t in d.get("tasks", []):
+                    sched_total += 1
+                    if t.get("enabled"): sched_active += 1
+            except Exception:
+                pass
+
+    return {
+        "log_size_mb": log_size_mb,
+        "server_start": uptime_str,
+        "skills_count": skills_count,
+        "schedules_active": sched_active,
+        "schedules_total": sched_total,
+    }
+
+
+@router.get("/api/activity-feed")
+def activity_feed(limit: int = 15):
+    """Aggregate recent activity from token_usage + schedules."""
+    pr = Path(os.getenv("PROJECT_ROOT", str(Path(__file__).resolve().parents[2])))
+    activities = []
+
+    # 1. From token_usage.jsonl (last N calls)
+    usage_path = WORKSPACE_DIR / "analytics" / "token_usage.jsonl"
+    if usage_path.exists():
+        try:
+            lines = usage_path.read_text(encoding="utf-8", errors="replace").strip().split("\n")
+            for line in lines[-20:]:
+                try:
+                    r = json.loads(line)
+                    skill = r.get("skill", "(chat)")
+                    user = r.get("user_id", "")[:12]
+                    ts = r.get("ts", "")[:19].replace("T", " ")
+                    tokens = r.get("total_tokens", 0)
+                    activities.append({
+                        "type": "token",
+                        "text": f"{skill} ({tokens} tokens)",
+                        "user": user,
+                        "time": ts,
+                        "status": r.get("status", "success"),
+                    })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # 2. From git log (Agent_skills recent commits)
+    try:
+        from server.routes.skills import _get_git_root
+        git_root = _get_git_root()
+        if (git_root / ".git").exists():
+            proc = _sp.run(
+                ["git", "log", "--oneline", "--format=%s|%ci", "-5"],
+                cwd=git_root, capture_output=True, text=True, encoding="utf-8", errors="replace"
+            )
+            for line in proc.stdout.strip().split("\n"):
+                if "|" in line:
+                    msg, ts = line.rsplit("|", 1)
+                    activities.append({
+                        "type": "git",
+                        "text": msg.strip()[:60],
+                        "user": "",
+                        "time": ts.strip()[:19],
+                        "status": "success",
+                    })
+    except Exception:
+        pass
+
+    # Sort by time descending, limit
+    activities.sort(key=lambda a: a.get("time", ""), reverse=True)
+    return {"activities": activities[:limit]}
 

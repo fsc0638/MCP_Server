@@ -1143,6 +1143,9 @@
     const overlay = document.getElementById("wfLandingOverlay");
     if (!overlay) return;
     overlay.classList.add("open");
+    // Remove anti-flash if present
+    const af = document.getElementById("wfAntiFlash"); if (af) af.remove();
+    const body = document.querySelector(".page-chat-body"); if (body) body.style.visibility = "visible";
 
     // Fetch workflow list
     const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
@@ -2167,9 +2170,25 @@
   window.toggleSkillEditMode = toggleSkillEditMode;
   window.closeWfPropPanel = closeWfPropPanel;
 
-  // Auto-open workflow if ?wf=xxx query param present (from admin.html)
+  // Auto-open workflow landing or specific workflow from query params
   (function () {
     const params = new URLSearchParams(window.location.search);
+
+    // ?openWorkflow=1 → open landing page
+    if (params.get("openWorkflow")) {
+      history.replaceState(null, "", window.location.pathname);
+      function _tryLanding() {
+        const btn = document.getElementById("btnWorkflowDesigner");
+        if (!btn) { requestAnimationFrame(_tryLanding); return; }
+        btn.classList.add("active");
+        _showWorkflowLanding();
+      }
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", _tryLanding);
+      else _tryLanding();
+      return;
+    }
+
+    // ?wf=xxx → open specific workflow canvas
     const wfId = params.get("wf");
     if (!wfId) return;
     const scope = params.get("scope") || "personal";

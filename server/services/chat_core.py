@@ -303,8 +303,10 @@ async def process_chat_native(req: ChatRequest):
                                     else:
                                         tag_user = make_web_bridge_tag(session_id, req.user_input)
                                         tag_ai = make_web_bridge_tag(session_id, final)
-                                        msg_user = f"[Web User]\n{req.user_input}\n\n{tag_user}"
-                                        msg_ai = f"[Web AI]\n{final}\n\n{tag_ai}"
+                                        # Bridge tag appended as invisible suffix (zero-width chars wrap it)
+                                        _hide = "\u200b\u200b\u200b"  # zero-width spaces to separate from content
+                                        msg_user = f"[Web User]\n{req.user_input}{_hide}{tag_user}"
+                                        msg_ai = f"[Web AgentK]\n{final}{_hide}{tag_ai}"
                                         try:
                                             line_api.push_message(
                                                 PushMessageRequest(
