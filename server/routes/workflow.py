@@ -79,19 +79,28 @@ def _sync_workflow_git(
     commit_msg = f"[Workflow] {message}\n\nUser: {actor} | {now}"
 
     _enc = {"text": True, "encoding": "utf-8", "errors": "replace"}
+    # Stage only system/department/personal dirs — NOT logs/ or versions/.
+    # These directories are un-ignored via .gitignore negation (`!workspace/workflows/**`
+    # after `workspace/*`), so regular git add works without -f.
+    wf_base = git_root / "workspace" / "workflows"
+    _scope_dirs = [
+        str(wf_base / "system"),
+        str(wf_base / "department"),
+        str(wf_base / "personal"),
+    ]
     try:
-        if changed_paths:
-            for p in changed_paths:
-                rel = str(Path(p).relative_to(git_root)) if Path(p).is_absolute() else str(p)
-                subprocess.run(["git", "add", rel], cwd=git_root, capture_output=True, **_enc)
-            subprocess.run(["git", "add", "-u"], cwd=git_root, capture_output=True, **_enc)
-        else:
-            subprocess.run(["git", "add", "."], cwd=git_root, capture_output=True, **_enc)
+        # Stage new/modified files in scope directories
+        for d in _scope_dirs:
+            subprocess.run(["git", "add", d], cwd=git_root, capture_output=True, **_enc)
+        # Stage deletions of tracked files across all scope dirs
+        for d in _scope_dirs:
+            subprocess.run(["git", "add", "-u", d], cwd=git_root, capture_output=True, **_enc)
 
         proc = subprocess.run(["git", "commit", "-m", commit_msg], cwd=git_root, capture_output=True, **_enc)
-        if proc.returncode != 0 and "nothing to commit" not in (proc.stdout or "").lower():
-            logger.error(f"[Workflow Git] Commit failed: {proc.stderr}")
-            return {"status": "error", "error": f"Commit failed: {proc.stderr}"}
+        combined_out = (proc.stdout or "") + (proc.stderr or "")
+        if proc.returncode != 0 and "nothing to commit" not in combined_out.lower():
+            logger.error(f"[Workflow Git] Commit failed: {proc.stderr or proc.stdout}")
+            return {"status": "error", "error": f"Commit failed: {proc.stderr or proc.stdout}"}
 
         # Push to current tracking branch
         push_proc = subprocess.run(
