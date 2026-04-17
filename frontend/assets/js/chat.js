@@ -41,6 +41,7 @@
     sessionMeetingText: {},          // sessionId -> string
     sessionHistoryLoaded: {},        // sessionId -> boolean (避免重複載入)
     sessionInputDrafts: {},          // sessionId -> string (未送出的草稿)
+    sessionPendingAudioFile: {},     // sessionId -> { path: string, name: string }
   };
   localStorage.setItem("kway_chat_session", state.sessionId);
 
@@ -381,6 +382,7 @@
     moveSessionScopedValue(state.sessionMeetingText, sessionId, realSessionId, "");
     moveSessionScopedValue(state.sessionHistoryLoaded, sessionId, realSessionId, false);
     moveSessionScopedValue(state.sessionInputDrafts, sessionId, realSessionId, "");
+    moveSessionScopedValue(state.sessionPendingAudioFile, sessionId, realSessionId, null);
     moveSessionScopedValue(state.sessionHistoryCache, sessionId, realSessionId, []);
     moveSessionScopedValue(state.sessionLoadTokens, sessionId, realSessionId, 0);
 
@@ -428,16 +430,41 @@
     };
   }
 
+  function isLocalAudioHandoffPrompt(content) {
+    if (typeof content !== "string") return false;
+    return (
+      content.indexOf("我已收到音檔「") === 0 &&
+      content.indexOf("你希望我接下來做什麼？例如：") !== -1 &&
+      content.indexOf("1. 轉逐字稿") !== -1 &&
+      content.indexOf("3. 產出 Todo 並上傳 Notion") !== -1
+    );
+  }
+
   function getCachedHistory(sessionId) {
     const cached = state.sessionHistoryCache[sessionId];
     if (!Array.isArray(cached)) return [];
-    return cached.map(cloneHistoryMessage).filter(Boolean);
+    return cached
+      .map(cloneHistoryMessage)
+      .filter(Boolean)
+      .filter((msg) => !(msg.role === "assistant" && isLocalAudioHandoffPrompt(msg.content)));
   }
 
   function setCachedHistory(sessionId, history) {
     state.sessionHistoryCache[sessionId] = (Array.isArray(history) ? history : [])
       .map(cloneHistoryMessage)
       .filter(Boolean);
+  }
+
+  function pruneLocalAudioHandoffPromptFromCache(sessionId) {
+    const current = getCachedHistory(sessionId);
+    if (!current.length) return;
+    const filtered = current.filter((msg) => {
+      if (!msg || msg.role !== "assistant") return true;
+      return !isLocalAudioHandoffPrompt(msg.content);
+    });
+    if (filtered.length !== current.length) {
+      setCachedHistory(sessionId, filtered);
+    }
   }
 
   function getHistorySignature(msg) {
@@ -455,6 +482,8 @@
       return getCachedHistory(sessionId);
     }
 
+    // Cleanup local-only handoff prompts from previous frontend versions.
+    pruneLocalAudioHandoffPromptFromCache(sessionId);
     const cachedHistory = getCachedHistory(sessionId);
     if (cachedHistory.length === 0) {
       setCachedHistory(sessionId, remoteHistory);
@@ -545,6 +574,7 @@
     delete state.sessionMeetingText[sessionId];
     delete state.sessionHistoryLoaded[sessionId];
     delete state.sessionInputDrafts[sessionId];
+    delete state.sessionPendingAudioFile[sessionId];
     delete state.sessionLoadTokens[sessionId];
   }
 
@@ -1456,9 +1486,17 @@
     }
   }
 
-  async function sendMessage(text) {
+  async function sendMessage(text, options) {
+    const opts = options || {};
     const content = (text || "").trim();
     let requestSessionId = state.sessionId;
+    const pendingAudio = state.sessionPendingAudioFile[requestSessionId] || null;
+    const explicitAttachedFile =
+      typeof opts.attachedFile === "string" ? opts.attachedFile.trim() : "";
+    const attachedFileForTurn =
+      explicitAttachedFile || (pendingAudio && pendingAudio.path ? pendingAudio.path : "");
+    const uploadHandoff = !!opts.uploadHandoff;
+    const keepPendingAudio = !!opts.keepPendingAudio;
     // 只檢查當前 session 自己是否還在 pending;其他 session 的 task 完全不影響
     if (!content || listActiveTasksForSession(requestSessionId).length > 0) return;
 
@@ -1476,6 +1514,7 @@
     syncComposerState();
 
     ensureSessionExists(requestSessionId, "新對話", "開始新的對話...");
+    pruneLocalAudioHandoffPromptFromCache(requestSessionId);
     // 渲染到該 session 自己的 container(即使使用者切到其他 session,這筆訊息仍然留在原 session)
     renderMessage(requestSessionId, "user", content);
     appendCachedHistoryMessage(requestSessionId, "user", content);
@@ -1518,6 +1557,12 @@
         language: language,
         detail_level: detailLevel,
       };
+      if (attachedFileForTurn) {
+        payload.attached_file = attachedFileForTurn;
+      }
+      if (uploadHandoff) {
+        payload.upload_handoff = true;
+      }
 
       const res = await fetch("/chat", {
         method: "POST",
@@ -1528,6 +1573,9 @@
         removeTyping(requestSessionId);
         const errText = await res.text();
         throw new Error("HTTP " + res.status + ": " + errText);
+      }
+      if (attachedFileForTurn && !keepPendingAudio) {
+        delete state.sessionPendingAudioFile[requestSessionId];
       }
 
       renderConversationList();
@@ -1788,10 +1836,23 @@
         const data = await res.json();
         if (data.status !== "success") throw new Error(data.detail || "Upload failed");
 
-        const msg = "幫我將這個音訊檔案轉換為逐字稿，file_path: " + data.filepath;
-        if (chatInput) chatInput.value = msg;
+        state.sessionPendingAudioFile[state.sessionId] = {
+          path: String(data.filepath || ""),
+          name: file.name || String(data.filename || ""),
+        };
+        pruneLocalAudioHandoffPromptFromCache(state.sessionId);
+        const safeName = file.name || String(data.filename || "音檔");
+        const uploadMessage = "已上傳「" + safeName + "」檔案";
+        if (chatInput) {
+          chatInput.value = "";
+          autoResize(chatInput);
+        }
         showToast("已上傳 " + file.name, "success");
-        sendMessage(msg);
+        syncComposerState();
+        sendMessage(uploadMessage, {
+          attachedFile: String(data.filepath || ""),
+          uploadHandoff: true,
+        });
       } catch (err) {
         showToast("音檔上傳失敗：" + err.message, "error");
       }
