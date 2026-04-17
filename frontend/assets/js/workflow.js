@@ -1224,8 +1224,8 @@
       } else {
         const skillName = block.type.startsWith("mcp-") ? block.type : "mcp-" + block.type;
 
-        // Render params immediately with current config, then enrich with skill schema
-        _renderBlockParams(block, paramsDiv, fd, skillName, null);
+        // Render params immediately with current config (loading state)
+        _renderBlockParams(block, paramsDiv, fd, skillName, undefined);
 
         // Async: fetch skill parameter schema and re-render with real param names
         fetch(`/skills/${skillName}`)
@@ -1234,7 +1234,9 @@
             const schema = skillData?.metadata?.parameters || null;
             _renderBlockParams(block, paramsDiv, fd, skillName, schema);
           })
-          .catch(() => {});
+          .catch(() => {
+            _renderBlockParams(block, paramsDiv, fd, skillName, null);
+          });
       }
     }
 
@@ -2947,12 +2949,15 @@
         <ul style="margin:0;padding-left:16px;font-size:0.67rem;color:var(--text-secondary);">${hints}</ul>
         <div style="font-size:0.63rem;color:var(--text-tertiary);margin-top:4px;"><span style="color:#e53e3e;">*</span> 必填</div>
       </div>`;
-    } else if (schema === null) {
-      // Still loading
+    } else if (schema === undefined) {
+      // Still loading (initial render, before fetch resolves)
       schemaHint = `<div style="font-size:0.67rem;color:var(--text-tertiary);padding:4px 0;">載入參數定義中...</div>`;
     } else {
-      // schema fetched but no properties found — show generic note
-      schemaHint = `<div style="font-size:0.67rem;color:var(--text-tertiary);padding:4px 0;">⚠️ 參數名稱需對應 Skill 的 SKILL.md 定義</div>`;
+      // schema fetched but SKILL.md has no parameters block — guide user
+      schemaHint = `<div class="wf-param-schema-hint" style="background:#fff8e1;border-color:#ffd980;">
+        <div style="font-size:0.68rem;font-weight:700;color:#b45309;margin-bottom:4px;">⚠️ 此 Skill 尚未在 SKILL.md 宣告參數</div>
+        <div style="font-size:0.67rem;color:var(--text-secondary);">請依 skill 的 <code>scripts/main.py</code> 實際讀取的 key 手動新增參數（例如 <code>query</code>、<code>target_url</code>）。</div>
+      </div>`;
     }
 
     // Build param rows
@@ -3012,9 +3017,9 @@
     // Re-render
     const paramsDiv = document.getElementById("wfPropTabParams");
     const skillName = block.type.startsWith("mcp-") ? block.type : "mcp-" + block.type;
-    if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, null);
+    if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, undefined);
     fetch(`/skills/${skillName}`).then(r => r.ok ? r.json() : null)
-      .then(d => { if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, d?.metadata?.parameters || {}); }).catch(() => {});
+      .then(d => { if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, d?.metadata?.parameters || null); }).catch(() => {});
   };
 
   window._addBlockParam = function (blockId) {
@@ -3030,9 +3035,9 @@
     // Re-render
     const paramsDiv = document.getElementById("wfPropTabParams");
     const skillName = block.type.startsWith("mcp-") ? block.type : "mcp-" + block.type;
-    if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, null);
+    if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, undefined);
     fetch(`/skills/${skillName}`).then(r => r.ok ? r.json() : null)
-      .then(d => { if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, d?.metadata?.parameters || {}); }).catch(() => {});
+      .then(d => { if (paramsDiv) _renderBlockParams(block, paramsDiv, fd, skillName, d?.metadata?.parameters || null); }).catch(() => {});
   };
 
   window._updateBlockParam = function (blockId, paramName, field, value) {

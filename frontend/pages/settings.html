@@ -102,6 +102,21 @@
           </div>
         </div>
 
+        <!-- Identity verification status card -->
+        <div class="page-settings-section">
+          <div class="page-settings-section-title">身分驗證</div>
+          <div class="page-settings-id-card" id="idVerifyCard">
+            <div class="page-settings-id-status" id="idVerifyStatus">
+              <div class="page-settings-id-icon" id="idVerifyIcon">🔒</div>
+              <div class="page-settings-id-info">
+                <div class="page-settings-id-title" id="idVerifyTitle">載入中…</div>
+                <div class="page-settings-id-desc" id="idVerifyDesc">正在檢查您的身分綁定狀態</div>
+              </div>
+              <button class="page-settings-btn-primary" id="idVerifyBtn" onclick="openIdVerifyModal()" style="display:none;">驗證身分</button>
+            </div>
+          </div>
+        </div>
+
         <div class="page-settings-section">
           <div class="page-settings-section-title">基本資訊</div>
           <div class="page-settings-card">
@@ -569,6 +584,65 @@
 
 <script src="../assets/js/theme-switcher.js"></script>
 <script src="../assets/js/script.js"></script>
+<!-- ═════════════════════ Identity Verification Modal ═════════════════════ -->
+<div id="idVerifyOverlay" class="id-verify-overlay" style="display:none;" role="dialog" aria-modal="true" aria-labelledby="idVerifyModalTitle">
+  <div class="id-verify-modal">
+    <header class="id-verify-header">
+      <h3 id="idVerifyModalTitle">身分驗證</h3>
+      <button class="id-verify-close" onclick="closeIdVerifyModal()" aria-label="關閉">&times;</button>
+    </header>
+
+    <!-- Step 1: Query input -->
+    <div class="id-verify-body" id="idVerifyStep1">
+      <p class="id-verify-hint">請輸入下列任一項以比對您的員工資料：</p>
+      <div class="id-verify-type-tabs" role="tablist">
+        <button class="id-verify-type-tab is-active" data-type="employee_id" onclick="selectIdVerifyType('employee_id')" role="tab">員工編號</button>
+        <button class="id-verify-type-tab" data-type="email" onclick="selectIdVerifyType('email')" role="tab">公司 Email</button>
+        <button class="id-verify-type-tab" data-type="name" onclick="selectIdVerifyType('name')" role="tab">真實姓名</button>
+      </div>
+      <input
+        type="text"
+        class="id-verify-input"
+        id="idVerifyQueryInput"
+        placeholder="例如：0337"
+        autocomplete="off"
+        aria-label="驗證輸入欄位"
+      />
+      <div class="id-verify-error" id="idVerifyError" style="display:none;"></div>
+      <footer class="id-verify-footer">
+        <button class="page-settings-btn-cancel" onclick="closeIdVerifyModal()">取消</button>
+        <button class="page-settings-btn-primary" id="idVerifySubmitBtn" onclick="submitIdVerify()">查詢</button>
+      </footer>
+    </div>
+
+    <!-- Step 2: Disambiguation (multiple name matches) -->
+    <div class="id-verify-body" id="idVerifyStep2" style="display:none;">
+      <p class="id-verify-hint">查到多位相同姓名，請選擇您本人：</p>
+      <div class="id-verify-candidates" id="idVerifyCandidates"></div>
+      <footer class="id-verify-footer">
+        <button class="page-settings-btn-cancel" onclick="backToIdVerifyStep1()">返回</button>
+      </footer>
+    </div>
+
+    <!-- Step 3: Confirmation -->
+    <div class="id-verify-body" id="idVerifyStep3" style="display:none;">
+      <p class="id-verify-hint">找到您的資料，請確認後綁定：</p>
+      <div class="id-verify-confirm-card" id="idVerifyConfirmCard"></div>
+      <footer class="id-verify-footer">
+        <button class="page-settings-btn-cancel" onclick="backToIdVerifyStep1()">不是我</button>
+        <button class="page-settings-btn-primary" id="idVerifyConfirmBtn" onclick="confirmIdVerifyBinding()">確認綁定</button>
+      </footer>
+    </div>
+
+    <!-- Step 4: Success -->
+    <div class="id-verify-body" id="idVerifyStep4" style="display:none;text-align:center;padding:30px 20px;">
+      <div style="font-size:3rem;margin-bottom:10px;">✅</div>
+      <h3 style="margin:0 0 10px;">綁定成功</h3>
+      <p class="id-verify-hint" id="idVerifySuccessMsg">身分驗證完成，系統已載入您的員工資料。</p>
+    </div>
+  </div>
+</div>
+
 <script src="../assets/js/settings.js"></script>
 </body>
 </html>

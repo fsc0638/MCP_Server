@@ -1,8 +1,8 @@
 """Authentication routes."""
 
 import os
-from fastapi import APIRouter, HTTPException, Cookie
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, HTTPException, Cookie, Response
+from fastapi.responses import RedirectResponse, JSONResponse
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from pydantic import BaseModel
@@ -243,18 +243,26 @@ def line_callback(code: str = "", state: str = "", error: str = "", error_descri
 
 @router.get("/me")
 def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
-    """Return the current logged-in user based on server-side session token."""
+    """Return the current logged-in user based on server-side session token.
+
+    Returns 200 with status=error when not logged in (backward compatible with
+    existing callers that check `data.status === 'success'`). The message field
+    makes the specific reason visible to both client and server logs.
+    """
     if not mcp_session:
+        _auth_logger.debug("[/me] no mcp_session cookie")
         return {"status": "error", "message": "not_logged_in"}
 
     from server.services.session_token_cookie import verify_token
     token = verify_token(mcp_session)
     if not token:
+        _auth_logger.info("[/me] invalid session (cookie signature rejected)")
         return {"status": "error", "message": "invalid_session"}
 
     from server.services.auth_session_store import get_auth_session_store
     sess = get_auth_session_store().get(token)
     if not sess:
+        _auth_logger.info("[/me] session token not found in store (likely after logout or server restart)")
         return {"status": "error", "message": "session_expired"}
 
     # Load extended user context if available
@@ -305,6 +313,261 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
     user["_debug_sess_user_id"] = sess.user_id
     user["_debug_ctx_found"] = _ctx is not None
     return {"status": "success", "user": user}
+
+
+# ── Logout ────────────────────────────────────────────────────────────────
+
+@router.post("/logout")
+def logout_api(mcp_session: str = Cookie(default="", alias="mcp_session")):
+    """Destroy server-side session and clear client cookie.
+
+    Idempotent — safe to call even if user is already logged out.
+    """
+    _auth_logger.info("[Logout] Invoked (cookie_present=%s)", bool(mcp_session))
+
+    # 1. Invalidate server-side session token
+    if mcp_session:
+        try:
+            from server.services.session_token_cookie import verify_token
+            from server.services.auth_session_store import get_auth_session_store
+            token = verify_token(mcp_session)
+            if token:
+                get_auth_session_store().delete(token)
+                _auth_logger.info("[Logout] Session token deleted")
+        except Exception as e:
+            _auth_logger.warning("[Logout] Session cleanup error (non-fatal): %s", e)
+
+    # 2. Clear cookie — must match original attributes (path/samesite) or browser ignores
+    resp = JSONResponse({"status": "success", "message": "logged_out"})
+    resp.delete_cookie(key="mcp_session", path="/", samesite="lax")
+    return resp
+
+
+# ── Identity Binding (Web UI onboarding) ──────────────────────────────────
+
+class LinkEmployeeRequest(BaseModel):
+    query: str = ""           # Employee ID / email / name — raw user input
+    query_type: str = "auto"  # "auto" | "employee_id" | "email" | "name"
+    confirm_employee_id: str = ""  # For name-disambiguation follow-up
+
+
+@router.post("/link-employee")
+def link_employee_api(
+    req: LinkEmployeeRequest,
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """Bind current logged-in user (LINE/Google) to an employee record.
+
+    Flow:
+      1. Client sends query (員編/email/姓名).
+      2. Server looks up employee via employee_lookup.
+      3. If multiple matches on name — return "ambiguous" with candidates list.
+      4. If exactly one match — build user_context JSON and persist.
+      5. Subsequent /me calls include full employee profile.
+
+    Rate limit: 5 failed attempts per hour → 1hr lockout per session.
+    """
+    if not mcp_session:
+        _auth_logger.warning("[/link-employee] 401: no mcp_session cookie")
+        raise HTTPException(status_code=401, detail="not_logged_in")
+
+    from server.services.session_token_cookie import verify_token
+    from server.services.auth_session_store import get_auth_session_store
+    token = verify_token(mcp_session)
+    if not token:
+        _auth_logger.warning("[/link-employee] 401: invalid cookie signature")
+        raise HTTPException(status_code=401, detail="invalid_session")
+    sess = get_auth_session_store().get(token)
+    if not sess:
+        _auth_logger.warning("[/link-employee] 401: session token not found in store (token=%s...)", token[:8])
+        raise HTTPException(status_code=401, detail="session_expired")
+
+    user_id = sess.user_id  # e.g. "line_U09e..." / google id / etc.
+    _auth_logger.info("[/link-employee] user=%s query=%s type=%s", user_id, (req.query or "")[:30], req.query_type)
+
+    # ── Rate limit check ──
+    _check_link_rate_limit(user_id)
+
+    from server.services.employee_lookup import (
+        _load_employees, lookup_by_email, lookup_by_employee_id,
+        lookup_by_name, build_user_context, save_user_context,
+    )
+
+    q = (req.query or "").strip()
+    if not q and not req.confirm_employee_id:
+        raise HTTPException(status_code=400, detail="empty_query")
+
+    # ── Resolve employee ──
+    emp = None
+    candidates = []
+
+    if req.confirm_employee_id:
+        # Second-round: user picked one of the ambiguous candidates
+        emp = lookup_by_employee_id(req.confirm_employee_id.strip())
+        if not emp:
+            _record_link_failure(user_id)
+            raise HTTPException(status_code=404, detail="employee_not_found")
+    else:
+        qtype = req.query_type
+        if qtype == "auto":
+            if "@" in q:
+                qtype = "email"
+            elif q.isdigit() or (q.startswith("0") and q[1:].isdigit()):
+                qtype = "employee_id"
+            else:
+                qtype = "name"
+
+        if qtype == "email":
+            emp = lookup_by_email(q)
+        elif qtype == "employee_id":
+            # Normalize leading zeros: accept both "337" and "0337"
+            _normalized = q.lstrip("0") or "0"
+            emp = lookup_by_employee_id(q) or lookup_by_employee_id(_normalized)
+            if not emp:
+                # Try zero-padded variants (2-4 digits)
+                for pad in (2, 3, 4, 5):
+                    emp = lookup_by_employee_id(_normalized.zfill(pad))
+                    if emp:
+                        break
+        elif qtype == "name":
+            # Collect all matches for potential ambiguity
+            all_emps = _load_employees()
+            matches = [e for e in all_emps if e.get("name") == q]
+            if len(matches) == 1:
+                emp = matches[0]
+            elif len(matches) > 1:
+                candidates = [
+                    {
+                        "employee_id": e.get("employee_id", ""),
+                        "name": e.get("name", ""),
+                        "department_code": e.get("department_code", ""),
+                        "department_name": e.get("department_name", ""),
+                        "title": e.get("title", ""),
+                        "email_hint": _mask_email(e.get("email", "")),
+                    }
+                    for e in matches
+                ]
+                return {"status": "ambiguous", "candidates": candidates}
+
+    if not emp:
+        _record_link_failure(user_id)
+        raise HTTPException(status_code=404, detail="employee_not_found")
+
+    # ── Build and save user context ──
+    role = emp.get("role") or "editor"
+    ctx = build_user_context(emp, user_id, role=role)
+    ctx["source"] = "web_onboarding"
+    ctx["linked_at"] = _now_iso()
+    save_user_context(ctx)
+
+    # Update the auth session's name to match the verified employee
+    try:
+        sess.name = emp.get("name", sess.name)
+        get_auth_session_store()._persist_to_disk()
+    except Exception:
+        pass
+
+    _link_failures.pop(user_id, None)  # Clear failure counter on success
+    _auth_logger.info("[LinkEmployee] %s → %s (%s)", user_id, emp.get("employee_id"), emp.get("name"))
+    return {
+        "status": "success",
+        "user": {
+            "employee_id": emp.get("employee_id", ""),
+            "name": emp.get("name", ""),
+            "email": emp.get("email", ""),
+            "department_code": emp.get("department_code", ""),
+            "department_name": emp.get("department_name", ""),
+            "title": emp.get("title", ""),
+            "extension": emp.get("extension", ""),
+            "role": role,
+        },
+    }
+
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+_link_failures: dict = {}  # {user_id: [timestamp, ...]}  for rate limiting
+_LINK_MAX_FAILS_PER_HOUR = 5
+_LINK_LOCKOUT_SECONDS = 3600
+
+
+def _check_link_rate_limit(user_id: str) -> None:
+    import time as _t
+    now = _t.time()
+    fails = [t for t in _link_failures.get(user_id, []) if now - t < _LINK_LOCKOUT_SECONDS]
+    _link_failures[user_id] = fails
+    if len(fails) >= _LINK_MAX_FAILS_PER_HOUR:
+        remain_min = int((_LINK_LOCKOUT_SECONDS - (now - fails[0])) / 60) + 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"too_many_attempts:locked_for_{remain_min}min",
+        )
+
+
+def _record_link_failure(user_id: str) -> None:
+    import time as _t
+    _link_failures.setdefault(user_id, []).append(_t.time())
+
+
+def _mask_email(email: str) -> str:
+    """Mask middle of email for disambiguation: 'abc@d.com' → 'a**@d.com'."""
+    if not email or "@" not in email:
+        return ""
+    local, domain = email.split("@", 1)
+    if len(local) <= 2:
+        return local[0] + "*@" + domain
+    return local[0] + "*" * (len(local) - 2) + local[-1] + "@" + domain
+
+
+def _now_iso() -> str:
+    from datetime import datetime
+    return datetime.now().isoformat()
+
+
+# ── Admin: Unlink Employee ──────────────────────────────────────────────────
+
+class UnlinkEmployeeRequest(BaseModel):
+    target_user_id: str  # e.g. "line_U09e..."
+
+
+@router.post("/admin/unlink-employee")
+def admin_unlink_employee(
+    req: UnlinkEmployeeRequest,
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """Admin-only: Remove identity binding for a user (forces re-verification)."""
+    if not mcp_session:
+        raise HTTPException(status_code=401, detail="not_logged_in")
+
+    from server.services.session_token_cookie import verify_token
+    from server.services.auth_session_store import get_auth_session_store
+    token = verify_token(mcp_session)
+    sess = get_auth_session_store().get(token) if token else None
+    if not sess:
+        raise HTTPException(status_code=401, detail="invalid_session")
+
+    # Check requester is admin
+    from server.services.employee_lookup import get_user_context
+    caller_ctx = get_user_context(sess.user_id)
+    if not caller_ctx or caller_ctx.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="admin_only")
+
+    # Delete target's user_context
+    from pathlib import Path
+    import os as _os
+    pr = _os.getenv("PROJECT_ROOT", "")
+    users_dir = Path(pr) / "workspace" / "users" if pr else Path(__file__).resolve().parents[2] / "workspace" / "users"
+    target_path = users_dir / f"{req.target_user_id}.json"
+
+    if not target_path.exists():
+        raise HTTPException(status_code=404, detail="user_context_not_found")
+
+    try:
+        target_path.unlink()
+        _auth_logger.info("[AdminUnlink] %s unlinked by %s", req.target_user_id, sess.user_id)
+        return {"status": "success", "target_user_id": req.target_user_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/employee-lookup")

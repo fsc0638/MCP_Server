@@ -31,6 +31,33 @@ def _get_xlsx_path() -> Path:
     return Path(__file__).resolve().parents[2] / "workspace" / "department" / "同仁清單.xlsx"
 
 
+def _open_xlsx_safely(xlsx_path: Path):
+    """Open xlsx handling OneDrive/Excel file locks.
+
+    On Windows, OneDrive sync or open Excel instance can produce PermissionError
+    when we try to read. Workaround: copy the file to a temp location and open
+    the copy. This is read-only from our perspective so it's safe.
+    """
+    import openpyxl
+    import shutil
+    import tempfile
+    try:
+        return openpyxl.load_workbook(str(xlsx_path), read_only=True, data_only=True)
+    except PermissionError:
+        logger.info(f"[EmployeeLookup] {xlsx_path.name} is locked, copying to temp for read")
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            shutil.copy2(str(xlsx_path), tmp_path)
+            return openpyxl.load_workbook(tmp_path, read_only=True, data_only=True)
+        finally:
+            try:
+                import os as _os
+                _os.unlink(tmp_path)
+            except Exception:
+                pass
+
+
 def _load_employees() -> List[Dict[str, Any]]:
     """Load and parse employee list from xlsx. Cached after first load."""
     global _EMPLOYEE_CACHE
@@ -43,8 +70,7 @@ def _load_employees() -> List[Dict[str, Any]]:
         return []
 
     try:
-        import openpyxl
-        wb = openpyxl.load_workbook(str(xlsx_path), read_only=True)
+        wb = _open_xlsx_safely(xlsx_path)
         ws = wb.active
         employees = []
 
