@@ -284,8 +284,6 @@ async def process_chat_native(req: ChatRequest):
             ),
         )
 
-        import os
-
         if os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
             logger.info(f"[PromptBuilder] meta={prompt_meta}")
             try:
