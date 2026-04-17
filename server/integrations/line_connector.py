@@ -5,18 +5,31 @@ Integrates LINE Messaging API into the existing FastAPI + UMA architecture.
 
 Architecture:
   Inbound  → POST /api/line/webhook   (signature verify + parse events)
+  Router   → model_router.route_model() (LLM-as-a-Router: nano classifies → tier)
   Session  → core.session.SessionManager  (session_id = "line_{user_id}")
   Outbound → OpenAIAdapter.chat() → reply_message / push_message fallback
 
+Model Routing (省流省錢):
+  nano  (200K TPM) → 閒聊 / 打招呼 / 簡單問答
+  mini  (200K TPM) → 一般任務 / 翻譯 / 摘要 / 文件分段摘要
+  full  (30K  TPM) → 深度分析 / 多工具串接 / 最終合成報告
+
 Design Principle:
-  -立即回覆 200 OK (解決 LINE Webhook 1~2 秒 Timeout 限制)
+  - 立即回覆 200 OK (解決 LINE Webhook 1~2 秒 Timeout 限制)
   - BackgroundTasks 非同步執行 LLM 生成與 Tool Calling
   - 完全重用現有 SessionManager + MEMORY.md 持久化機制
+  - LLM-as-a-Router 前置分類，避免所有請求都打高成本模型
+  - Token 預估 + 自動降級 (Fallback)
 """
+import json
 import logging
 import os
+import re
 import threading
 from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
 import httpx
@@ -111,8 +124,15 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"[LINE] Event parse error: {e}")
         raise HTTPException(status_code=400, detail=f"Event parse error: {e}")
 
+    # C0. Handle FollowEvent (new friend added) — no action needed, welcome message set in LINE Manager
+    from linebot.v3.webhooks import MessageEvent, FollowEvent, TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
+    for event in events:
+        if isinstance(event, FollowEvent):
+            _user_id = getattr(event.source, "user_id", "")
+            logger.info(f"[LINE] New follower: {_user_id}")
+            continue
+
     # C. 逐一處理 TextMessage / ImageMessage / FileMessage / StickerMessage Event
-    from linebot.v3.webhooks import MessageEvent, TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
     for event in events:
         if isinstance(event, MessageEvent):
             if not isinstance(event.message, (TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent)):
@@ -124,19 +144,151 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
             is_group_or_room = False
             if hasattr(source, "group_id") and source.group_id:
                 session_id = f"line_group_{source.group_id}"
-                chat_id = source.group_id
+                chat_id = session_id  # normalized key for analytics/group attribution
                 is_group_or_room = True
+
+                # Bridge sync: record known group + last activity
+                try:
+                    from server.services.bridge_sync import get_bridge_state
+                    from main import PROJECT_ROOT
+                    get_bridge_state(PROJECT_ROOT).mark_group_active(source.group_id)
+                except Exception:
+                    pass
             elif hasattr(source, "room_id") and source.room_id:
                 session_id = f"line_room_{source.room_id}"
-                chat_id = source.room_id
+                chat_id = session_id  # normalized key for analytics/group attribution
                 is_group_or_room = True
+
+                # Bridge sync: treat rooms similarly to groups for activity gating
+                try:
+                    from server.services.bridge_sync import get_bridge_state
+                    from main import PROJECT_ROOT
+                    get_bridge_state(PROJECT_ROOT).mark_group_active(source.room_id)
+                except Exception:
+                    pass
             else:
                 session_id = f"line_{source.user_id}"
-                chat_id = source.user_id
+                chat_id = session_id  # normalized key for analytics/user attribution
+
+            # Phase 0.5: Onboarding check for personal chats
+            if not is_group_or_room and isinstance(event.message, TextMessageContent):
+                try:
+                    from server.services.employee_lookup import has_completed_onboarding, lookup, build_user_context, save_user_context
+                    _line_user_id = source.user_id
+                    if not has_completed_onboarding(session_id):
+                        _user_text = user_input.strip()
+                        # Check if user is responding with email/employee ID/guest
+                        if _user_text.lower() == "訪客" or _user_text.lower() == "guest":
+                            # Guest mode — create minimal context
+                            from linebot.v3.messaging import TextMessage, ReplyMessageRequest
+                            _guest_ctx = {
+                                "user_id": session_id,
+                                "name": "訪客",
+                                "department": "",
+                                "department_code": "",
+                                "title": "",
+                                "email": "",
+                                "preferences": {"language": "繁體中文", "style": "適中", "primary_use": []},
+                                "role": "viewer",
+                                "groups": [],
+                                "skill_access": {"system": "all", "department": [], "personal": True},
+                                "onboarding_completed": True,
+                                "source": "line_bot",
+                            }
+                            save_user_context(_guest_ctx)
+                            line_api.reply_message(ReplyMessageRequest(
+                                reply_token=event.reply_token,
+                                messages=[TextMessage(text="歡迎！已為你建立訪客帳號 👋\n現在可以開始使用 AgentK 了！")]
+                            ))
+                            continue
+
+                        # Try to match employee
+                        _emp = lookup(_user_text)
+                        if _emp:
+                            _ctx = build_user_context(_emp, session_id)
+                            save_user_context(_ctx)
+                            _onboarding_attempts.pop(session_id, None)  # Clear attempts on success
+                            # Write to profile.md
+                            try:
+                                from server.dependencies.session import get_session_manager
+                                from server.services.runtime import get_universal_system_prompt
+                                _sm = get_session_manager()
+                                _sm.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
+                                # Update profile with employee info
+                                from server.services.profile_updater import ProfileUpdater
+                                _profile_content = (
+                                    f"# Profile — {session_id}\n\n"
+                                    f"### 身份資訊（由系統自動建立）\n\n"
+                                    f"- 姓名：{_emp['name']}\n"
+                                    f"- 部門：{_emp['department_full']}\n"
+                                    f"- 職稱：{_emp['title']}\n"
+                                    f"- 信箱：{_emp['email']}\n"
+                                    f"- 分機：{_emp['extension']}\n"
+                                    f"- 員編：{_emp['employee_id']}\n"
+                                )
+                                _profile_dir = Path(os.getenv("PROJECT_ROOT", Path(__file__).resolve().parents[2])) / "workspace" / "profiles"
+                                _profile_dir.mkdir(parents=True, exist_ok=True)
+                                (_profile_dir / f"{session_id}.profile.md").write_text(_profile_content, encoding="utf-8")
+                                logger.info(f"[LINE Onboarding] Profile created for {session_id}: {_emp['name']}")
+                            except Exception as _pe:
+                                logger.warning(f"[LINE Onboarding] Profile write failed: {_pe}")
+
+                            from linebot.v3.messaging import TextMessage, ReplyMessageRequest
+                            _reply = (
+                                f"身份驗證成功 ✅\n\n"
+                                f"👤 {_emp['name']}\n"
+                                f"🏢 {_emp['department_full']}\n"
+                                f"💼 {_emp['title'] or '—'}\n"
+                                f"📧 {_emp['email']}\n"
+                                f"📞 分機 {_emp['extension'] or '—'}\n\n"
+                                f"歡迎使用 AgentK！現在可以開始對話了 🚀"
+                            )
+                            line_api.reply_message(ReplyMessageRequest(
+                                reply_token=event.reply_token,
+                                messages=[TextMessage(text=_reply)]
+                            ))
+                            continue
+                        else:
+                            # No match — track attempts
+                            _attempts = _onboarding_attempts.get(session_id, 0) + 1
+                            _onboarding_attempts[session_id] = _attempts
+
+                            from linebot.v3.messaging import TextMessage, ReplyMessageRequest
+                            if _attempts >= 3:
+                                line_api.reply_message(ReplyMessageRequest(
+                                    reply_token=event.reply_token,
+                                    messages=[TextMessage(text=(
+                                        "身份驗證失敗次數過多 ⚠️\n\n"
+                                        "請聯繫資訊處同仁協助處理。\n"
+                                        "或輸入「訪客」以訪客身份使用。"
+                                    ))]
+                                ))
+                            else:
+                                line_api.reply_message(ReplyMessageRequest(
+                                    reply_token=event.reply_token,
+                                    messages=[TextMessage(text=(
+                                        "無法確認您的資料，請重新進行身份驗證 🔐\n\n"
+                                        "請輸入：\n"
+                                        "・公司信箱（如 xxx@mail.kway.com.tw）\n"
+                                        "・員工編號（如 0337）\n\n"
+                                        "或輸入「訪客」以訪客身份使用。"
+                                    ))]
+                                ))
+                            continue
+                except Exception as _oe:
+                    logger.warning(f"[LINE Onboarding] Check failed, continuing normally: {_oe}")
 
             # Phase 1: Group Mention Filter & Window
             if is_group_or_room:
                 if isinstance(event.message, TextMessageContent):
+                    # Bridge loop prevention: ignore messages pushed from Web.
+                    try:
+                        from server.services.bridge_sync import has_bridge_tag
+                        if has_bridge_tag(user_input):
+                            logger.info(f"[LINE Bridge] Ignored web-bridged message in group/room: chat={chat_id}")
+                            continue
+                    except Exception:
+                        pass
                     # 支援多種群組喚醒方式：[@Agent K], [@AgentK], @Agent K, @AgentK
                     mentions = ["[@Agent K]", "[@AgentK]", "@Agent K", "@AgentK"]
                     found_mention = False
@@ -154,24 +306,23 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         import time
                         _last_request_time[f"mention_{chat_id}"] = time.time()
                     else:
-                        # 不是叫它，直接忽略 (bypass processing)
-                        logger.info(f"[LINE] Skipped group text (cached but no mention): chat={chat_id}")
+                        # 沒有 @Agent K — 快取 + 寫入 session history（背景記憶），但不觸發 LLM
+                        try:
+                            from server.dependencies.session import get_session_manager
+                            from server.services.runtime import get_universal_system_prompt
+                            _sm = get_session_manager()
+                            _sm.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+                            _sm.append_message(session_id, "user", f"[群組對話]{user_input}")
+                        except Exception as _e:
+                            logger.debug(f"[LINE] Failed to persist group bg message: {_e}")
+                        logger.info(f"[LINE] Skipped group text (cached + persisted, no mention): chat={chat_id}")
                         continue
                 else:
-                    # For Image/File/Sticker in groups, check if bot was mentioned recently (window of 120s for better UX)
-                    import time
-                    last_mention = _last_request_time.get(f"mention_{chat_id}", 0)
-
-                    # Phase 6: Proactive Cache
-                    # If mentioned within 120s, we process it as a direct command
-                    just_cache = (time.time() - last_mention > 120)
+                    # Non-text messages (Image/File/Sticker) in groups without @mention:
+                    # Download & cache the file for future quote references, but do NOT
+                    # trigger LLM processing or send any response (just_cache=True).
                     msg_type = type(event.message).__name__
-
-                    if just_cache:
-                        logger.info(f"[LINE] Group {msg_type} received without recent mention. Will only cache: chat={chat_id}")
-                    else:
-                        logger.info(f"[LINE] Group {msg_type} received with recent mention. Processing: chat={chat_id}")
-                    
+                    logger.info(f"[LINE] Group {msg_type} received without @mention. Download+cache only: chat={chat_id}")
                     background_tasks.add_task(
                         _process_line_message,
                         line_api=line_api,
@@ -183,11 +334,32 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                         event_msg=event.message,
                         extracted_text="",
                         quoted_file_path=None,
-                        just_cache=just_cache
+                        just_cache=True,
                     )
                     continue
 
-            # Phase 6: Quote Recognition (引用識別)
+            # Bridge loop prevention: ignore messages pushed from Web.
+            if isinstance(event.message, TextMessageContent):
+                try:
+                    from server.services.bridge_sync import has_bridge_tag
+                    if has_bridge_tag(user_input):
+                        logger.info(f"[LINE Bridge] Ignored web-bridged message: chat={chat_id}")
+                        continue
+                except Exception:
+                    pass
+
+            # Bridge sync: reflect LINE → Web by persisting a tagged copy of the user message
+            # so the Web UI (which polls /chat/session/{session_id}) can display it.
+            if isinstance(event.message, TextMessageContent) and user_input:
+                try:
+                    from server.dependencies.session import get_session_manager
+                    from server.services.bridge_sync import make_line_bridge_tag
+                    sm = get_session_manager()
+                    sm.append_message(session_id, "user", f"【LINE】你：{user_input}\n\n{make_line_bridge_tag(session_id, user_input)}")
+                except Exception:
+                    pass
+
+            # Phase 6 + A2: Quote Recognition with Retry (引用識別 + 等待機制)
             quoted_text = ""
             quoted_file = None
             if isinstance(event.message, TextMessageContent):
@@ -196,12 +368,46 @@ async def line_webhook(request: Request, background_tasks: BackgroundTasks):
                 if not quoted_msg_id:
                     m_dict = event.message.to_dict()
                     quoted_msg_id = m_dict.get("quotedMessageId")
-                
+
                 if quoted_msg_id:
                     q_data = _get_from_cache(chat_id, quoted_msg_id)
                     quoted_text = q_data.get("text")
                     quoted_file = q_data.get("file_path")
-                    
+
+                    # Phase A2: Retry with status notification if quote not found
+                    if not quoted_text and not quoted_file:
+                        import time as _time
+                        _retry_max = 30  # Total wait: 30 seconds
+                        _retry_interval = 3  # Check every 3 seconds
+                        _notified_start = False
+                        _notified_mid = False
+
+                        for _attempt in range(0, _retry_max, _retry_interval):
+                            if _attempt > 0:
+                                _time.sleep(_retry_interval)
+                            q_data = _get_from_cache(chat_id, quoted_msg_id)
+                            quoted_text = q_data.get("text")
+                            quoted_file = q_data.get("file_path")
+                            if quoted_text or quoted_file:
+                                logger.info(f"[LINE A2] Quote found after {_attempt+_retry_interval}s retry: {quoted_msg_id}")
+                                break
+                            # Status notifications
+                            if _attempt == 0 and not _notified_start:
+                                _send_status_push(line_api, chat_id, "⏳ 正在讀取你引用的訊息，請稍候...")
+                                _notified_start = True
+                            elif _attempt >= 15 and not _notified_mid:
+                                _send_status_push(line_api, chat_id, f"⏳ 引用內容仍在處理中（已等待 {_attempt}秒）...")
+                                _notified_mid = True
+                        else:
+                            # All retries exhausted
+                            if not quoted_text and not quoted_file:
+                                logger.warning(f"[LINE A2] Quote not found after {_retry_max}s: {quoted_msg_id}")
+                                _send_status_push(
+                                    line_api, chat_id,
+                                    "⚠️ 找不到引用的訊息內容，可能已超過保留期限（5天）或尚未完成上傳，請直接重新傳訊息。"
+                                )
+                                continue  # A2: stop processing, don't proceed without quote context
+
                     if quoted_text:
                         logger.info(f"[LINE] Quoted text found in cache: {quoted_msg_id}")
                         user_input = f"[引用內容: \"{quoted_text}\"]\n{user_input}"
@@ -289,34 +495,95 @@ async def line_broadcast(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Dynamic Language Detection ────────────────────────────────────────────────
+
+def _detect_language(text: str):
+    """Lightweight language detection based on Unicode character ranges."""
+    if not text or len(text.strip()) < 2:
+        return None
+    # Japanese: Hiragana or Katakana present
+    if any('\u3040' <= c <= '\u309F' or '\u30A0' <= c <= '\u30FF' for c in text):
+        return "日本語"
+    # Vietnamese: unique diacritical characters
+    _vi_chars = set("ắằặẵẳấầậẩẫếềệểễốồộổỗứừựửữơưăđĂĐƠƯ")
+    if any(c in _vi_chars for c in text):
+        return "Tiếng Việt"
+    # Korean: Hangul syllables
+    if any('\uAC00' <= c <= '\uD7A3' for c in text):
+        return "한국어"
+    # English: mostly ASCII with spaces
+    ascii_count = sum(1 for c in text if c.isascii())
+    if ascii_count / max(len(text), 1) > 0.8 and ' ' in text:
+        return "English"
+    # Default: Traditional Chinese
+    return None  # None = don't inject, let system prompt default handle it
+
+
 # ── Session Locking & UX ──────────────────────────────────────────────────────
 
 _local_locks = {}
 _local_lock_mutex = threading.Lock()
 _last_request_time = {}  # 紀錄每個 session 的最後處理時間 (Debounce 用)
+_group_loading_sent = {}  # {chat_id: timestamp} — 群組文字 loading 去重 (60s cooldown)
+_onboarding_attempts = {}  # {session_id: int} — 身份驗證失敗次數
 
-# ── Message Caching (Phase 6: Quote Support) ──────────────────────────────────
-_message_cache = {}  # {chat_id: {msg_id: {"text": str, "file_path": str}}}
+# ── Message Caching (Phase 6 + Phase A1: Disk Persistence) ────────────────────
+_message_cache = {}  # {chat_id: {msg_id: {"text": str, "file_path": str, "created_at": str}}}
 _MESSAGE_CACHE_LIMIT = 500  # 每回話上限 (LRU 簡化版)
+_msg_cache_loaded = set()  # Track which chat_ids have been lazy-loaded from disk
+
+
+def _ensure_cache_loaded(chat_id: str):
+    """Lazy-load message cache from disk on first access per chat_id (Phase A1)."""
+    if chat_id in _msg_cache_loaded:
+        return
+    _msg_cache_loaded.add(chat_id)
+    try:
+        from server.dependencies.session import get_session_manager
+        sm = get_session_manager()
+        disk_cache = sm.load_msg_cache(chat_id)
+        if disk_cache:
+            for k, v in disk_cache.items():
+                if k not in _message_cache.get(chat_id, {}):
+                    _message_cache.setdefault(chat_id, {})[k] = v
+            logger.info(f"[LINE Cache] Loaded {len(disk_cache)} cached messages from disk for chat={chat_id}")
+    except Exception as e:
+        logger.warning(f"[LINE Cache] Failed to load disk cache for {chat_id}: {e}")
+
 
 def _add_to_cache(chat_id: str, msg_id: str, text: str = None, file_path: str = None):
+    _ensure_cache_loaded(chat_id)
     if chat_id not in _message_cache:
         _message_cache[chat_id] = {}
     cache = _message_cache[chat_id]
-    
-    # 如果已存在，更新非空欄位
+
+    from datetime import datetime as _dt
+    now_iso = _dt.now().isoformat()
+
     if msg_id in cache:
-        if text: cache[msg_id]["text"] = text
-        if file_path: cache[msg_id]["file_path"] = file_path
+        if text:
+            cache[msg_id]["text"] = text
+        if file_path:
+            cache[msg_id]["file_path"] = file_path
     else:
-        cache[msg_id] = {"text": text, "file_path": file_path}
-        
+        cache[msg_id] = {"text": text, "file_path": file_path, "created_at": now_iso}
+
     if len(cache) > _MESSAGE_CACHE_LIMIT:
         oldest_key = next(iter(cache))
         del cache[oldest_key]
 
+    # Phase A1: Dual-write to disk
+    try:
+        from server.dependencies.session import get_session_manager
+        sm = get_session_manager()
+        sm.save_msg_cache(chat_id, cache)
+    except Exception:
+        pass
+
+
 def _get_from_cache(chat_id: str, msg_id: str) -> dict:
     """回傳 {"text": str, "file_path": str}"""
+    _ensure_cache_loaded(chat_id)
     return _message_cache.get(chat_id, {}).get(msg_id, {"text": None, "file_path": None})
 
 _redis_client = None
@@ -374,32 +641,198 @@ def _acquire_session_lock(session_id: str):
         if local_lock:
             local_lock.release()
 
+def _to_line_id(chat_id: str) -> str:
+    """將內部 chat_id 轉換為 LINE 原生 ID（去除前綴）。
+    "line_group_C..." → "C..."
+    "line_room_R..."  → "R..."
+    "line_U..."       → "U..."
+    其他              → 原值
+    """
+    if chat_id.startswith("line_group_"):
+        return chat_id[len("line_group_"):]
+    if chat_id.startswith("line_room_"):
+        return chat_id[len("line_room_"):]
+    if chat_id.startswith("line_"):
+        return chat_id[len("line_"):]
+    return chat_id
+
+
 def _send_loading_animation(line_api, chat_id: str, seconds: int = 20):
-    """呼叫 LINE Loading Animation API (使用官方 SDK)。可多次呼叫以延長動畫。"""
+    """呼叫 LINE Loading Animation API (使用官方 SDK)。可多次呼叫以延長動畫。
+    群組/房間不支援官方 loading animation，改為推送文字提示。
+    """
     from linebot.v3.messaging import ShowLoadingAnimationRequest
 
     try:
-        # Note: LINE ShowLoadingAnimation only supports userId (Individual Chat).
-        # It returns 400 Bad Request for groupId or roomId.
-        if chat_id.startswith("U"):
-            req = ShowLoadingAnimationRequest(chatId=chat_id, loadingSeconds=min(seconds, 60))
+        _line_id = _to_line_id(chat_id)
+        if _line_id.startswith("U"):
+            req = ShowLoadingAnimationRequest(chatId=_line_id, loadingSeconds=min(seconds, 60))
             line_api.show_loading_animation(req)
             logger.info(f"[LINE] Loading animation started for chat={chat_id} ({seconds}s)")
+        elif _line_id.startswith(("C", "R")):
+            # 群組/房間：LINE API 不支援 loading animation，推送文字替代（60s 去重）
+            import time as _time
+            _now = _time.time()
+            _last_sent = _group_loading_sent.get(chat_id, 0)
+            if _now - _last_sent >= 60:
+                _send_status_push(line_api, chat_id, "⏳ 處理中...")
+                _group_loading_sent[chat_id] = _now
+                logger.info(f"[LINE] Sent text loading indicator for group/room chat={chat_id}")
+            else:
+                logger.debug(f"[LINE] Skipping duplicate loading text for group chat={chat_id} (cooldown)")
         else:
-            logger.info(f"[LINE] Skipping loading animation for non-user chat={chat_id}")
+            logger.info(f"[LINE] Skipping loading animation for unrecognized chat={chat_id}")
     except Exception as e:
         logger.warning(f"[LINE] Exception starting loading animation: {e}")
 
 
 def _send_status_push(line_api, chat_id: str, text: str):
-    """推送中間狀態訊息給使用者（不佔用 reply_token）。"""
+    """推送中間狀態訊息給使用者（不佔用 reply_token）。支援長訊息自動分段。
+
+    NOTE: push_message 接受 userId ("U...")、groupId ("C...")、roomId ("R...")。
+    我們內部的 chat_id 可能是 "line_U..." / "line_group_..." / "line_room_..."，
+    因此需要轉成 LINE 原生 ID。
+    """
     try:
+        # Normalize internal ids to LINE native ids
+        to_id = chat_id
+        if to_id.startswith("line_group_"):
+            to_id = to_id[len("line_group_"):]
+        elif to_id.startswith("line_room_"):
+            to_id = to_id[len("line_room_"):]
+        elif to_id.startswith("line_"):
+            to_id = to_id[len("line_"):]
+
+        # Validate: must be a LINE native ID (U=user, C=group, R=room)
+        if not to_id or to_id[0] not in ("U", "C", "R"):
+            logger.info(f"[LINE] Skipping status push for unrecognized chat_id={chat_id}")
+            return
+
         from linebot.v3.messaging import TextMessage, PushMessageRequest
-        line_api.push_message(
-            PushMessageRequest(to=chat_id, messages=[TextMessage(text=text)])
-        )
+        _MAX = 4800  # LINE limit is 5000, leave margin
+        if len(text) <= _MAX:
+            line_api.push_message(
+                PushMessageRequest(to=to_id, messages=[TextMessage(text=text)])
+            )
+        else:
+            # Split into chunks at line boundaries
+            chunks = []
+            current = ""
+            for line in text.split("\n"):
+                if len(current) + len(line) + 1 > _MAX:
+                    if current:
+                        chunks.append(current)
+                    current = line
+                else:
+                    current = current + "\n" + line if current else line
+            if current:
+                chunks.append(current)
+            for chunk in chunks:
+                line_api.push_message(
+                    PushMessageRequest(to=to_id, messages=[TextMessage(text=chunk)])
+                )
     except Exception as e:
         logger.warning(f"[LINE] Status push failed: {e}")
+
+
+# ── Server-side File Content Extraction ───────────────────────────────────────
+
+def _extract_file_content(file_path: str) -> tuple:
+    """
+    伺服器端預提取文件全文，讓 LLM 直接進行語意分析。
+    支援多重 fallback：pdfplumber → pypdf、python-docx → docx2txt
+    Returns: (full_text: str, error_message: str | None)
+    """
+    lower = file_path.lower()
+    try:
+        if lower.endswith('.docx'):
+            text = _extract_docx(file_path)
+        elif lower.endswith('.pdf'):
+            text = _extract_pdf(file_path)
+        elif lower.endswith(('.xlsx', '.xls')):
+            import pandas as pd
+            df = pd.read_excel(file_path)
+            text = df.to_markdown(index=False)
+        elif lower.endswith('.csv'):
+            import pandas as pd
+            df = pd.read_csv(file_path)
+            text = df.to_markdown(index=False)
+        else:
+            # .txt, .md, .log, .json, .py, .js, .xml, etc.
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        return text.strip(), None
+    except Exception as e:
+        logger.error(f"[LINE] File content extraction failed: {file_path} → {e}")
+        return "", str(e)
+
+
+def _extract_pdf(file_path: str) -> str:
+    """PDF 文字提取，依序嘗試 pdfplumber → pypdf"""
+    # 優先使用 pdfplumber（表格 / 複雜版面效果最佳）
+    try:
+        import pdfplumber
+        with pdfplumber.open(file_path) as pdf:
+            text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        if text.strip():
+            logger.info("[LINE] PDF extracted via pdfplumber")
+            return text
+    except ImportError:
+        logger.warning("[LINE] pdfplumber not installed, falling back to pypdf")
+    except Exception as e:
+        logger.warning(f"[LINE] pdfplumber failed ({e}), falling back to pypdf")
+
+    # Fallback: pypdf（requirements.txt 中已列出）
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(file_path)
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        if text.strip():
+            logger.info("[LINE] PDF extracted via pypdf")
+            return text
+    except ImportError:
+        logger.warning("[LINE] pypdf not installed either")
+    except Exception as e:
+        logger.warning(f"[LINE] pypdf also failed: {e}")
+
+    raise RuntimeError("無法提取 PDF 內容：請確認伺服器已安裝 pdfplumber 或 pypdf")
+
+
+def _extract_docx(file_path: str) -> str:
+    """DOCX 文字提取，依序嘗試 python-docx → docx2txt"""
+    # 優先使用 python-docx（結構化段落提取）
+    try:
+        from docx import Document
+        doc = Document(file_path)
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        # 同時提取表格內容
+        for table in doc.tables:
+            for row in table.rows:
+                row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                if row_text:
+                    paragraphs.append(row_text)
+        text = "\n".join(paragraphs)
+        if text.strip():
+            logger.info("[LINE] DOCX extracted via python-docx")
+            return text
+    except ImportError:
+        logger.warning("[LINE] python-docx not installed, falling back to docx2txt")
+    except Exception as e:
+        logger.warning(f"[LINE] python-docx failed ({e}), falling back to docx2txt")
+
+    # Fallback: docx2txt（requirements.txt 中已列出）
+    try:
+        import docx2txt
+        text = docx2txt.process(file_path)
+        if text and text.strip():
+            logger.info("[LINE] DOCX extracted via docx2txt")
+            return text
+    except ImportError:
+        logger.warning("[LINE] docx2txt not installed either")
+    except Exception as e:
+        logger.warning(f"[LINE] docx2txt also failed: {e}")
+
+    raise RuntimeError("無法提取 DOCX 內容：請確認伺服器已安裝 python-docx 或 docx2txt")
 
 
 # ── Background Processing Function ────────────────────────────────────────────
@@ -475,6 +908,224 @@ def _download_sticker_image(sticker_id: str, uploads_dir: str, resource_type: st
     return None
 
 
+# ── Phase 8: Human-in-the-Loop — Pending State Handler ────────────────────────
+
+def _handle_pending_state(
+    line_api,
+    chat_id: str,
+    session_id: str,
+    user_text: str,
+) -> Optional[str]:
+    """
+    檢查聊天是否有待確認的 pending state（approval 或 choice）。
+    若使用者回覆的是確認/取消/選擇指令，處理 pending 操作並回傳回覆文字。
+    若無 pending state 或使用者輸入不是確認指令，回傳 None（繼續正常流程）。
+
+    Returns:
+        str   → 已處理，回傳此文字給使用者
+        None  → 無 pending 或非確認指令，繼續正常訊息處理
+    """
+    from server.core.pending_state import (
+        PendingStateManager, parse_confirmation, parse_choice,
+    )
+    from main import PROJECT_ROOT
+
+    pending_mgr = PendingStateManager(str(PROJECT_ROOT / "workspace" / "sessions"))
+    pending = pending_mgr.get_pending(chat_id)
+
+    if pending is None:
+        return None  # 無待確認 → 正常流程
+
+    pending_type = pending.get("type", "approval")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Type: "choice" — AI 提議了 A/B/C 方案，等使用者選擇
+    # ══════════════════════════════════════════════════════════════════════
+    if pending_type == "choice":
+        valid_keys = [opt["key"] for opt in pending.get("options", [])]
+        selected = parse_choice(user_text, valid_keys)
+
+        if selected is None:
+            # 使用者輸入不像選項 → 也檢查是否是取消
+            confirmation = parse_confirmation(user_text)
+            if confirmation == "reject":
+                pending_mgr.clear_pending(chat_id)
+                logger.info(f"[LINE HitL] User cancelled choice for chat={chat_id}")
+                return "✅ 已取消方案選擇，有什麼需要可以繼續說！"
+            # 不是選項也不是取消 → 清除 pending，視為新訊息
+            pending_mgr.clear_pending(chat_id)
+            logger.info(f"[LINE HitL] Choice pending cleared: unrelated input for chat={chat_id}")
+            return None
+
+        # 使用者選擇了某個方案
+        chosen_option = next(
+            (opt for opt in pending.get("options", []) if opt["key"] == selected),
+            None,
+        )
+        chosen_text = chosen_option["text"] if chosen_option else selected
+        original_query = pending.get("original_query", "")
+        preamble = pending.get("preamble", "")
+
+        logger.info(f"[LINE HitL] User selected choice={selected} ({chosen_text}) for chat={chat_id}")
+        pending_mgr.clear_pending(chat_id)
+
+        # 觸發 loading 動畫
+        _send_loading_animation(line_api, chat_id, 60)
+
+        try:
+            from server.dependencies.uma import get_uma_instance
+            from server.adapters.openai_adapter import OpenAIAdapter
+            from server.dependencies.session import get_session_manager
+            from server.services.runtime import get_universal_system_prompt
+
+            _session_mgr = get_session_manager()
+            _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+            _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+
+            uma = get_uma_instance()
+            adapter = OpenAIAdapter(uma=uma)
+            if not adapter.is_available:
+                return f"⚠️ AI 服務暫時無法使用。你選擇了方案 {selected}：{chosen_text}"
+
+            # 解析選項文字中的格式關鍵字，生成明確的格式指令
+            _format_hint_map = {
+                "pdf": "PDF (.pdf)",
+                "word": "Word DOCX (.docx)",
+                "docx": "Word DOCX (.docx)",
+                "markdown": "Markdown (.md)",
+                "md": "Markdown (.md)",
+                "txt": "純文字 (.txt)",
+                "excel": "Excel (.xlsx)",
+                "xlsx": "Excel (.xlsx)",
+                "csv": "CSV (.csv)",
+                "pptx": "PowerPoint (.pptx)",
+            }
+            format_hint = ""
+            chosen_lower = chosen_text.lower()
+            for fmt_key, fmt_label in _format_hint_map.items():
+                if fmt_key in chosen_lower:
+                    format_hint = f"\n輸出檔案格式：{fmt_label}"
+                    break
+
+            # 注入使用者選擇作為 context，讓 LLM 根據選擇執行
+            choice_msg = (
+                f"[系統通知：使用者已從提議的方案中選擇了「{selected}. {chosen_text}」。\n"
+                f"原始需求：{original_query}{format_hint}\n\n"
+                f"請立即按照方案 {selected} 執行，使用 mcp-python-executor 工具建立檔案。"
+                f"不要再次詢問或提議其他方案，直接行動並回覆結果。]"
+            )
+            _session_mgr.append_message(session_id, "user", choice_msg)
+
+            history = _session_mgr.get_or_create_conversation(session_id)
+            sys_msgs = [m for m in history if m.get("role") == "system"]
+            rec_msgs = [m for m in history if m.get("role") != "system"][-20:]
+
+            result_gen = adapter.chat(
+                messages=sys_msgs + rec_msgs,
+                user_query=choice_msg,
+                session_id=session_id,
+                tools_enabled=True,
+            )
+
+            final_reply = _collect_generator(
+                result_gen,
+                line_api=line_api,
+                chat_id=chat_id,
+                session_id=session_id,
+            )
+            return final_reply
+
+        except Exception as e:
+            logger.error(f"[LINE HitL] Choice execution failed: {e}", exc_info=True)
+            return f"❌ 方案 {selected} 執行失敗：{e}"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # Type: "approval" — 工具需要確認才能執行
+    # ══════════════════════════════════════════════════════════════════════
+    # 解析使用者回覆
+    confirmation = parse_confirmation(user_text)
+
+    if confirmation is None:
+        # 使用者輸入不像確認/取消 → 清除過期 state，進入正常流程
+        # 這讓使用者可以「忽略」待確認而繼續聊天
+        pending_mgr.clear_pending(chat_id)
+        logger.info(f"[LINE HitL] Pending cleared: user sent unrelated message for chat={chat_id}")
+        return None
+
+    # ── 使用者選擇「取消」 ──
+    if confirmation == "reject":
+        tool_name = pending.get("tool_name", "未知工具")
+        pending_mgr.clear_pending(chat_id)
+        logger.info(f"[LINE HitL] User rejected pending tool={tool_name} for chat={chat_id}")
+        return f"✅ 已取消 `{tool_name}` 的執行。有其他需要可以繼續告訴我！"
+
+    # ── 使用者選擇「確認」→ 執行待確認的工具 ──
+    tool_name = pending.get("tool_name", "")
+    tool_args = pending.get("tool_args", {})
+    logger.info(f"[LINE HitL] User approved pending tool={tool_name} for chat={chat_id}")
+
+    # 清除 pending（無論執行成功與否都不應重複執行）
+    pending_mgr.clear_pending(chat_id)
+
+    # 觸發 loading 動畫
+    _send_loading_animation(line_api, chat_id, 60)
+
+    try:
+        from server.dependencies.uma import get_uma_instance
+        from server.adapters.openai_adapter import OpenAIAdapter
+        from server.dependencies.session import get_session_manager
+        from server.services.runtime import get_universal_system_prompt
+        import json
+
+        uma = get_uma_instance()
+
+        # 1. 執行被暫停的工具
+        logger.info(f"[LINE HitL] Executing approved tool: {tool_name}({tool_args})")
+        result = uma.execute_tool_call(tool_name, tool_args)
+        result_text = json.dumps(result, ensure_ascii=False)
+        logger.info(f"[LINE HitL] Tool result: {result_text[:200]}...")
+
+        # 2. 把工具結果餵給 LLM，讓 AI 用自然語言回覆
+        _session_mgr = get_session_manager()
+        _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+        _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line", language="自動偵測"))
+
+        adapter = OpenAIAdapter(uma=uma)
+        if not adapter.is_available:
+            return f"⚠️ 工具 `{tool_name}` 已執行，但 AI 服務暫時無法生成回覆。\n\n原始結果：\n{result_text[:500]}"
+
+        # 注入工具結果作為 assistant context
+        tool_result_msg = (
+            f"[系統通知：使用者已確認執行工具 `{tool_name}`。以下是執行結果：]\n\n"
+            f"{result_text}\n\n"
+            f"[請根據工具結果，用自然語言回覆使用者。不要說「使用者確認了」之類的流程說明。]"
+        )
+        _session_mgr.append_message(session_id, "user", tool_result_msg)
+
+        history = _session_mgr.get_or_create_conversation(session_id)
+        sys_msgs = [m for m in history if m.get("role") == "system"]
+        rec_msgs = [m for m in history if m.get("role") != "system"][-20:]
+
+        result_gen = adapter.chat(
+            messages=sys_msgs + rec_msgs,
+            user_query=tool_result_msg,
+            session_id=session_id,
+            tools_enabled=True,  # Allow follow-up tool calls if needed
+        )
+
+        final_reply = _collect_generator(
+            result_gen,
+            line_api=line_api,
+            chat_id=chat_id,
+            session_id=session_id,
+        )
+        return final_reply
+
+    except Exception as e:
+        logger.error(f"[LINE HitL] Tool execution failed: {e}", exc_info=True)
+        return f"❌ 工具 `{tool_name}` 執行失敗：{e}"
+
+
 def _process_line_message(
     line_api,
     line_api_blob,
@@ -518,15 +1169,164 @@ def _process_line_message(
 
         # 0.5 顯示 loading 動畫 (安撫使用者等待焦慮)，必須傳入 chat_id
         #     使用 60 秒以涵蓋檔案下載 + Tool Calling 耗時
-        _send_loading_animation(line_api, chat_id, 60)
+        #     just_cache 模式下不顯示（群組靜默下載快取）
+        if not just_cache:
+            _send_loading_animation(line_api, chat_id, 60)
 
         try:
             from linebot.v3.webhooks import TextMessageContent, ImageMessageContent, FileMessageContent, StickerMessageContent
             import os
 
+            # ── Phase 8: Human-in-the-Loop — Pending State Check ──────────────
+            # 在處理新訊息前，先檢查此聊天是否有待確認的 pending state。
+            # 若使用者回覆的是「確認」或「取消」，直接處理 pending 操作。
+            if isinstance(event_msg, TextMessageContent) and extracted_text:
+                pending_reply = _handle_pending_state(
+                    line_api, chat_id, session_id, extracted_text
+                )
+                if pending_reply is not None:
+                    # Pending state was handled — send reply and return
+                    if len(pending_reply) > _LINE_MAX_CHARS:
+                        pending_reply = pending_reply[:_LINE_MAX_CHARS] + "\n\n…（回覆過長，已截斷）"
+                    _session_mgr.append_message(session_id, "user", extracted_text)
+                    _session_mgr.append_message(session_id, "assistant", pending_reply)
+                    _send_line_reply(line_api, reply_token, chat_id, pending_reply)
+                    return
+
+                # ── Workflow Pending Confirmation Check ──────────────────
+                if extracted_text.strip() in ("確認", "確定", "執行", "是", "yes", "confirm"):
+                    try:
+                        _pending_wf = _session_mgr.get_metadata(session_id, "pending_workflow")
+                        if _pending_wf:
+                            _session_mgr.set_metadata(session_id, "pending_workflow", None)
+                            import asyncio
+                            from server.services.workflow_executor import get_workflow_executor
+                            _wf_exec = get_workflow_executor()
+                            _wf_uc = None
+                            try:
+                                _wf_uc_p = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
+                                if _wf_uc_p.exists():
+                                    _wf_uc = json.loads(_wf_uc_p.read_text(encoding="utf-8"))
+                            except Exception:
+                                pass
+                            _wf_uc = _wf_uc or {}
+                            _wf_uc["session_id"] = session_id
+                            _wf_result = asyncio.get_event_loop().run_until_complete(
+                                _wf_exec.execute(
+                                    workflow=_pending_wf["workflow"],
+                                    user_input=_pending_wf.get("user_input", ""),
+                                    user_context=_wf_uc,
+                                )
+                            )
+                            _wf_reply = _wf_result.get("final_output", "")
+                            if not _wf_reply:
+                                _wf_reply = f"工作流執行完成（{_wf_result.get('blocks_executed', 0)} 個節點）"
+                            _session_mgr.append_message(session_id, "user", extracted_text)
+                            _session_mgr.append_message(session_id, "assistant", _wf_reply)
+                            _send_line_reply(line_api, reply_token, chat_id, _wf_reply)
+                            logger.info(f"[LINE WF] Pending workflow executed, reply sent")
+                            return
+                    except Exception as _wf_pe:
+                        logger.warning(f"[LINE WF] Pending workflow execution failed: {_wf_pe}")
+
             attached_file_path = quoted_file_path
+            _chunked_data = None  # Will be set if file exceeds 15,000 chars
             if isinstance(event_msg, TextMessageContent):
                 user_input = extracted_text
+
+                # ── Phase C1: Text Correction Signal Detection ─────────────
+                try:
+                    from server.services.profile_updater import ProfileUpdater
+                    _pu = ProfileUpdater(str(Path(os.getcwd())))
+                    _text_signal = _pu.classify_text_signal(extracted_text)
+                    if _text_signal:
+                        # Attach context: what was the previous assistant message?
+                        _prev_history = _session_mgr.get_or_create_conversation(session_id)
+                        _last_asst = ""
+                        for _m in reversed(_prev_history):
+                            if _m.get("role") == "assistant":
+                                _last_asst = str(_m.get("content", ""))[:150]
+                                break
+                        _text_signal["context_preview"] = _last_asst
+                        _pu.append_signal(session_id, _text_signal)
+                        logger.info(f"[LINE C1] Text signal recorded: {_text_signal['signal']} for {session_id}")
+                except Exception as _c1e:
+                    logger.debug(f"[LINE C1] Text signal detection failed: {_c1e}")
+
+                # ── LINE「執行 {name}」Command Detection ─────────────────
+                # If user says "執行 XXX", find workflow by name and run it directly
+                _exec_match = re.match(r'^(?:執行|run)\s+(.+)$', extracted_text.strip(), re.IGNORECASE)
+                if _exec_match:
+                    _wf_name_query = _exec_match.group(1).strip()
+                    try:
+                        from server.services.workflow_matcher import get_workflow_matcher
+                        _wf_m = get_workflow_matcher()
+                        _all_wfs = _wf_m._scan_workflows()
+                        # Find by name (exact or partial match)
+                        _target_wf = None
+                        for _wf in _all_wfs:
+                            if _wf.get("name", "").lower() == _wf_name_query.lower():
+                                _target_wf = _wf
+                                break
+                        if not _target_wf:
+                            for _wf in _all_wfs:
+                                if _wf_name_query.lower() in _wf.get("name", "").lower():
+                                    _target_wf = _wf
+                                    break
+                        if _target_wf:
+                            import asyncio
+                            from server.services.workflow_executor import get_workflow_executor
+                            _wf_exec = get_workflow_executor()
+                            _wf_result = asyncio.get_event_loop().run_until_complete(
+                                _wf_exec.execute(
+                                    workflow=_target_wf,
+                                    user_input=_wf_name_query,
+                                    user_context={"session_id": session_id},
+                                )
+                            )
+                            _wf_reply = _wf_result.get("final_output", "")
+                            if not _wf_reply:
+                                _wf_reply = f"工作流「{_target_wf.get('name', '')}」執行完成"
+                            _session_mgr.append_message(session_id, "user", extracted_text)
+                            _session_mgr.append_message(session_id, "assistant", _wf_reply)
+                            _send_line_reply(line_api, reply_token, chat_id, _wf_reply)
+                            logger.info(f"[LINE WF] '執行 {_wf_name_query}' → {_target_wf['id']} executed")
+                            # Audit log
+                            try:
+                                from server.services.workflow_audit import log_workflow_execution
+                                log_workflow_execution(_target_wf["id"], _target_wf.get("name", ""), session_id, _wf_result, trigger="line_command", user_input=extracted_text)
+                            except Exception:
+                                pass
+                            return
+                        else:
+                            # No workflow found by that name, fall through to normal LLM
+                            logger.info(f"[LINE WF] '執行 {_wf_name_query}' — no matching workflow found, fallback to LLM")
+                    except Exception as _wf_cmd_err:
+                        logger.warning(f"[LINE WF] Execute command failed: {_wf_cmd_err}")
+
+                # ── Phase 2: Smart Clarification Injection ────────────────
+                # 偵測「建立檔案/報告」意圖 → 注入釐清指令讓 LLM 語意分析
+                # 缺少的資訊（地區、範圍、格式等），LLM 會一次問完
+                if _detect_file_creation_intent(extracted_text):
+                    user_input = (
+                        f"[系統指令：使用者想要產出檔案或報告。在動手之前，請先分析需求是否完整。\n"
+                        f"需要確認的關鍵資訊：\n"
+                        f"- 主題的具體細節（如「天氣報告」→ 哪個地區？哪個時間範圍？）\n"
+                        f"- 想要什麼檔案格式\n"
+                        f"- 內容範圍與深度（簡要摘要 vs 詳細分析）\n\n"
+                        f"規則：\n"
+                        f"1. 如果缺少重要資訊，用簡潔友善的口吻「一次問完」所有問題\n"
+                        f"2. 如果資訊已經完整明確，直接開始執行，不要多問\n"
+                        f"3. 問問題時不要使用任何工具，純文字回覆即可\n"
+                        f"4. 問題格式範例：「想先確認幾個細節：1) 哪個地區？2) 什麼格式？3) 要多詳細？」\n"
+                        f"5. 嚴禁使用 [CHOICES] 格式，用自然語言編號列表即可]\n\n"
+                        f"{extracted_text}"
+                    )
+                    logger.info(
+                        f"[LINE HitL] Smart clarification injected for chat={chat_id}, "
+                        f"query='{extracted_text[:50]}'"
+                    )
+
                 # 如果有引用檔案，注入特別提示
                 if attached_file_path:
                     fname = os.path.basename(attached_file_path)
@@ -551,12 +1351,27 @@ def _process_line_message(
                     cache_text += f" {sticker_text}"
                 _add_to_cache(chat_id, event_msg.id, text=cache_text)
 
+                # ── Phase C1: Sticker Signal Collection ────────────────────
+                try:
+                    from server.services.profile_updater import ProfileUpdater
+                    _pu = ProfileUpdater(str(Path(os.getcwd())))
+                    _sticker_signal = _pu.classify_sticker_signal(
+                        sticker_keywords=sticker_keywords,
+                        sticker_text=sticker_text,
+                    )
+                    if _sticker_signal and _sticker_signal.get("signal") != "neutral":
+                        _pu.append_signal(session_id, _sticker_signal)
+                        logger.info(f"[LINE C1] Sticker signal: {_sticker_signal.get('signal')} for {session_id}")
+                except Exception as _c1se:
+                    logger.debug(f"[LINE C1] Sticker signal detection failed: {_c1se}")
+
                 if just_cache:
                     logger.info(f"[LINE BG] Just cached sticker: session={session_id}, sticker_id={sticker_id}")
                     return
 
                 # 嘗試下載貼圖圖片，供 Vision 模型辨識表情、動作與文字
-                uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads")
+                uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", _to_line_id(chat_id))
+                os.makedirs(uploads_dir, exist_ok=True)
                 sticker_image = _download_sticker_image(sticker_id, uploads_dir, resource_type)
                 if sticker_image:
                     attached_file_path = sticker_image
@@ -602,7 +1417,7 @@ def _process_line_message(
                         except concurrent.futures.TimeoutError:
                             raise TimeoutError(f"File download timed out after 30s (msg_id={event_msg.id})")
 
-                    uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads")
+                    uploads_dir = os.path.join(os.getcwd(), "Agent_workspace", "line_uploads", _to_line_id(chat_id))
                     os.makedirs(uploads_dir, exist_ok=True)
 
                     if isinstance(event_msg, ImageMessageContent):
@@ -623,30 +1438,38 @@ def _process_line_message(
                             attached_file_path = _preprocess_image(attached_file_path)
                             user_input = f"[系統通知：使用者傳送了一張高畫質圖片 {filename}，已轉為 {os.path.basename(attached_file_path)} 供您檢視]"
                         else:
-                            abs_path = os.path.abspath(attached_file_path)
-                            lower_name = filename.lower()
+                            # Server-side extraction: extract text content before sending to LLM
+                            extracted_text, extract_err = _extract_file_content(attached_file_path)
 
-                            # All document types: LLM reads content via python-executor then analyzes semantically
-                            # Supported: .docx, .txt, .md, .pdf, .xlsx, .xls, .csv, .json, .log, .py, .js, .xml
-                            if lower_name.endswith(('.docx',)):
-                                lib_hint = "python-docx"
-                            elif lower_name.endswith(('.pdf',)):
-                                lib_hint = "pdfplumber"
-                            elif lower_name.endswith(('.xlsx', '.xls')):
-                                lib_hint = "openpyxl 或 pandas"
-                            elif lower_name.endswith(('.csv',)):
-                                lib_hint = "pandas (pd.read_csv)"
+                            if extract_err:
+                                user_input = (
+                                    f"[系統通知：使用者上傳了文件 {filename}，但伺服器無法提取內容。\n"
+                                    f"錯誤訊息：{extract_err}\n"
+                                    f"請告知使用者檔案可能已損壞、加密或格式不支援。]"
+                                )
+                            elif len(extracted_text) <= 15000:
+                                # Single-pass mode: full content fits in one message
+                                user_input = (
+                                    f"[系統通知：使用者上傳了文件 {filename}。以下是完整內容：]\n\n"
+                                    f"{extracted_text}\n\n"
+                                    f"[請根據以上文件內容，直接進行分析、總結或處理使用者的需求。]"
+                                )
+                                # Store original file path for downstream skills (e.g. meeting-analyzer)
+                                # Use the already-saved line_uploads file directly — no temp copy needed.
+                                _session_mgr.set_metadata(session_id, "last_original_file", attached_file_path)
+                                _session_mgr.set_metadata(session_id, "last_original_filename", filename)
+                                # Extract date from filename for skills that need a base date
+                                _fname_date = re.search(r'(\d{8})', filename)
+                                if _fname_date:
+                                    _session_mgr.set_metadata(session_id, "last_original_file_date", _fname_date.group(1))
                             else:
-                                lib_hint = "open() with utf-8 encoding"
-
-                            user_input = (
-                                f"[系統通知：使用者上傳了文件 {filename}。檔案絕對路徑：{abs_path}。\n\n"
-                                f"【強制執行】你必須立即使用 Tool Call 呼叫 `mcp-python-executor` 工具，"
-                                f"傳入使用 {lib_hint} 讀取該檔案的 Python 程式碼（用 print() 輸出內容）。\n"
-                                f"嚴禁只在文字中展示程式碼而不呼叫工具。\n"
-                                f"取得檔案內容後，根據你的語意理解能力直接分析、總結或處理。\n"
-                                f"環境已預裝 python-docx, pdfplumber, pandas, openpyxl, chardet。]"
-                            )
+                                # Chunked mode: will be handled after session init
+                                # Store chunks in a temporary variable for later processing
+                                _chunked_data = {
+                                    "filename": filename,
+                                    "chunks": [extracted_text[i:i+15000] for i in range(0, len(extracted_text), 15000)]
+                                }
+                                user_input = None  # Will be set during chunked processing
 
                     # Re-trigger loading animation after download (timer may have expired)
                     _send_loading_animation(line_api, chat_id, 60)
@@ -668,50 +1491,481 @@ def _process_line_message(
             # 注意：為了解決日期幻覺，偵測跨日對話並強制重置 OpenAI 狀態
             from datetime import datetime
             today_str = datetime.now().strftime("%Y-%m-%d")
-            
+
             # Check for new day or new session in tracker
             if _session_days.get(session_id) != today_str:
                 logger.info(f"[LINE BG] New day/session detected for {session_id} ({today_str}). Resetting OpenAI state.")
                 _session_mgr.reset_openai_state(session_id)
                 _session_days[session_id] = today_str
 
-            _session_mgr.get_or_create_conversation(session_id, get_universal_system_prompt(platform="line"))
-            _session_mgr._update_system_prompt(session_id, get_universal_system_prompt(platform="line"))
-    
-            # 2. 追加使用者訊息至 Session
-            _session_mgr.append_message(session_id, "user", user_input)
+            # ── Phase B1: Inject Profile into system prompt ─────────────────
+            _base_system_prompt = get_universal_system_prompt(platform="line", language="自動偵測")
+            try:
+                from server.services.profile_updater import ProfileUpdater
+                _profile_updater = ProfileUpdater(str(Path(os.getcwd())))
+                _profile_content = _profile_updater.get_profile(session_id)
+                if _profile_content:
+                    _base_system_prompt += (
+                        f"\n\n---\n"
+                        f"# 【當前對話使用者資料】\n"
+                        f"你現在正在與以下這位使用者對話。以下是他的身份與個人資料，"
+                        f"當使用者詢問「你認識我嗎」「知道我是誰嗎」等問題時，請直接根據此資料回答：\n\n"
+                        f"{_profile_content}"
+                    )
+            except Exception as _pe:
+                logger.debug(f"[LINE B1] Profile injection skipped: {_pe}")
 
-            # 3. 解析可能的指令前綴，動態切換模式
-            actual_input, execute_mode = _parse_command_prefix(user_input)
+            _session_mgr.get_or_create_conversation(session_id, _base_system_prompt)
+            _session_mgr._update_system_prompt(session_id, _base_system_prompt)
 
-            # 4. 初始化 Adapter（使用預設 model，可依需求選 Gemini/Claude）
+            # 1.5 Workflow-First Matching — check before LLM call to save tokens
+            if os.getenv("WF_FIRST_ENABLED", "1").strip() not in ("0", "false", "no"):
+                try:
+                    from server.services.workflow_matcher import get_workflow_matcher
+                    _wf_matcher = get_workflow_matcher()
+                    # Load user context for scope filtering
+                    _wf_user_ctx = None
+                    try:
+                        _wf_uc_path = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
+                        if _wf_uc_path.exists():
+                            _wf_user_ctx = json.loads(_wf_uc_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+                    _wf_match = _wf_matcher.match(user_input, user_context=_wf_user_ctx)
+                    if _wf_match:
+                        _wf_mode = _wf_match["workflow"].get("trigger_mode", "auto")
+                        logger.info(f"[LINE WF-First] Matched: {_wf_match['workflow_id']} "
+                                    f"(score={_wf_match['score']:.2f}, method={_wf_match['method']}, mode={_wf_mode})")
+                        if _wf_mode == "auto":
+                            import asyncio
+                            from server.services.workflow_executor import get_workflow_executor
+                            _wf_exec = get_workflow_executor()
+                            _wf_user_ctx_exec = _wf_user_ctx or {}
+                            _wf_user_ctx_exec["session_id"] = session_id
+                            _wf_result = asyncio.get_event_loop().run_until_complete(
+                                _wf_exec.execute(
+                                    workflow=_wf_match["workflow"],
+                                    user_input=user_input,
+                                    user_context=_wf_user_ctx_exec,
+                                )
+                            )
+                            _wf_reply = _wf_result.get("final_output", "")
+                            if not _wf_reply:
+                                _wf_reply = f"工作流「{_wf_match['workflow'].get('name', '')}」執行完成"
+                            _session_mgr.append_message(session_id, "user", user_input)
+                            _session_mgr.append_message(session_id, "assistant", _wf_reply)
+                            _send_line_reply(line_api, reply_token, chat_id, _wf_reply)
+                            logger.info(f"[LINE WF-First] Workflow executed, reply sent ({len(_wf_reply)} chars)")
+                            return
+                        elif _wf_mode == "confirm":
+                            _wf_name = _wf_match["workflow"].get("name", _wf_match["workflow_id"])
+                            _wf_confirm_msg = f"找到匹配的工作流「{_wf_name}」。\n\n回覆「執行」確認執行，或繼續提問。"
+                            _session_mgr.set_metadata(session_id, "pending_workflow", {
+                                "workflow_id": _wf_match["workflow_id"],
+                                "workflow": _wf_match["workflow"],
+                                "user_input": user_input,
+                            })
+                            _session_mgr.append_message(session_id, "user", user_input)
+                            _session_mgr.append_message(session_id, "assistant", _wf_confirm_msg)
+                            _send_line_reply(line_api, reply_token, chat_id, _wf_confirm_msg)
+                            logger.info(f"[LINE WF-First] Confirm mode, awaiting user response")
+                            return
+                except Exception as _wf_err:
+                    logger.warning(f"[LINE WF-First] Match check failed (fallback to LLM): {_wf_err}")
+
+            # 2. 初始化 Adapter（LLM-as-a-Router + Token 節省配置）
+            from server.services.model_router import (
+                route_model, apply_token_fallback,
+                get_model_chunk_summary, get_model_chunk_final,
+            )
             uma = get_uma_instance()
-            adapter = OpenAIAdapter(uma=uma)
+
+            # Create a lightweight OpenAI client for the router (reuse credentials)
+            _router_adapter = OpenAIAdapter(uma=uma)
+            _openai_client = _router_adapter.client  # share the authenticated client
+
+            # Route to optimal model tier based on task complexity
+            _has_file = (attached_file_path is not None) or (_chunked_data is not None)
+
+            # Extract recent history for context-aware routing
+            # (enables short confirmations like "好的" to re-route with conversation context)
+            _recent_history = []
+            try:
+                _history_for_ctx = _session_mgr.get_or_create_conversation(session_id)
+                # Last 5 non-system messages
+                _recent_history = [m for m in _history_for_ctx if m.get("role") != "system"][-5:]
+            except Exception:
+                pass
+
+            _routed_model, _routed_tier, _force_upgraded = route_model(
+                user_input=user_input or "",
+                openai_client=_openai_client,
+                has_file=_has_file,
+                is_chunked_final=False,
+                recent_history=_recent_history,
+            )
+
+            # Skill-aware model upgrade: if input strongly suggests a specific skill,
+            # check that skill's recommended_models and upgrade if needed
+            try:
+                from server.services.model_selector import select_model_for_skill, detect_provider
+                from server.adapters import select_relevant_tools
+                _all_tools = uma.get_tools_for_model("openai")
+                _input_lower = (user_input or "").lower()
+
+                # Quick skill detection from keywords
+                _likely_skill = None
+                _skill_keywords = {
+                    "mcp-groovenauts-meeting-analyst": ["groovenauts", "會議記錄", "會議紀錄", "日方會議"],
+                    "mcp-google-calendar": ["行程", "日曆", "calendar"],
+                    "mcp-web-search": ["搜尋", "新聞", "查詢"],
+                    "mcp-image-generator": ["畫", "圖片", "插圖"],
+                    "mcp-schedule-manager": ["排程", "推送", "提醒"],
+                    "mcp-gai-worksheet-facilitator": ["學習單", "worksheet", "GAI"],
+                }
+                for _sname, _kws in _skill_keywords.items():
+                    if any(kw in _input_lower for kw in _kws):
+                        _likely_skill = _sname
+                        break
+
+                if _likely_skill:
+                    _skill_info = uma.registry.get_skill(_likely_skill)
+                    if _skill_info:
+                        _skill_meta = _skill_info.get("metadata", {})
+                        # Check if skill has scripts (executable mode)
+                        _skill_path = _skill_info.get("path")
+                        if _skill_path:
+                            _skill_meta["_has_scripts"] = (_skill_path / "scripts" / "main.py").exists()
+                        _skill_rec_model = select_model_for_skill(
+                            _likely_skill,
+                            _skill_meta,
+                            user_default_model=_routed_model,
+                            estimated_input_tokens=len(user_input or "") // 3,
+                        )
+                        if _skill_rec_model != _routed_model:
+                            logger.info(f"[LINE Router] Skill-aware upgrade: {_routed_model} → {_skill_rec_model} (for {_likely_skill})")
+                            _routed_model = _skill_rec_model
+            except Exception as _mse:
+                logger.debug(f"[LINE Router] Skill-aware model check skipped: {_mse}")
+
+            adapter = OpenAIAdapter(uma=uma, model=_routed_model)
+            # Inject user_context for three-tier skill filtering
+            try:
+                _uc_path = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
+                if _uc_path.exists():
+                    adapter.user_context = json.loads(_uc_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+            # Tier-aware max_output_tokens:
+            # - nano/mini: 2048 節省 TPM（閒聊、單工具任務輸出短）
+            # - full/file : 8192 支援複雜任務
+            if _routed_tier in ("full", "file") or _routed_model in ("gpt-4.1", "gpt-4o"):
+                adapter.max_output_tokens = 8192
+            else:
+                adapter.max_output_tokens = 2048
+            logger.info(f"[LINE Router] Routed to model: {_routed_model} (tier={_routed_tier})")
+
+            # Inject stored original file context for skills that need full text
+            _stored_file = _session_mgr.get_metadata(session_id, "last_original_file")
+            if _stored_file and os.path.exists(_stored_file):
+                adapter._original_file_path = _stored_file
+            else:
+                adapter._original_file_path = None
+            # Inject filename-extracted date (e.g. "20260224" from "20260224 Meeting.txt")
+            adapter._original_file_date = _session_mgr.get_metadata(session_id, "last_original_file_date")
 
             if not adapter.is_available:
                 final_reply = "⚠️ AI 服務暫時無法使用，請確認 OPENAI_API_KEY 設定。"
             else:
-                # 擷取 System Prompt + 最近對話歷史
-                # truncation="auto" 已在 Adapter 層防護 context overflow，
-                # 此處放寬至 20 條訊息 (10 輪) 以提供更豐富的上下文
-                history = _session_mgr.get_or_create_conversation(session_id)
-                system_msgs = [m for m in history if m.get("role") == "system"]
-                recent_msgs = [m for m in history if m.get("role") != "system"][-20:]
-                truncated_history = system_msgs + recent_msgs
+                # ── Chunked Memory Processing ─────────────────────────────
+                # For large files: process chunks sequentially, LLM summarizes
+                # each chunk, then produces a final consolidated analysis.
+                if user_input is None and _chunked_data is not None:
+                    chunks = _chunked_data["chunks"]
+                    fname = _chunked_data["filename"]
+                    total = len(chunks)
+                    logger.info(f"[LINE BG] Chunked mode: {fname} → {total} chunks")
 
-                # 傳入截斷的 history 副本，避免 generator 消費途中 list 被外部修改
-                # execute_mode=False (/chat 模式) 時跳過 Tool Schema 注入，大幅節省 token
+                    # ── Per-stage model routing for chunks ──
+                    # Intermediate summaries: use mini (cheap, 200K TPM, task is simple)
+                    # Final synthesis: use full model (needs deep reasoning)
+                    _chunk_summary_model = get_model_chunk_summary()
+                    _chunk_final_model = get_model_chunk_final()
+                    chunk_adapter = OpenAIAdapter(uma=uma, model=_chunk_summary_model)
+                    chunk_adapter.max_output_tokens = 1024  # Summaries are short
+                    logger.info(f"[LINE Router] Chunk summary model: {_chunk_summary_model}, final: {_chunk_final_model}")
+
+                    # Accumulate ALL intermediate summaries in memory so the final
+                    # synthesis call can receive the complete picture regardless of
+                    # how aggressively the session-history token trimmer prunes old messages.
+                    all_summaries: list[str] = []
+
+                    for idx, chunk in enumerate(chunks):
+                        part = idx + 1
+                        if part < total:
+                            # Intermediate chunk: ask LLM for concise summary
+                            chunk_msg = (
+                                f"[文件分段 {part}/{total}] 以下是 {fname} 的第 {part} 段內容：\n\n"
+                                f"{chunk}\n\n"
+                                f"[指令：閱讀並記住此段重點，以 500 字以內的摘要回覆。"
+                                f"不要做最終分析，後續還有更多段落。]"
+                            )
+                            # Store only a short header in session — NOT the full 15000-char chunk
+                            _session_mgr.append_message(session_id, "user", f"[文件分段 {part}/{total}：{fname}]")
+
+                            history = _session_mgr.get_or_create_conversation(session_id)
+                            sys_msgs = [m for m in history if m.get("role") == "system"]
+                            # Pass only system prompt for chunk summarisation — no prior history
+                            # needed and this keeps each chunk call lean and independent.
+                            result_gen = chunk_adapter.chat(
+                                messages=sys_msgs + [{"role": "user", "content": chunk_msg}],
+                                user_query=chunk_msg,
+                                session_id=session_id,
+                                tools_enabled=False  # No tool calls for intermediate chunks
+                            )
+                            summary = _collect_generator(result_gen)
+                            # Keep in session for conversational continuity
+                            _session_mgr.append_message(session_id, "assistant", summary)
+                            # Also keep in local accumulator — unaffected by token trimming
+                            all_summaries.append(summary)
+                            logger.info(f"[LINE BG] Chunk {part}/{total} summarized ({len(summary)} chars)")
+                            _send_loading_animation(line_api, chat_id, 60)
+                        else:
+                            # Final chunk: switch to full model for deep synthesis
+                            adapter = OpenAIAdapter(uma=uma, model=_chunk_final_model)
+                            adapter.max_output_tokens = 2048
+                            logger.info(f"[LINE Router] Switching to final model: {_chunk_final_model}")
+
+                            # Build synthesis context from ALL accumulated summaries
+                            # so the LLM receives the complete picture even if session history
+                            # was trimmed by the token-aware budget below.
+                            warning = ""
+                            if total > 6:
+                                warning = "\n（注意：文件較長，部分內容為重點摘錄，細節可能有遺漏。）"
+
+                            if all_summaries:
+                                # Multi-chunk file: inject every summary explicitly
+                                # NOTE: Hide chunking internals — LLM must treat this as ONE complete file.
+                                prior_context = "\n\n---\n\n".join(all_summaries)
+                                user_input = (
+                                    f"[系統通知：使用者上傳了文件《{fname}》。以下是系統預處理後的完整內容。"
+                                    f"對使用者而言這就是一個檔案，禁止提及「分段」「段落數」「第N段」「摘要」等內部處理細節。]\n\n"
+                                    f"【文件內容】\n{prior_context}\n\n"
+                                    f"【文件末段原文】\n{chunk}\n\n"
+                                    f"[指令：根據以上文件完整內容，詢問使用者想要如何處理這份文件。{warning}]"
+                                )
+                            else:
+                                # Single-chunk fallback (total == 1)
+                                user_input = (
+                                    f"[系統通知：使用者上傳了文件《{fname}》。以下是完整內容。]\n\n"
+                                    f"{chunk}\n\n"
+                                    f"[指令：根據以上文件內容，詢問使用者想要如何處理這份文件。{warning}]"
+                                )
+
+                    # ── Store original file path for downstream skills ────────
+                    # Use the already-saved line_uploads file (attached_file_path) directly.
+                    # No temp copy needed — the file is already on disk and won't be deleted.
+                    if attached_file_path and os.path.exists(attached_file_path):
+                        _session_mgr.set_metadata(session_id, "last_original_file", attached_file_path)
+                        _session_mgr.set_metadata(session_id, "last_original_filename", fname)
+                        # Extract date from filename (e.g. "20260224 Groovenauts..." → "20260224")
+                        _fname_date = re.search(r'(\d{8})', fname)
+                        if _fname_date:
+                            _session_mgr.set_metadata(session_id, "last_original_file_date", _fname_date.group(1))
+                        logger.info(f"[LINE BG] Registered original file → {attached_file_path}")
+
+                    # ── Clean up intermediate chunk entries from session ──────
+                    # Remove the [文件分段 N/M：file] headers and their paired
+                    # assistant summaries so they don't pollute future conversations.
+                    # The final synthesis prompt already contains ALL summaries
+                    # explicitly, so session no longer needs them.
+                    _session_mgr.remove_chunk_entries(session_id, fname)
+
+                    # After chunk processing: always ask user what to do.
+                    # Tools disabled — synthesis only, user will state intent in follow-up.
+                    _routed_tier = "chunk_final"
+
+                # ── Normal Processing ─────────────────────────────────────
+                # Safety: if user_input is still None after chunked processing, abort gracefully
+                if user_input is None:
+                    logger.error(f"[LINE BG] user_input is None after processing for session={session_id}")
+                    final_reply = "⚠️ 檔案處理異常，請重新上傳。"
+                    _send_line_reply(line_api, reply_token, chat_id, final_reply)
+                    return
+
+                # Append user message — store a TOKEN-SAFE version to prevent session bloat.
+                # File content messages can be 10000+ chars; we only store a short header
+                # so that subsequent requests don't carry gigabytes of history.
+                _SESSION_MSG_CHAR_LIMIT = 400
+
+                # ── Persist long text input for downstream skills ──────────
+                # When user pastes a long transcript directly (no file upload),
+                # the session truncation would lose the original content.
+                # Save to workspace/temp/ (created by SessionManager on startup).
+                if (not attached_file_path and _chunked_data is None
+                        and user_input and len(user_input) > _SESSION_MSG_CHAR_LIMIT):
+                    try:
+                        _temp_dir = Path(os.getcwd()) / "workspace" / "temp"
+                        _temp_dir.mkdir(parents=True, exist_ok=True)
+                        _orig_file = _temp_dir / f"original_{session_id}.txt"
+                        _orig_file.write_text(user_input, encoding="utf-8")
+                        _session_mgr.set_metadata(session_id, "last_original_file", str(_orig_file))
+                        _session_mgr.set_metadata(session_id, "last_original_filename", "user_text")
+                        logger.info(f"[LINE BG] Stored long user text ({len(user_input)} chars) → {_orig_file}")
+                    except Exception as _e:
+                        logger.warning(f"[LINE BG] Failed to store long user text: {_e}")
+
+                session_user_input = (
+                    user_input[:_SESSION_MSG_CHAR_LIMIT] + "…[已截斷，完整內容僅用於本輪分析]"
+                    if len(user_input) > _SESSION_MSG_CHAR_LIMIT else user_input
+                )
+                _session_mgr.append_message(session_id, "user", session_user_input)
+                actual_input, execute_mode = _parse_command_prefix(user_input)
+
+                history = _session_mgr.get_or_create_conversation(session_id)
+
+                # Filter out bridge-tagged LINE messages from LLM history.
+                # These are duplicates added for Web UI display (see line ~244);
+                # the actual message is already in history as a separate entry.
+                history = [
+                    m for m in history
+                    if "[[bridge:line:" not in str(m.get("content", ""))
+                ]
+
+                # Use PromptBuilder with LINE platform budget to trim history/context.
+                try:
+                    from server.services.prompt_builder import build_prompt_messages, Budget, PromptParts
+                    from server.services.budget_profiles import get_budget_for_model
+
+                    sanitized_history = [{k: v for k, v in m.items() if k != "created_at"} for m in history]
+                    bp = get_budget_for_model(adapter.model, platform="line")
+
+                    # Keep in sync with web pipeline: session_summary + retrieved_memory injections
+                    session_summary = ""
+                    retrieved_memory = ""
+                    try:
+                        from server.services.session_summarizer import SessionSummarizer, render_session_summary_injection
+                        from server.services.memory_retriever import MemoryRetriever, render_memory_injection
+                        from server.services.behavior_rule_loader import load_behavior_rule_texts
+
+                        ssum = SessionSummarizer(str(Path(os.getcwd()))).maybe_update(session_id, min_new_messages=6)
+                        session_summary = render_session_summary_injection(ssum, max_chars=900)
+                        br_texts = load_behavior_rule_texts(str(Path(os.getcwd())), max_each=8)
+                        mem_items = MemoryRetriever(str(Path(os.getcwd()))).retrieve(actual_input, max_items=8)
+                        retrieved_memory = render_memory_injection(mem_items, max_chars=800, exclude_texts=br_texts)
+                    except Exception:
+                        pass
+
+                    system_msgs = [m for m in history if m.get("role") == "system"]
+                    truncated_history, prompt_meta = build_prompt_messages(
+                        model=adapter.model,
+                        budget=Budget(max_input_tokens=bp.max_input_tokens, reserve_output_tokens=bp.reserve_output_tokens),
+                        parts=PromptParts(
+                            system=system_msgs[0]["content"] if system_msgs else "",
+                            behavior_rules_appendix="",
+                            session_summary=session_summary,
+                            retrieved_memory=retrieved_memory,
+                            history=sanitized_history,
+                            user=actual_input,
+                        ),
+                    )
+                    import os as _os
+                    if _os.environ.get("PROMPT_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+                        try:
+                            from server.services.prompt_meta_logger import append_prompt_meta
+                            append_prompt_meta(str(Path(_os.getcwd())), session_id, prompt_meta)
+                        except Exception:
+                            pass
+                    logger.info(
+                        f"[LINE BG] PromptBuilder meta slim={{'final_total_tokens': {prompt_meta.get('included', {}).get('final_total_tokens')}, 'history_messages': {prompt_meta.get('included', {}).get('history_messages')}, 'trimmed': {prompt_meta.get('trimmed', {})}}}"
+                    )
+                except Exception as _pb_err:
+                    logger.warning(f"[LINE BG] PromptBuilder fallback to char-based trimming: {_pb_err}")
+                    system_msgs = [m for m in history if m.get("role") == "system"]
+                    non_system = [m for m in history if m.get("role") != "system"]
+                    _MAX_HISTORY_CHARS = 12000
+                    _acc_chars = 0
+                    trimmed_msgs = []
+                    for m in reversed(non_system):
+                        mc = len(m.get("content", ""))
+                        if _acc_chars + mc > _MAX_HISTORY_CHARS:
+                            break
+                        trimmed_msgs.insert(0, m)
+                        _acc_chars += mc
+                    truncated_history = system_msgs + trimmed_msgs
+                    logger.info(f"[LINE BG] History: {len(non_system)} msgs → {len(trimmed_msgs)} msgs ({_acc_chars} chars)")
+
+
+                # ── Token-based Fallback ────────────────────────────────
+                # Pre-flight check: if estimated tokens exceed the current
+                # model's safe budget, auto-downgrade to a cheaper model.
+                _current_model = adapter.model
+                _safe_model = apply_token_fallback(
+                    model=_current_model,
+                    messages=truncated_history,
+                    max_output_tokens=adapter.max_output_tokens,
+                    force_tier=_force_upgraded,
+                )
+                if _safe_model != _current_model:
+                    adapter = OpenAIAdapter(uma=uma, model=_safe_model)
+                    adapter.max_output_tokens = 8192 if _routed_tier in ("full", "file") else 2048
+                    logger.info(f"[LINE Fallback] Downgraded: {_current_model} → {_safe_model}")
+
+                # ── Tier-aware tool policy ─────────────────────────────
+                # P1: Chunked final synthesis already has all content in prompt
+                #     → no tool calls needed (saves a wasted API round-trip)
+                # P2: nano tier = casual chat → tools off (saves ~800 tokens)
+                #     mini tier = standard → max_tools=1 (light tool use)
+                #     full/file tier = complex → full tool access
+                if _routed_tier in ("chunk_final", "nano"):
+                    _tools_enabled = False
+                    _max_tools = 0
+                elif _routed_tier == "mini":
+                    _tools_enabled = execute_mode
+                    _max_tools = 1
+                else:  # full, file
+                    _tools_enabled = execute_mode
+                    _max_tools = 3
+
+                # Determine chat type for analytics/routing (user/group/room)
+                chat_type = "user"
+                if session_id.startswith("line_group_"):
+                    chat_type = "group"
+                elif session_id.startswith("line_room_"):
+                    chat_type = "room"
+
+                # Dynamic language detection: inject hint so LLM responds in user's language
+                _detected_lang = _detect_language(actual_input)
+                if _detected_lang:
+                    _lang_hint = {
+                        "role": "system",
+                        "content": f"【語言切換】使用者此則訊息使用{_detected_lang}，請用{_detected_lang}回覆。"
+                    }
+                    # Insert before the last user message
+                    truncated_history.insert(-1, _lang_hint)
+
                 result_gen = adapter.chat(
                     messages=truncated_history,
                     user_query=actual_input,
                     session_id=session_id,
+                    user_id=user_id,
+                    chat_type=chat_type,
+                    chat_id=chat_id,
+                    tier=_routed_tier,
+                    response_id="",
                     attached_file=attached_file_path,
-                    tools_enabled=execute_mode
+                    tools_enabled=_tools_enabled,
+                    max_tools=_max_tools,
                 )
 
-                # 5. 消費同步 Generator，組裝完整回覆字串
-                #    傳入 line_api/chat_id 以便在 Tool Call 時刷新 loading 動畫
-                final_reply = _collect_generator(result_gen, line_api=line_api, chat_id=chat_id)
+                # Consume generator, assemble final reply
+                final_reply = _collect_generator(
+                    result_gen,
+                    line_api=line_api,
+                    chat_id=chat_id,
+                    session_id=session_id,
+                    user_input=user_input,
+                )
 
             # 6. 截斷至 LINE 字元上限
             if len(final_reply) > _LINE_MAX_CHARS:
@@ -721,7 +1975,29 @@ def _process_line_message(
             _session_mgr.append_message(session_id, "assistant", final_reply)
 
             # 8. 回傳 LINE（reply_token 優先，逾時後備 push_message）
-            _send_line_reply(line_api, reply_token, chat_id, final_reply)
+            #    偵測回覆中的圖片 URL → 拆分為 ImageMessage + TextMessage
+            _image_urls = _extract_image_urls(final_reply)
+            if _image_urls:
+                _text_part = _strip_image_urls(final_reply, _image_urls)
+                _send_line_reply_with_images(line_api, reply_token, chat_id, _text_part, _image_urls)
+            else:
+                _send_line_reply(line_api, reply_token, chat_id, final_reply)
+
+            # ── Phase B1: Auto Profile creation/update after each round ─────
+            try:
+                from server.services.profile_updater import ProfileUpdater
+                from server.services.runtime import make_llm_callable
+                _pu_auto = ProfileUpdater(str(Path(os.getcwd())))
+                _llm_fn = make_llm_callable()
+                if _llm_fn:
+                    import threading
+                    threading.Thread(
+                        target=_pu_auto.trigger_if_needed,
+                        args=(session_id, _llm_fn),
+                        daemon=True,
+                    ).start()
+            except Exception as _auto_pe:
+                logger.debug(f"[LINE B1] Auto profile trigger skipped: {_auto_pe}")
 
         except Exception as e:
             logger.error(
@@ -745,17 +2021,72 @@ def _parse_command_prefix(user_input: str) -> tuple[str, bool]:
     return user_input, True  # 預設啟用 Tool Calling
 
 
-def _collect_generator(result_gen, line_api=None, chat_id: str = None) -> str:
+# ── Phase 2: Smart Clarification Detection ──────────────────────────────────
+
+# File/report creation intent keywords
+_FILE_INTENT_KW = [
+    "整理成文件", "做成文件", "產出文件", "製作文件",
+    "整理成檔案", "做成檔案", "產出檔案", "製作檔案",
+    "做一份報告", "做份報告", "產出報告", "製作報告", "生成報告",
+    "做一份文件", "建立文件", "建立檔案", "建立報告",
+    "寫一份報告", "寫一份文件",
+    "幫我做一份", "幫我製作", "幫我產出", "幫我建立",
+]
+
+# If user's request is already very detailed (has both format + topic details),
+# skip the clarification injection and let LLM execute directly.
+_COMPLETENESS_SIGNALS = [
+    "pdf", "docx", "doc", "word", "xlsx", "excel", "csv",
+    "txt", "pptx", "ppt", "md", "markdown", "json", "html",
+]
+
+
+def _detect_file_creation_intent(user_text: str) -> bool:
+    """
+    偵測使用者是否有建立檔案/報告的意圖，且需求可能不夠完整。
+
+    Returns True → 注入釐清指令讓 LLM 先語意分析再決定問或做
+    Returns False → 直接正常流程
+    """
+    # Must have file-creation intent
+    has_intent = any(kw in user_text for kw in _FILE_INTENT_KW)
+    if not has_intent:
+        return False
+
+    # If user already specified output format AND the text is long enough
+    # (likely detailed), skip clarification to avoid unnecessary questions
+    text_lower = user_text.lower()
+    has_format = any(kw in text_lower for kw in _COMPLETENESS_SIGNALS)
+    is_detailed = len(user_text) > 30  # Rough heuristic: short = likely vague
+
+    if has_format and is_detailed:
+        return False
+
+    return True
+
+
+def _collect_generator(
+    result_gen,
+    line_api=None,
+    chat_id: str = None,
+    session_id: str = None,
+    user_input: str = None,
+) -> str:
     """
     消費 adapter.chat() 的同步 generator，組裝完整回覆文字。
 
     當偵測到 Tool Call 中間狀態時，自動刷新 LINE loading 動畫，
     確保使用者在多輪 Tool Calling 期間持續看到 "..." 動畫。
 
+    Human-in-the-Loop:
+    - requires_approval → 儲存 approval pending state
+    - [CHOICES]...[/CHOICES] → 儲存 choice pending state，讓使用者選方案
+
     Generator 的 chunk 格式：
     - {"status": "streaming", "content": "<partial text>"}
     - {"status": "success",   "content": "<full text>"}
     - {"status": "error",     "message": "<error msg>"}
+    - {"status": "requires_approval", "tool_name": ..., "pending_args": ...}
     """
     accumulated = ""
     for chunk in result_gen:
@@ -767,22 +2098,127 @@ def _collect_generator(result_gen, line_api=None, chat_id: str = None) -> str:
             # Re-trigger loading animation so user keeps seeing "..." during long tool calls
             if line_api and chat_id and "⚙️" in content:
                 _send_loading_animation(line_api, chat_id, 60)
+        elif status == "provider_meta":
+            # Strong consistency: allow adapters to publish provider response id
+            try:
+                from server.dependencies.session import get_session_manager
+                _sm = get_session_manager()
+                _sid = session_id or ""
+                _rid = chunk.get("response_id") or ""
+                if _sid and _rid:
+                    _sm.set_metadata(_sid, "last_response_id", _rid)
+            except Exception:
+                pass
+            continue
+
         elif status == "success":
             # success chunk 包含完整最終內容
-            final = chunk.get("content", "")
-            return final if final else accumulated
+            final = chunk.get("content", "") or accumulated
+
+            # ── Phase 2: Choice Detection ──────────────────────────
+            # 檢查 LLM 回覆是否包含 [CHOICES]...[/CHOICES] 結構
+            final = _maybe_save_choice_pending(
+                final, chat_id=chat_id, session_id=session_id, user_input=user_input,
+            )
+            return final
+
         elif status == "error":
             err_msg = chunk.get("message", "未知錯誤")
             logger.error(f"[LINE BG] Adapter error: {err_msg}")
             return f"❌ 發生錯誤：{err_msg}"
         elif status == "requires_approval":
             tool_name = chunk.get("tool_name", "未知工具")
+            pending_args = chunk.get("pending_args", {})
+            risk_desc = chunk.get("risk_description", "高風險操作")
+
+            # ── Human-in-the-Loop: 儲存 pending state ──────────────
+            if chat_id:
+                try:
+                    from server.core.pending_state import PendingStateManager
+                    from main import PROJECT_ROOT
+                    pending_mgr = PendingStateManager(str(PROJECT_ROOT / "workspace" / "sessions"))
+                    pending_mgr.set_pending(
+                        chat_id=chat_id,
+                        pending_type="approval",
+                        data={
+                            "tool_name": tool_name,
+                            "tool_args": pending_args,
+                            "risk_description": risk_desc,
+                            "session_id": session_id or "",
+                            "user_input": user_input or "",
+                        },
+                    )
+                except Exception as e:
+                    logger.error(f"[LINE BG] Failed to save pending state: {e}")
+
             return (
-                f"⚠️ 工具 `{tool_name}` 需要人工確認後才能執行。\n"
-                "請至 Web Console 處理此高風險操作。"
+                f"⚠️ 工具 `{tool_name}` 需要你的確認才能執行。\n\n"
+                f"📋 風險說明：{risk_desc}\n\n"
+                f"請直接回覆：\n"
+                f"  「確認」→ 執行此操作\n"
+                f"  「取消」→ 放棄執行"
             )
 
-    return accumulated if accumulated else "（AI 未產生回覆，請稍後再試）"
+    # streaming 結束但沒收到 success → 用 accumulated
+    if accumulated:
+        accumulated = _maybe_save_choice_pending(
+            accumulated, chat_id=chat_id, session_id=session_id, user_input=user_input,
+        )
+        return accumulated
+
+    return "（AI 未產生回覆，請稍後再試）"
+
+
+def _maybe_save_choice_pending(
+    llm_output: str,
+    chat_id: str = None,
+    session_id: str = None,
+    user_input: str = None,
+) -> str:
+    """
+    檢查 LLM 回覆是否包含 [CHOICES]...[/CHOICES] 區塊。
+    若有，解析選項、儲存 choice pending state，並回傳 LINE 友好格式。
+    若無，原文回傳。
+    """
+    if not chat_id or "[CHOICES]" not in llm_output:
+        return llm_output
+
+    try:
+        from server.core.pending_state import (
+            PendingStateManager, extract_choices, format_choices_for_line,
+        )
+        from main import PROJECT_ROOT
+
+        parsed = extract_choices(llm_output)
+        if parsed is None:
+            # 格式不正確，直接回傳原文（不阻斷流程）
+            return llm_output
+
+        preamble, options = parsed
+        logger.info(
+            f"[LINE HitL] Choice proposal detected: {len(options)} options "
+            f"for chat={chat_id}, keys={[o['key'] for o in options]}"
+        )
+
+        # 儲存 choice pending state
+        pending_mgr = PendingStateManager(str(PROJECT_ROOT / "workspace" / "sessions"))
+        pending_mgr.set_pending(
+            chat_id=chat_id,
+            pending_type="choice",
+            data={
+                "options": options,
+                "preamble": preamble,
+                "original_query": user_input or "",
+                "session_id": session_id or "",
+            },
+        )
+
+        # 回傳 LINE 友好格式（取代原始包含 [CHOICES] 標記的文字）
+        return format_choices_for_line(preamble, options)
+
+    except Exception as e:
+        logger.error(f"[LINE HitL] Choice parsing failed: {e}", exc_info=True)
+        return llm_output
 
 
 def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
@@ -793,12 +2229,15 @@ def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
     from linebot.v3.messaging import TextMessage, ReplyMessageRequest, PushMessageRequest
 
     try:
-        line_api.reply_message(
+        resp = line_api.reply_message(
             ReplyMessageRequest(
                 reply_token=reply_token,
                 messages=[TextMessage(text=text)],
             )
         )
+        # 快取 AgentK 發出的訊息，讓使用者可以「引用」AgentK 的回覆
+        for sent_msg in (resp.sent_messages or []):
+            _add_to_cache(chat_id, sent_msg.id, text=text)
         logger.info(f"[LINE] Reply sent via reply_token → chat={chat_id}")
     except Exception as reply_err:
         # reply_token 已過期或失效，改用 push_message 主動推送
@@ -807,15 +2246,105 @@ def _send_line_reply(line_api, reply_token: str, chat_id: str, text: str):
             f"falling back to push_message → chat={chat_id}"
         )
         try:
-            line_api.push_message(
+            push_resp = line_api.push_message(
                 PushMessageRequest(
-                    to=chat_id,
+                    to=_to_line_id(chat_id),
                     messages=[TextMessage(text=text)],
                 )
             )
+            # 快取 AgentK 發出的訊息（push fallback）
+            for sent_msg in (push_resp.sent_messages or []):
+                _add_to_cache(chat_id, sent_msg.id, text=text)
             logger.info(f"[LINE] Reply sent via push_message → chat={chat_id}")
         except Exception as push_err:
             logger.error(f"[LINE] push_message also failed: {push_err}")
+
+
+# ── Image URL extraction & mixed reply helpers ────────────────────────────────
+
+_IMAGE_URL_PATTERN = re.compile(
+    r'(https?://[^\s\)\"\']+/(?:images|downloads)/[^\s\)\"\']+\.(?:png|jpg|jpeg|gif|webp))',
+    re.IGNORECASE,
+)
+
+
+def _extract_image_urls(text: str) -> list:
+    """Extract image serving URLs from LLM response text.
+    Converts /downloads/ URLs to /images/ for proper content-type (LINE needs image/* MIME).
+    """
+    raw = list(dict.fromkeys(_IMAGE_URL_PATTERN.findall(text)))  # dedupe, keep order
+    return [url.replace("/downloads/", "/images/") for url in raw]
+
+
+def _strip_image_urls(text: str, image_urls: list) -> str:
+    """Remove image URLs (and surrounding markdown image syntax) from text."""
+    cleaned = text
+    for url in image_urls:
+        # Remove markdown image syntax: ![alt](url)
+        cleaned = re.sub(r'!\[[^\]]*\]\(' + re.escape(url) + r'\)\s*', '', cleaned)
+        # Remove bare URL
+        cleaned = cleaned.replace(url, '')
+    # Clean up leftover blank lines
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned).strip()
+    return cleaned
+
+
+def _send_line_reply_with_images(
+    line_api, reply_token: str, chat_id: str, text: str, image_urls: list
+):
+    """
+    Send a mixed reply: TextMessage + ImageMessage(s).
+    LINE allows up to 5 messages per reply.
+    """
+    from linebot.v3.messaging import (
+        TextMessage, ImageMessage, ReplyMessageRequest, PushMessageRequest,
+    )
+
+    messages = []
+    # Add text message first (if there's meaningful text)
+    if text and text.strip():
+        messages.append(TextMessage(text=text.strip()[:5000]))
+
+    # Add image messages (LINE max 5 messages per reply)
+    remaining_slots = 5 - len(messages)
+    for url in image_urls[:remaining_slots]:
+        messages.append(ImageMessage(
+            original_content_url=url,
+            preview_image_url=url,
+        ))
+
+    if not messages:
+        return
+
+    try:
+        resp = line_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=messages,
+            )
+        )
+        # 快取文字訊息（第一則），讓使用者可以引用 AgentK 的回覆
+        if text and text.strip() and resp.sent_messages:
+            _add_to_cache(chat_id, resp.sent_messages[0].id, text=text.strip()[:5000])
+        logger.info(f"[LINE] Mixed reply sent (text+{len(image_urls)} images) → chat={chat_id}")
+    except Exception as reply_err:
+        logger.warning(
+            f"[LINE] reply_token expired/failed ({reply_err}), "
+            f"falling back to push_message → chat={chat_id}"
+        )
+        try:
+            push_resp = line_api.push_message(
+                PushMessageRequest(
+                    to=_to_line_id(chat_id),
+                    messages=messages,
+                )
+            )
+            # 快取文字訊息（push fallback）
+            if text and text.strip() and push_resp.sent_messages:
+                _add_to_cache(chat_id, push_resp.sent_messages[0].id, text=text.strip()[:5000])
+            logger.info(f"[LINE] Mixed push sent (text+{len(image_urls)} images) → chat={chat_id}")
+        except Exception as push_err:
+            logger.error(f"[LINE] push_message with images also failed: {push_err}")
 
 
 def _send_error_push(line_api, chat_id: str):
@@ -825,7 +2354,7 @@ def _send_error_push(line_api, chat_id: str):
 
         line_api.push_message(
             PushMessageRequest(
-                to=chat_id,
+                to=_to_line_id(chat_id),
                 messages=[
                     TextMessage(text="⚠️ 系統發生內部錯誤，請稍後再試或聯絡管理員。")
                 ],

@@ -6,7 +6,7 @@ import os
 import yaml
 from pathlib import Path
 
-SKILLS_HOME = Path(r"C:\Users\kicl1\OneDrive\文件\研發組專案\MCP_Server\Agent_skills\skills")
+SKILLS_HOME = Path(r"C:\Users\kicl1\OneDrive\文件\研發組專案\MCP_Server\Agent_skills\system_skills")
 PATCHED = 0
 SKIPPED = 0
 

@@ -1,0 +1,365 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Running the Server
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Start development server (port 8500)
+python main.py
+
+# Docker production (external port 6888 → internal 8000)
+docker-compose up --build
+```
+
+The web UI is served at `http://localhost:8500/ui`. There is no frontend build step — it's vanilla JS/HTML/CSS served statically by FastAPI.
+
+## Environment Configuration
+
+Copy `.env.template` to `.env`. Key variables:
+
+```bash
+SKILLS_HOME=Agent_skills/system_skills   # Path to system skills directory
+DEPT_SKILLS_HOME=Agent_skills/department_skills
+PERSONAL_SKILLS_HOME=Agent_skills/personal_skills
+OPENAI_API_KEY=...
+GEMINI_API_KEY=...
+ANTHROPIC_API_KEY=...
+OPENAI_MODEL=gpt-4o
+GEMINI_MODEL=gemini-2.0-flash
+CLAUDE_MODEL=claude-3-5-sonnet-20241022
+OPENAI_MAX_OUTPUT_TOKENS=16384           # Counts against TPM — set to 2048 for LINE Bot
+LINE_CHANNEL_SECRET=...
+LINE_CHANNEL_ACCESS_TOKEN=...
+LINE_ROUTER_ENABLED=true
+LINE_MODEL_ROUTER=gpt-4.1-nano           # Cheapest model for tier classification
+LINE_MODEL_MINI=gpt-4.1-mini
+LINE_MODEL_FULL=gpt-4.1
+NOTION_TOKEN=...                         # For mcp-notion-crud skill
+NOTION_DATABASE_ID=...
+```
+
+## Architecture Overview
+
+### Core Concept: UMA (Unified Model Adapter)
+
+UMA is the central intelligence layer with **two-phase tool loading**:
+1. **Phase 1 — Lightweight listing**: `get_tools_for_model()` returns only name + description (open schema with `additionalProperties: true`). This keeps the tool list small for the LLM context.
+2. **Phase 2 — On-demand injection**: When the LLM invokes a tool, `execute_tool_call()` loads the full SKILL.md body + reference layer content and injects it into the conversation before execution.
+3. **Executes** skills safely as subprocesses with path sanitization
+4. **Routes** tool calls from LLMs → `ExecutionEngine` → skill scripts → back to LLM
+
+### Request Flow
+
+```
+User (Web/LINE) → FastAPI Routes → chat_core.py → Model Adapter
+                                                       ↓
+                              UMA.get_tools_for_model() → inject tool schemas
+                                                       ↓
+                                             LLM decides to call tool
+                                                       ↓
+                              UMA.execute_tool_call() → ExecutionEngine (subprocess)
+                                                       ↓
+                                         Result → LLM final synthesis → stream to user
+```
+
+### Skill System
+
+Skills live in `Agent_skills/system_skills/{skill-name}/`. Each skill requires a `SKILL.md` with YAML frontmatter:
+
+```yaml
+---
+name: mcp-example
+provider: mcp
+version: 1.0.0
+runtime_requirements: []        # pip packages required
+risk_level: high                # optional — triggers Auth Modal gate
+risk_description: "..."
+execution_timeout: 120          # optional — override default 30s subprocess timeout
+parameters:
+  type: object
+  properties:
+    input:
+      type: string
+      description: "..."
+  required: [input]
+---
+```
+
+Three execution modes determined by directory contents:
+- **Executable**: `scripts/main.py` present → subprocess execution (stdin receives JSON args, stdout must be JSON)
+- **Code**: `scripts/*.py` present (no main.py) → LLM references code via python-executor
+- **Semantic**: No scripts → LLM handles with language capabilities only
+
+Skills with `risk_level: high` are intercepted in `UMA.execute_tool_call()` — the adapter yields `requires_approval` and pauses; the frontend shows an Auth Modal.
+
+**Reference Layer**: Skills can include a `references/` directory. On tool invocation (Phase 2), `_load_references()` injects:
+- `.md` / `.txt` files → full text content with header `【REFERENCE LAYER — 必須嚴格依照以下知識文件作答】`
+- `.docx` / `.xlsx` / `.pdf` files → listed as absolute template paths for python-executor to load
+- Applies to **Code** and **Semantic** modes only (Executable mode uses subprocess I/O)
+
+**Per-Skill Timeout**: `execution_timeout` in SKILL.md frontmatter overrides the default 30s. Read in `uma_core.py`, passed to `executor.run_script(timeout=...)`. Use for any skill making external API calls (e.g. `mcp-notion-crud` uses 120s for batch Schema Mapping + Notion upload).
+
+### Session & Memory
+
+- Sessions persisted to `workspace/sessions/{session_id}.json`
+- LINE Bot session IDs: `line_{user_id}` / `line_group_{group_id}`
+- `POST /chat/flush/{session_id}` triggers LLM summarization → appended to `memory/MEMORY.md`
+- `SessionManager` in `server/core/session.py` is a singleton; get it via `server/dependencies/session.py`
+- `session.set_metadata(session_id, key, value)` / `session.get_metadata(session_id, key)` — arbitrary per-session KV store (in-memory only, not persisted to disk)
+- **Message Cache Persistence** (Phase A1): `_msg_cache_loaded` lazy-loads per chat_id from `workspace/sessions/{chat_id}_msg_cache.json`. TTL 120 hours, max 500 entries per chat. Dual-write (memory + disk) on every `_add_to_cache()`.
+
+### Memory Enhancement System (Phase A–D)
+
+Four-phase system in `server/services/`:
+
+**Phase A — Group Stability**
+- **A1** (`session.py`): Message cache disk persistence with TTL 120h, lazy-load on first access
+- **A2** (`line_connector.py`): Quote retry loop — 30s max, 3s intervals, status push at 0s/15s. On timeout, sends error and `continue` (no fallback to LLM with stale data)
+
+**Phase B — Profile System**
+- **B1** (`profile_updater.py` → `trigger_if_needed()`): Auto-creates profile after 4+ messages (2 rounds), updates with 2-hour cooldown. Runs in background thread after each LINE reply. Profiles stored at `workspace/profiles/{session_id}.profile.md`
+- **B2** (`app.py`): APScheduler (BackgroundScheduler, tz=Asia/Taipei) runs 5 jobs:
+  - Profile update: 09:00 / 12:00 / 17:00
+  - Token summary rebuild: 17:05
+  - Message cache cleanup: 00:00
+  - LINE uploads cleanup: 00:05 (168h TTL auto-delete)
+  - Scheduled push tick: every 1 minute (checks & executes due push tasks)
+- **B3** (`profile_updater.py` → `_PROFILE_PROMPT_TEMPLATE`): Deep reasoning prompt with 6 analysis dimensions. Profile injected into system prompt (~50-100 tokens)
+
+**Phase C — Signal Collection**
+- **C1** (`profile_updater.py`): Text correction signals (neg/pos pattern matching) + sticker emotion classification (text→keywords→vision). Signals stored as append-only JSONL at `workspace/profiles/{session_id}_signals.jsonl` with 7-day retention
+
+**Phase D — Token Management**
+- **D1** (`openai_adapter.py`): Captures `response.completed` event for real token usage. Records per-tool-call AND pure-chat to `workspace/analytics/token_usage.jsonl`
+- **D2** (`token_tracker.py` → `rebuild_summary()`): Scheduled aggregation to `workspace/analytics/token_summary.json` with by_user/by_skill/by_group/daily structure. 90-day retention
+
+### Scheduled Push System
+
+`server/services/scheduled_push.py` (`ScheduledPushService`) — executes timed push tasks to LINE users/groups.
+
+**Task types**:
+| Type | Description | LLM | Tools |
+|------|-------------|-----|-------|
+| `language` | Vocabulary/grammar learning push | Yes | No |
+| `news` | News digest via web search | Yes | Yes (mcp-web-search) |
+| `work_summary` | Weekly work summary from session history | Yes | No |
+| `custom` | Free-form LLM prompt | Yes | No |
+| `reminder` | One-shot reminder message | No | No |
+| `pipeline` | Multi-skill composite task (passes `original_request` to adapter with full tool access) | Yes | Yes |
+
+**Storage**: `workspace/schedules/{session_id}.json` — one file per user/group, contains array of task objects.
+
+**Cron formats**: Simple (`08:30`, `weekday 09:00`), full cron, interval (`every +10m`), one-time (`once +2m`).
+
+**Key behaviors**:
+- Duplicate detection: same cron + same type → auto-updates existing task (loosened for news: no topic comparison)
+- Language task A+B anti-repeat: 24-category rotation with batch history exclusion
+- Content type isolation: grammar/vocab tasks get mutual-exclusion warnings in prompts
+- Adapter cache: lazy-init, reused across ticks within same service instance
+- Excluded tools in push context: mcp-schedule-manager, mcp-pdf/docx/txt-llm-analyzer
+
+**Managed by**: `mcp-schedule-manager` skill (LLM-facing tool with actions: add, list, remove, pause, resume, trigger). Server-side auto-split detects "grammar+vocab" requests and creates 2 separate tasks.
+
+### Workspace Data Paths
+
+```
+workspace/
+├── sessions/          # Session history JSON + message cache JSONL
+├── profiles/          # .profile.md + _signals.jsonl per user/group
+├── schedules/         # Per-user scheduled push task JSON
+├── analytics/         # token_usage.jsonl + token_summary.json
+├── downloads/         # Generated files (PDF, DOCX, images) served at /downloads/
+└── temp/              # Temporary processing files
+Agent_workspace/
+└── line_uploads/      # LINE Bot uploaded files: {messageId}_{filename}
+Agent_skills/
+└── temp/              # original_{session_id}.txt for transcript injection
+```
+
+### Model Adapters
+
+All adapters in `server/adapters/` implement two methods:
+- `simple_chat(session_history, ...)` — pure LLM, no tools (used by Agent Console chat panel)
+- `chat(messages, ...)` — tool-calling agent mode, yields streaming chunks with `status` field:
+  - `"streaming"` — text delta
+  - `"tool_call"` — about to run a skill
+  - `"requires_approval"` — high-risk skill intercepted, pause execution
+  - `"success"` — final assembled content
+  - `"error"` — error occurred
+
+The OpenAI adapter uses the **Responses API** (`client.responses.create`), not Chat Completions, for tool calling. `simple_chat` uses `client.chat.completions.create`.
+
+**Original File Injection** (`openai_adapter.py`): When `mcp-meeting-analyzer` is called, the adapter checks `self._original_file_path`. If set and the file exists, it reads the full original text and overrides the `transcript` parameter (replacing any LLM-generated summary with the actual source content).
+
+### LINE Bot Integration
+
+`server/integrations/line_connector.py` handles the `/api/line/webhook` endpoint. Key behaviors:
+- Background tasks are used for LLM calls (avoids webhook timeout)
+- Group chats: only responds when `@Agent K` / `@AgentK` is mentioned
+- Large files are chunked (15,000 chars/chunk); each chunk is summarized sequentially, then ALL summaries are assembled into the final synthesis call via a local `all_summaries` list (not relying on session history, which is token-trimmed)
+- `adapter.max_output_tokens = 2048` is forced for LINE (saves ~14,000 TPM per request vs default 16,384)
+- Token-aware history trim: 12,000 char budget (`_MAX_HISTORY_CHARS`)
+- After chunked processing, `remove_chunk_entries()` cleans intermediate `[文件分段 N/M：file]` headers + paired summaries from session to prevent history pollution
+
+**Original Text Persistence** (3 scenarios all handled):
+1. **Single-pass file**: saved immediately after `extracted_text` is populated
+2. **Chunked file**: saved after all chunks assembled via `"".join(chunks)`
+3. **Long direct text** (> 400 chars pasted by user): saved before session truncation
+
+All 3 write to `Agent_skills/temp/original_{session_id}.txt` and set `session.set_metadata(session_id, "last_original_file", path)`. The adapter reads this path before each LLM call and sets `adapter._original_file_path`.
+
+### LLM-as-a-Router (LINE Bot)
+
+`server/services/model_router.py` — classifies each request before the main LLM call:
+
+| Tier | Model | Tools |
+|------|-------|-------|
+| `nano` | gpt-4.1-nano | Off |
+| `mini` | gpt-4.1-mini | max 1 |
+| `full` | gpt-4.1 | max 3 |
+| `file` | gpt-4.1-mini | max 3 |
+| `chunk_final` | (from chunk processing) | Off |
+
+`route_model()` returns `(model: str, tier: str)`. After chunk processing, tier is overridden to `chunk_final` (tools disabled — final synthesis is pure summarization, no tool injection needed).
+
+**Nano→Mini auto-upgrade**: If the router classifies as `nano` but the request contains tool-dependent intent keywords (畫, 生成圖, 製作圖表, draw, generate image, etc.), the tier is upgraded to `mini` so tools are injected. See `_TOOL_INTENT_KEYWORDS` in `model_router.py`.
+
+### FAISS Vector Retriever
+
+- Index stored at `~/.mcp_faiss/` (avoids Chinese characters in Windows paths)
+- Model: `paraphrase-multilingual-MiniLM-L12-v2`
+- Skills are indexed on startup via `delta_index_skills()` (hash-based incremental)
+- Workspace documents are indexed via `retriever.sync_workspace()`
+- Supports `.pdf`, `.txt`, `.md`, `.csv`, `.docx`
+
+### Key File Map
+
+| File | Role |
+|------|------|
+| `main.py` | Entry point, loads `.env`, initializes UMA, starts Uvicorn |
+| `server/app.py` | Mounts all routers, registers startup/shutdown lifecycle hooks |
+| `server/core/uma_core.py` | `UMA` + `SkillRegistry` classes; reads `execution_timeout` from SKILL.md |
+| `server/core/executor.py` | `ExecutionEngine` — safe subprocess runner; `run_script(timeout=)` |
+| `server/core/session.py` | `SessionManager` — history + MEMORY.md + `set/get_metadata()` |
+| `server/core/retriever.py` | FAISS-based document/skill retriever |
+| `server/core/converter.py` | `SchemaConverter` — skill metadata → model tool schemas |
+| `server/services/chat_core.py` | SSE streaming, tool call loop, `event_generator()` |
+| `server/services/runtime.py` | `get_universal_system_prompt()`, `delta_index_skills()` |
+| `server/services/model_router.py` | LLM-as-a-Router; `route_model()` → `(model, tier)` |
+| `server/services/profile_updater.py` | Phase B/C: Profile CRUD, signal collection, scheduled deep reasoning |
+| `server/services/scheduled_push.py` | ScheduledPushService — timed push execution engine (language, news, pipeline, etc.) |
+| `server/services/token_tracker.py` | Phase D: Token usage JSONL recording + summary aggregation |
+| `server/adapters/openai_adapter.py` | OpenAI GPT; original file injection; D1 token capture from `response.completed` |
+| `server/routes/chat.py` | `/chat`, `/chat/approve/{id}`, `/chat/reject/{id}`, flush, session CRUD |
+| `server/integrations/line_connector.py` | LINE webhook, chunked processing, original text persistence, B1 auto profile trigger, C1 signal collection |
+| `Agent_skills/skills_manifest.json` | Auto-generated skill index (do not edit manually) |
+| `frontend/config.js` | Google OAuth client ID, demo credentials |
+
+## Git Branch Strategy
+
+| Local Branch | Remote Branch | Purpose |
+|---|---|---|
+| `fsc` | `origin/fsc` | FSC — 主要開發分支，日常工作推送到這裡 |
+| `AgentK_UAT` | `origin/AgentK_UAT` | UAT — 測試驗收分支，測試通過後從 FSC 合併過來 |
+| `main` | `origin/main` | Production (rarely updated) |
+
+Push commands: `git push origin fsc` / `git push origin AgentK_UAT`
+
+`Agent_skills/` is a **git submodule** (separate repo `fsc0638/Agent_skills`). Always commit submodule changes first, then commit the parent repo's submodule reference update. Push both independently.
+
+## Adding a New Skill
+
+1. Create `Agent_skills/system_skills/mcp-{name}/SKILL.md` with YAML frontmatter
+2. Optionally add `Scripts/main.py` (reads JSON from stdin, prints JSON to stdout)
+3. For long-running skills, add `execution_timeout: N` to SKILL.md (default 30s)
+4. Restart the server or call `POST /skills/reload` — UMA rescans on startup
+5. `skills_manifest.json` is regenerated automatically
+6. Commit submodule first, then update parent repo reference
+
+## Active Skills Reference
+
+| Skill | Mode | Timeout | Notes |
+|-------|------|---------|-------|
+| `mcp-pdf-llm-analyzer` | executable | 30s | PDF semantic analysis |
+| `mcp-docx-llm-analyzer` | executable | 30s | DOCX analysis |
+| `mcp-txt-llm-analyzer` | executable | 30s | TXT analysis |
+| `mcp-spreadsheet-llm-analyzer` | executable | 30s | Spreadsheet analysis |
+| `mcp-web-search` | executable | 30s | Web search |
+| `mcp-python-executor` | executable | 30s | Python code execution |
+| `mcp-meeting-analyzer` | executable | 60s | 2-phase pipeline: transcript → cleaned text + org data |
+| `mcp-notion-crud` | executable | 120s | Notion CRUD: create/create_batch/list/summary/update/delete |
+| `mcp-groovenaust-meeting-analyst` | semantic | — | PMP/PgMP/PfMP meeting analysis |
+| `mcp-image-generator` | executable | 60s | AI image generation via gpt-image-1; returns base64 PNG saved to downloads/ |
+| `mcp-schedule-manager` | executable | 30s | Manage scheduled push tasks (add/list/remove/pause/resume/trigger) |
+| `mcp-high-risk-demo` | executable | 30s | Auth Modal flow demo |
+| `mcp-schedule-manager` | executable | 10s | Scheduled push management (add/list/remove/pause/resume/trigger) |
+
+### Scheduled Push (`server/services/scheduled_push.py`)
+
+`ScheduledPushService` manages persistent per-user task JSON files at `workspace/schedules/{session_id}.json`. `check_and_execute()` is called by APScheduler every minute.
+
+**Supported cron formats** (parsed by `_parse_simple_cron()`):
+
+| Format | Example | Result |
+|--------|---------|--------|
+| Fixed time | `"10:00"` | Daily at 10:00 |
+| Weekday | `"weekday 09:00"` | Mon–Fri at 09:00 |
+| One-time | `"once +10m"` | 10 minutes from now |
+| **Interval** | `"every +10m"` | Every 10 minutes (elapsed-time based) |
+| Standard cron | `"0 8 * * 1-5"` | Standard 5-field cron |
+
+Interval tasks use elapsed-time logic (`now - last_run >= interval_minutes`), not wall-clock modulo. Tasks with `once: true` are deleted after execution.
+
+Task types: `news`, `work_summary`, `language`, `custom`, `reminder`. See `Agent_skills/system_skills/mcp-schedule-manager/SKILL.md` for full field-mapping rules.
+
+### LINE Bot Image Delivery
+
+When `mcp-image-generator` returns a result with `file_path`, `line_connector.py` detects image files (`.png`, `.jpg`, etc.) and sends a LINE `ImageMessage` instead of text. The image is served via `/downloads/{filename}` (same ngrok URL). For matplotlib charts generated by `mcp-python-executor`, the same image detection logic applies.
+
+## UI/UX Design Intelligence (ui-ux-pro-max)
+
+Project knowledge for UI/UX design decisions. Data files at `.claude/knowledge/ui-ux-pro-max/`.
+
+### Search Command
+
+```bash
+python .claude/knowledge/ui-ux-pro-max/search.py "<query>" --domain <domain> [-n <max_results>]
+```
+
+Domains: `style`, `color`, `typography`, `landing`, `chart`, `ux`, `product`
+
+### Design Rules (Priority Order)
+
+When modifying any UI (HTML/CSS/JS), follow these rules in order:
+
+1. **Accessibility (CRITICAL)** — Contrast 4.5:1, focus rings, alt text, aria-labels, keyboard nav
+2. **Touch & Interaction (CRITICAL)** — Min 44×44px targets, 8px spacing, loading feedback
+3. **Performance (HIGH)** — Lazy loading, reserve space (CLS < 0.1), WebP/AVIF
+4. **Style Selection (HIGH)** — Match product type, consistency, SVG icons (no emoji in UI)
+5. **Layout & Responsive (HIGH)** — Mobile-first, viewport meta, no horizontal scroll
+6. **Typography & Color (MEDIUM)** — Base 16px, line-height 1.5, semantic color tokens
+7. **Animation (MEDIUM)** — Duration 150-300ms, motion conveys meaning, reduced-motion support
+8. **Forms & Feedback (MEDIUM)** — Visible labels, error near field, progressive disclosure
+9. **Navigation (HIGH)** — Predictable back, bottom nav ≤ 5, deep linking
+10. **Charts & Data (LOW)** — Legends, tooltips, accessible colors
+
+### AgentK Theme Reference
+
+```
+--kway-blue:        #1a9aaa     (primary teal)
+--kway-blue-dark:   #12737f
+--kway-blue-light:  #b2e4ea
+--kway-blue-pale:   #e6f6f8
+--bg-surface:       #ffffff
+--bg-main:          #F8F9FB
+--border-subtle:    rgba(26,154,170,0.10)
+--text-primary:     #0f172a
+--text-secondary:   #475569
+--text-tertiary:    #94A3B8
+```
+
+Card radius: 12-14px. Hover: translateY(-2px) + shadow. Transitions: 150-200ms.

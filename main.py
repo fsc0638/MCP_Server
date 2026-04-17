@@ -45,8 +45,8 @@ def startup():
         logger.warning("No .env file found. Using system environment variables only.")
 
     # 2. Initialize UMA
-    # Default to the new Monorepo structure: Agent_skills/skills
-    skills_home = os.getenv("SKILLS_HOME", str(PROJECT_ROOT / "Agent_skills" / "skills"))
+    # Default to the three-tier structure: Agent_skills/system_skills
+    skills_home = os.getenv("SKILLS_HOME", str(PROJECT_ROOT / "Agent_skills" / "system_skills"))
     logger.info(f"Initializing UMA with SKILLS_HOME: {skills_home}")
 
     uma = UMA(skills_home=skills_home)
