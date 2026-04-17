@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Cookie, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -19,7 +19,43 @@ logger = logging.getLogger("MCP_Server.Router.Workspace")
 WORKSPACE_DIR = PROJECT_ROOT / "workspace"
 WORKSPACE_DIR.mkdir(exist_ok=True)
 
+# Shared upload pool for both LINE Bot and Web UI — all user uploads live here
+# under a per-user folder so Agent can find the right file regardless of source.
+LINE_UPLOADS_DIR = PROJECT_ROOT / "Agent_workspace" / "line_uploads"
+LINE_UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
 _SETTINGS_FILE = WORKSPACE_DIR / ".server_settings.json"
+
+
+def _resolve_user_id_from_cookie(mcp_session: str) -> str:
+    """Look up the logged-in user from the signed cookie. Returns 'anonymous'
+    if not logged in (should rarely happen since chat requires login).
+
+    Normalizes the user_id to match the LINE Bot's raw upload folder format:
+      - `line_U09abc...`  → `U09abc...`  (strip prefix, matches Bot)
+      - `pw_user_at_xxx`  → unchanged   (password login gets its own folder)
+    """
+    if not mcp_session:
+        return "anonymous"
+    try:
+        from server.services.session_token_cookie import verify_token
+        from server.services.auth_session_store import get_auth_session_store
+        token = verify_token(mcp_session)
+        if not token:
+            return "anonymous"
+        sess = get_auth_session_store().get(token)
+        if not sess or not sess.user_id:
+            return "anonymous"
+        uid = sess.user_id
+        # Strip "line_" prefix so LINE Bot and Web share the same folder per user
+        if uid.startswith("line_"):
+            uid = uid[len("line_"):]
+        # sanitize for filesystem use (defensive — should already be safe)
+        safe = "".join(c if (c.isalnum() or c in "_-") else "_" for c in uid)
+        return safe or "anonymous"
+    except Exception as e:
+        logger.warning(f"[upload] user_id resolution failed: {e}")
+        return "anonymous"
 
 
 def sanitize_filename(filename: str) -> str:
@@ -53,6 +89,51 @@ async def upload_file(file: UploadFile = File(...)):
         }
     except Exception as e:
         logger.error(f"Workspace upload error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/upload/personal")
+async def upload_personal_file(
+    file: UploadFile = File(...),
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """Generic file upload for Web UI — stored under the user's personal folder
+    at Agent_workspace/line_uploads/{user_id}/ so both LINE Bot uploads and
+    Web UI uploads share the same filesystem location.
+
+    Auto-creates the user folder if it doesn't exist.
+    """
+    try:
+        user_id = _resolve_user_id_from_cookie(mcp_session)
+        user_dir = LINE_UPLOADS_DIR / user_id
+        user_dir.mkdir(parents=True, exist_ok=True)
+
+        raw_name = file.filename or "uploaded_file"
+        safe_name = sanitize_filename(raw_name)
+        dest_path = user_dir / safe_name
+
+        # Collision: append timestamp
+        if dest_path.exists():
+            base, ext = os.path.splitext(safe_name)
+            safe_name = f"{base}_{int(datetime.now().timestamp())}{ext}"
+            dest_path = user_dir / safe_name
+
+        with open(dest_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        file_size = dest_path.stat().st_size
+        logger.info(f"[upload/personal] user={user_id} file={safe_name} size={file_size}")
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "filename": dest_path.name,
+            "filepath": str(dest_path.resolve()).replace("\\", "/"),
+            "size": file_size,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[upload/personal] error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

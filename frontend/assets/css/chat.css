@@ -620,10 +620,57 @@ html, body { height: 100%; overflow: hidden; }
   opacity: 0.35; cursor: not-allowed; transform: none;
   box-shadow: none;
 }
+
+/* ── Send button in stop mode (AI is responding) ──────────────────
+   Red pulsing square to clearly signal "interrupt" affordance */
+.page-chat-send-btn.is-stop-mode {
+  background: #dc2626;
+  box-shadow: 0 4px 14px rgba(220,38,38,0.40);
+  animation: page-chat-stop-pulse 1.4s ease-in-out infinite;
+}
+.page-chat-send-btn.is-stop-mode:hover {
+  background: #b91c1c;
+  transform: scale(1.07) translateY(-1px);
+  box-shadow: 0 6px 20px rgba(220,38,38,0.55);
+  animation-play-state: paused;
+}
+.page-chat-send-btn.is-stop-mode:active { transform: scale(0.96); }
+@keyframes page-chat-stop-pulse {
+  0%, 100% { box-shadow: 0 4px 14px rgba(220,38,38,0.40); }
+  50%      { box-shadow: 0 4px 18px rgba(220,38,38,0.70), 0 0 0 4px rgba(220,38,38,0.15); }
+}
 .page-chat-input-footer {
   text-align: center; margin-top: 7px;
   font-size: 0.70rem; color: var(--text-muted);
 }
+
+/* ── Attachment chip (shown when a file is queued for the next message) ── */
+.page-chat-attach-chip-row {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 4px 0 8px; margin-bottom: 2px;
+}
+.page-chat-attach-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 10px 6px 9px;
+  background: #f0f7ff; border: 1px solid #c3daf9; border-radius: 8px;
+  font-size: 0.76rem; color: #18409b;
+  max-width: 100%;
+}
+.page-chat-attach-chip-name {
+  max-width: 220px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-weight: 600;
+}
+.page-chat-attach-chip-size {
+  color: #7280a0; font-size: 0.68rem; font-weight: 500;
+}
+.page-chat-attach-chip-remove {
+  border: none; background: transparent; cursor: pointer;
+  color: #7280a0; font-size: 0.9rem; line-height: 1;
+  padding: 0 2px; margin-left: 4px;
+  border-radius: 4px;
+}
+.page-chat-attach-chip-remove:hover { color: #dc2626; background: rgba(220,38,38,0.08); }
 
 /* ── Right panel ─────────────────────────────────────────────── */
 .page-chat-sidebar-right {

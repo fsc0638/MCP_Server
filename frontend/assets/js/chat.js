@@ -2,7 +2,7 @@
   "use strict";
 
   const ACTIVE_TASK_STATUSES = new Set(["running", "tool_call", "requires_approval", "approved"]);
-  const TERMINAL_TASK_STATUSES = new Set(["completed", "error", "rejected"]);
+  const TERMINAL_TASK_STATUSES = new Set(["completed", "error", "rejected", "cancelled"]);
 
   function generatePersistedSessionId() {
     return "web-" + Math.random().toString(36).slice(2, 10);
@@ -793,10 +793,75 @@
   function syncComposerState() {
     if (!sendBtn) return;
     const hasText = !!(chatInput && chatInput.value.trim());
-    // 只有當前 session 有活躍任務時才禁用發送按鈕
-    // 其他 session 的背景任務不影響當前 session 的輸入
     const hasActiveTaskInCurrentSession = listActiveTasksForSession(state.sessionId).length > 0;
-    sendBtn.disabled = !hasText || hasActiveTaskInCurrentSession;
+
+    if (hasActiveTaskInCurrentSession) {
+      // ── Stop mode: AI 正在回覆 ──
+      sendBtn.classList.add("is-stop-mode");
+      sendBtn.disabled = false;
+      sendBtn.setAttribute("aria-label", "停止 AI 回覆");
+      sendBtn.setAttribute("title", "停止 AI 回覆");
+      sendBtn.dataset.mode = "stop";
+      // Swap icon to a square stop icon
+      sendBtn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<rect x="6" y="6" width="12" height="12" rx="2" ry="2" fill="currentColor"/>' +
+        '</svg>';
+    } else {
+      // ── Send mode (default) ──
+      sendBtn.classList.remove("is-stop-mode");
+      sendBtn.disabled = !hasText;
+      sendBtn.setAttribute("aria-label", "送出訊息");
+      sendBtn.setAttribute("title", "送出訊息");
+      sendBtn.dataset.mode = "send";
+      sendBtn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<line x1="22" y1="2" x2="11" y2="13"></line>' +
+        '<polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>' +
+        '</svg>';
+    }
+  }
+
+  // Cancel all active tasks for the current session (server + client side)
+  async function stopAllActiveTasks() {
+    const sessionId = state.sessionId;
+    const active = listActiveTasksForSession(sessionId);
+    if (!active.length) return;
+
+    // 1. Tell server to cancel (non-blocking on error)
+    try {
+      await fetch(`/chat/stop_all/${encodeURIComponent(sessionId)}`, {
+        method: "POST",
+        credentials: "same-origin",
+      });
+    } catch (err) {
+      console.warn("[stopAll] server call failed:", err);
+    }
+
+    // 2. Locally mark tasks as cancelled (server will also send SSE cancelled
+    //    event, but we do it here immediately so UI responds instantly)
+    active.forEach((task) => {
+      task.status = "cancelled";
+      task.completed = true;
+      task.error = "已中止";
+      // Close any open SSE reader for this task
+      if (task.reader) {
+        try { task.reader.cancel(); } catch (_) {}
+      }
+    });
+
+    // 3. Clear typing, update bubble (append [已中止] marker if partial text)
+    removeTyping(sessionId);
+    active.forEach((task) => {
+      if (task.text) {
+        showTaskBubble(task, true);
+      }
+    });
+
+    // 4. Re-enable input
+    syncComposerState();
+    renderConversationList();
+    if (window.showToast) showToast("已中止 AI 回覆", "info");
   }
 
   function getTypingIndicatorId(sessionId) {
@@ -1394,6 +1459,17 @@
             showTaskBubble(task, true);
             return task.text;
           }
+          if (parsed.status === "cancelled") {
+            // Server confirms cancellation (either from our stop button or admin action)
+            task.status = "cancelled";
+            task.completed = true;
+            task.text = (parsed.content || task.text || "") + (task.text ? "\n\n[已中止]" : "[已中止]");
+            task.error = "";
+            removeTyping(task.sessionId);
+            showTaskBubble(task, true);
+            syncComposerState();
+            return task.text;
+          }
           if (parsed.status === "error") {
             task.status = "error";
             task.completed = true;
@@ -1493,8 +1569,15 @@
     const pendingAudio = state.sessionPendingAudioFile[requestSessionId] || null;
     const explicitAttachedFile =
       typeof opts.attachedFile === "string" ? opts.attachedFile.trim() : "";
+    // Generic attachment queued via 📎 button (takes precedence if neither of
+    // explicit nor pending audio applies).
+    const pendingAttachment = !explicitAttachedFile && !(pendingAudio && pendingAudio.path)
+      ? _takeSessionAttachment(requestSessionId)
+      : null;
     const attachedFileForTurn =
-      explicitAttachedFile || (pendingAudio && pendingAudio.path ? pendingAudio.path : "");
+      explicitAttachedFile
+      || (pendingAudio && pendingAudio.path ? pendingAudio.path : "")
+      || (pendingAttachment && pendingAttachment.path ? pendingAttachment.path : "");
     const uploadHandoff = !!opts.uploadHandoff;
     const keepPendingAudio = !!opts.keepPendingAudio;
     // 只檢查當前 session 自己是否還在 pending;其他 session 的 task 完全不影響
@@ -1819,6 +1902,96 @@
     if (session) window.loadConversationById(session.id, true);
   };
 
+  // ── Generic file attachment (PDF/DOCX/images/etc.) ──
+  // Uses /api/upload/personal which stores into
+  // Agent_workspace/line_uploads/{user_id}/ — same pool as LINE Bot uploads.
+  window.triggerGenericUpload = function () {
+    const fileInput = document.getElementById("genericFileInput");
+    if (!fileInput) return;
+    fileInput.value = "";
+    fileInput.onchange = async function () {
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      // Size guard: 50 MB cap for web uploads
+      const MAX_BYTES = 50 * 1024 * 1024;
+      if (file.size > MAX_BYTES) {
+        showToast(`檔案過大（${(file.size / 1048576).toFixed(1)} MB），上限 50 MB`, "error");
+        return;
+      }
+
+      showToast("正在上傳 " + file.name + "...", "info");
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        const res = await fetch("/api/upload/personal", {
+          method: "POST",
+          credentials: "same-origin",
+          body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== "success") {
+          throw new Error(data.detail || "Upload failed");
+        }
+
+        // Queue as attachment for the NEXT message send
+        state.sessionPendingAttachment = state.sessionPendingAttachment || {};
+        state.sessionPendingAttachment[state.sessionId] = {
+          path: String(data.filepath || ""),
+          name: file.name || String(data.filename || ""),
+          size: data.size || file.size,
+        };
+        _renderAttachChip();
+        showToast(`已附加「${file.name}」，輸入訊息後送出`, "success");
+      } catch (err) {
+        showToast("檔案上傳失敗：" + (err.message || "未知錯誤"), "error");
+      }
+    };
+    fileInput.click();
+  };
+
+  function _renderAttachChip() {
+    const row = document.getElementById("attachChipRow");
+    if (!row) return;
+    const att = (state.sessionPendingAttachment || {})[state.sessionId];
+    if (!att) {
+      row.style.display = "none";
+      row.innerHTML = "";
+      return;
+    }
+    const sizeKB = att.size ? Math.round(att.size / 1024) : 0;
+    const safeName = escapeHtml(att.name || "file");
+    row.style.display = "flex";
+    row.innerHTML =
+      '<div class="page-chat-attach-chip" role="button" tabindex="0">' +
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>' +
+      '<polyline points="14 2 14 8 20 8"/></svg>' +
+      '<span class="page-chat-attach-chip-name">' + safeName + '</span>' +
+      (sizeKB ? '<span class="page-chat-attach-chip-size">' + sizeKB + ' KB</span>' : '') +
+      '<button class="page-chat-attach-chip-remove" onclick="window._clearAttachChip()" aria-label="移除附件" title="移除">✕</button>' +
+      '</div>';
+  }
+
+  window._clearAttachChip = function () {
+    if (state.sessionPendingAttachment) {
+      delete state.sessionPendingAttachment[state.sessionId];
+    }
+    _renderAttachChip();
+  };
+
+  function _takeSessionAttachment(sessionId) {
+    // Pop the attachment (single-use: after send, it's gone)
+    if (!state.sessionPendingAttachment) return null;
+    const att = state.sessionPendingAttachment[sessionId];
+    if (att) {
+      delete state.sessionPendingAttachment[sessionId];
+      _renderAttachChip();
+    }
+    return att;
+  }
+
   window.triggerAudioUpload = function () {
     const audioFileInput = document.getElementById("audioFileInput");
     if (!audioFileInput) return;
@@ -1872,11 +2045,20 @@
     chatInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        sendMessage(chatInput.value);
+        // Enter in stop mode = stop, not send
+        if (sendBtn.dataset.mode === "stop") {
+          stopAllActiveTasks();
+        } else {
+          sendMessage(chatInput.value);
+        }
       }
     });
     sendBtn.addEventListener("click", function () {
-      sendMessage(chatInput.value);
+      if (sendBtn.dataset.mode === "stop") {
+        stopAllActiveTasks();
+      } else {
+        sendMessage(chatInput.value);
+      }
     });
   }
 

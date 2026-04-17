@@ -476,6 +476,29 @@ async def process_chat_native(req: ChatRequest):
                     max_tools=_max_tools,
                 )
             ):
+                # ── Cancellation check (user pressed stop) ──
+                # Cheap (in-memory dict lookup); polled per chunk so we stop
+                # within one streaming delta or one tool call.
+                if task_registry.is_cancelled(task_id):
+                    logger.info(f"[ChatCore] task={task_id} cancelled by user, breaking stream")
+                    # Persist any partial text accumulated so far
+                    try:
+                        if final_content:
+                            session_mgr.append_message(session_id, "assistant", final_content + "\n\n[已中止]")
+                    except Exception:
+                        pass
+                    yield {
+                        "data": json.dumps(
+                            wrap_payload({
+                                "status": "cancelled",
+                                "content": final_content,
+                                "message": "已中止",
+                            }),
+                            ensure_ascii=False,
+                        )
+                    }
+                    break
+
                 status = chunk.get("status")
                 last_status = status
 
