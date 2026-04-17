@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Cookie, HTTPException
 from pydantic import BaseModel
 
 router = APIRouter(tags=["Workflow"])
@@ -199,9 +199,33 @@ def get_workflow(workflow_id: str, scope: str = "personal", owner: str = "defaul
 
 
 @router.post("/api/workflows/{workflow_id}")
-def save_workflow(workflow_id: str, req: WorkflowSaveRequest):
-    """Create or update a workflow."""
+def save_workflow(
+    workflow_id: str,
+    req: WorkflowSaveRequest,
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """Create or update a workflow.
+
+    Permission enforcement:
+      - System scope: admin only
+      - Department scope: member of that dept only
+      - Personal scope: owner only
+      - Guest: max 3 workflows total
+    """
+    from server.services.permissions import (
+        check_scope_write_permission,
+        enforce_guest_workflow_quota,
+        resolve_caller_context,
+    )
+
+    caller_ctx = resolve_caller_context(mcp_session)
+    check_scope_write_permission(req.scope, req.owner, caller_ctx, resource_kind="工作流")
+
     path = _workflows_dir(req.scope, req.owner) / f"{workflow_id}.json"
+    # Quota only applies to NEW workflow creation (not updates of existing)
+    if not path.exists():
+        enforce_guest_workflow_quota(caller_ctx, creating_new=True)
+
     data = {
         "id": workflow_id,
         "name": req.name,
@@ -220,10 +244,17 @@ def save_workflow(workflow_id: str, req: WorkflowSaveRequest):
         "owner": req.owner,
         "updated_at": datetime.now().isoformat(),
     }
+    # Track the creator for dept-scope quota counting
+    _uid = (caller_ctx or {}).get("user_id", "")
+    if _uid:
+        data["created_by"] = _uid
     if path.exists():
         try:
             old = json.loads(path.read_text(encoding="utf-8"))
             data["created_at"] = old.get("created_at", data["updated_at"])
+            # Preserve original creator if already set
+            if old.get("created_by"):
+                data["created_by"] = old["created_by"]
         except Exception:
             data["created_at"] = data["updated_at"]
     else:
@@ -258,10 +289,22 @@ def delete_workflow(
     scope: str = "personal",
     owner: str = "default",
     req: WorkflowDeleteRequest = None,
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
 ):
-    """Delete a workflow and commit the deletion to git with reason + actor info."""
+    """Delete a workflow and commit the deletion to git with reason + actor info.
+
+    Permission: only the owner (or admin) may delete. System scope needs admin.
+    """
+    from server.services.permissions import (
+        check_scope_write_permission,
+        resolve_caller_context,
+    )
+
     if req is None:
         req = WorkflowDeleteRequest()
+
+    caller_ctx = resolve_caller_context(mcp_session)
+    check_scope_write_permission(scope, owner, caller_ctx, resource_kind="工作流")
 
     path = _workflows_dir(scope, owner) / f"{workflow_id}.json"
     if not path.exists():

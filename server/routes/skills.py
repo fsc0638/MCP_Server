@@ -307,8 +307,12 @@ def update_skill(skill_name: str, req: SkillUpdateRequest):
 
 
 @router.delete("/skills/{skill_name}")
-def delete_skill(skill_name: str, req: SkillDeleteRequest):
+def delete_skill(skill_name: str, req: SkillDeleteRequest, request: Request):
     from server.core.retriever import retriever
+    from server.services.permissions import (
+        check_scope_write_permission,
+        resolve_caller_context,
+    )
 
     uma = get_uma()
     skill = uma.registry.get_skill(skill_name)
@@ -316,6 +320,23 @@ def delete_skill(skill_name: str, req: SkillDeleteRequest):
         raise HTTPException(status_code=404, detail=f"Skill '{skill_name}' not found")
     skill_path = skill["path"].resolve()
     _validate_skill_path(skill_path)
+
+    # ── Permission enforcement ──
+    # Derive (scope, owner) from the skill's metadata _scope field:
+    #   "system"           → system
+    #   "dept:Y200"        → department, owner=Y200
+    #   "user:U09abc..."   → personal, owner=U09abc...
+    _meta_scope = skill["metadata"].get("_scope", "system")
+    if _meta_scope.startswith("dept:"):
+        _scope, _owner = "department", _meta_scope.split(":", 1)[1]
+    elif _meta_scope.startswith("user:"):
+        _scope, _owner = "personal", _meta_scope.split(":", 1)[1]
+    else:
+        _scope, _owner = "system", ""
+
+    _mcp_cookie = request.cookies.get("mcp_session", "")
+    _caller_ctx = resolve_caller_context(_mcp_cookie)
+    check_scope_write_permission(_scope, _owner, _caller_ctx, resource_kind="Agent Skill")
 
     try:
         retriever.delete_document(skill_name)
@@ -531,6 +552,26 @@ def rescan_skills():
 @router.post("/skills/create")
 def create_skill(req: CreateSkillRequest, request: Request):
     uma = get_uma()
+
+    # ── Permission enforcement ──
+    # - system scope: admin only
+    # - department scope: member of that dept (or admin)
+    # - personal scope: owner (or admin)
+    # - guest users: max 10 skills total
+    from server.services.permissions import (
+        check_scope_write_permission,
+        enforce_guest_skill_quota,
+        resolve_caller_context,
+    )
+    _mcp_cookie = request.cookies.get("mcp_session", "")
+    _caller_ctx = resolve_caller_context(_mcp_cookie)
+    check_scope_write_permission(
+        req.scope or "system",
+        req.owner or "",
+        _caller_ctx,
+        resource_kind="Agent Skill",
+    )
+    enforce_guest_skill_quota(_caller_ctx, creating_new=True)
 
     name = req.name.strip().lower().replace("_", "-")
     if not name.startswith("mcp-"):
