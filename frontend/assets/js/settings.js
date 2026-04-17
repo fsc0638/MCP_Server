@@ -117,16 +117,19 @@
     const overlay = document.getElementById('idVerifyOverlay');
     if (!overlay) return;
 
-    // Pre-flight: check if user actually has a server-side session (LINE login).
-    // Form/Google login users won't have mcp_session cookie, so /link-employee
-    // will always 401. Tell them upfront instead of making them fill the form.
+    // Pre-flight: user must have a server-side session (mcp_session cookie).
+    // Accepted providers: LINE, Password. Anyone else gets blocked.
     const provider = (userData && userData.provider) || '';
-    const hasLineAuth = provider === 'line' || (userData && userData.id && String(userData.id).startsWith('line_'));
-    if (!hasLineAuth) {
+    const id = (userData && userData.id) || '';
+    const hasServerSession =
+      provider === 'line' || provider === 'password' ||
+      (id && (id.startsWith('line_') || id.startsWith('pw_')));
+
+    if (!hasServerSession) {
       if (window.showToast) {
-        window.showToast('身分驗證目前僅支援 LINE 登入。請先登出並改用 LINE 登入', 'error');
+        window.showToast('身分驗證需要登入 Session，請重新登入後再試', 'error');
       } else {
-        alert('身分驗證目前僅支援 LINE 登入方式。\n\n請先登出並從首頁點「使用 LINE 登入」。');
+        alert('身分驗證需要登入 Session。\n\n請先登出並重新登入。');
       }
       return;
     }

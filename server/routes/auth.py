@@ -194,17 +194,15 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
     # Load extended user context if available
     # Try multiple session_id formats to find the user context file
     _ctx = None
+    _uid = sess.user_id  # Ensure _uid is always defined, even if import fails
     try:
         from server.services.employee_lookup import get_user_context
         # sess.user_id could be:
-        #   "line_U09e..." (from LINE Login canonical_line_session_id)
-        #   "U09e..." (raw LINE userId)
-        #   "google_xxx" (from Google login)
-        _uid = sess.user_id
+        #   "line_U09e..."              (LINE Login canonical_line_session_id)
+        #   "U09e..."                    (raw LINE userId — legacy)
+        #   "pw_user_at_kway_com_tw"     (Password login)
         _candidates = [_uid]  # Try as-is first
-        if _uid.startswith("line_"):
-            pass  # Already has prefix, as-is is correct
-        elif _uid.startswith("U"):
+        if _uid.startswith("U") and not _uid.startswith("pw_"):
             _candidates.append(f"line_{_uid}")  # Add line_ prefix
         for _cand in _candidates:
             _ctx = get_user_context(_cand)
@@ -213,13 +211,23 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
     except Exception:
         _ctx = None
 
+    # Infer provider from user_id prefix so frontend knows which login method
+    if _uid.startswith("line_"):
+        _provider = "line"
+    elif _uid.startswith("pw_"):
+        _provider = "password"
+    else:
+        _provider = "unknown"
+
+    _display_name = (_ctx.get("name") if _ctx else None) or sess.name or "User"
+
     user = {
         "id": sess.user_id,
         "session_id": _uid,
-        "name": (_ctx.get("name") if _ctx else None) or sess.name or "LINE User",
+        "name": _display_name,
         "picture": sess.picture or "",
-        "initials": ((_ctx.get("name") if _ctx else None) or sess.name or "L")[:2].upper(),
-        "provider": "line",
+        "initials": (_display_name[:2] if _display_name else "U").upper(),
+        "provider": _provider,
     }
 
     # Merge extended profile fields if available
@@ -239,6 +247,137 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
     user["_debug_sess_user_id"] = sess.user_id
     user["_debug_ctx_found"] = _ctx is not None
     return {"status": "success", "user": user}
+
+
+# ── Password Login ────────────────────────────────────────────────────────
+
+class PasswordLoginRequest(BaseModel):
+    email: str = ""
+    password: str = ""
+    remember: bool = True
+
+
+# Demo password fallback — used when no real password store exists yet.
+# Set DEMO_PASSWORD_FALLBACK="" in .env to disable demo login.
+_DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD_FALLBACK", "demo1234")
+_DEMO_MODE_ENABLED = os.environ.get("DEMO_MODE", "1").strip() not in ("0", "false", "no", "")
+
+
+def _sanitize_user_id(email: str) -> str:
+    """Turn an email into a stable filesystem-safe user_id.
+
+    Example: 'user@kway.com.tw' → 'pw_user_at_kway_com_tw'
+
+    Using a readable form (not hash) so admins can locate user files easily.
+    """
+    import re as _re
+    s = email.lower().strip()
+    s = s.replace("@", "_at_").replace(".", "_")
+    s = _re.sub(r"[^a-z0-9_]", "_", s)
+    s = _re.sub(r"_+", "_", s).strip("_")
+    return "pw_" + (s or "anon")
+
+
+def _verify_password(email: str, password: str) -> bool:
+    """Check user credentials.
+
+    Priority:
+    1. Real password stored in xlsx employee record (column 'password', not yet implemented)
+    2. Per-user override via env var USER_PASSWORDS="a@b.com:pwd1,c@d.com:pwd2"
+    3. Demo fallback (DEMO_MODE=1): any email accepts DEMO_PASSWORD
+
+    Returns True if password matches.
+    """
+    if not password:
+        return False
+
+    # Priority 2: per-user override from env
+    overrides = os.environ.get("USER_PASSWORDS", "").strip()
+    if overrides:
+        for pair in overrides.split(","):
+            if ":" in pair:
+                u, p = pair.split(":", 1)
+                if u.strip().lower() == email.lower() and p.strip() == password:
+                    return True
+
+    # Priority 3: demo fallback
+    if _DEMO_MODE_ENABLED and _DEMO_PASSWORD and password == _DEMO_PASSWORD:
+        _auth_logger.info("[PasswordLogin] Using demo password fallback for %s", email)
+        return True
+
+    return False
+
+
+@router.post("/password-login")
+def password_login_api(req: PasswordLoginRequest):
+    """Form-based login. Creates a signed mcp_session cookie (same as LINE)
+    so all downstream systems (memory, profile, workflows, identity verify)
+    work seamlessly regardless of login provider.
+
+    user_id format: pw_<sanitized_email>  — stable per email
+    """
+    email = (req.email or "").strip().lower()
+    password = req.password or ""
+
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="invalid_email")
+
+    if not _verify_password(email, password):
+        _auth_logger.info("[PasswordLogin] Rejected (bad credentials) for %s", email)
+        raise HTTPException(status_code=401, detail="invalid_credentials")
+
+    # Build user_id from email (stable across logins)
+    user_id = _sanitize_user_id(email)
+
+    # Try to enrich from employee directory (for display only)
+    try:
+        from server.services.employee_lookup import lookup_by_email, get_user_context
+        emp = lookup_by_email(email)
+    except Exception:
+        emp = None
+
+    display_name = (emp.get("name") if emp else email.split("@")[0]) or email
+    picture = ""
+
+    # Create server-side session + signed cookie (same mechanism as LINE)
+    from server.services.auth_session_store import get_auth_session_store
+    from server.services.session_token_cookie import sign_token
+    ttl = 60 * 60 * 24 * (30 if req.remember else 1)  # 30 days if remember else 1 day
+    sess = get_auth_session_store().create(
+        user_id=user_id, name=display_name, picture=picture, ttl_seconds=ttl
+    )
+    signed = sign_token(sess.token)
+
+    _auth_logger.info("[PasswordLogin] OK email=%s user_id=%s", email, user_id)
+
+    # Build response
+    user_payload = {
+        "id": user_id,
+        "email": email,
+        "name": display_name,
+        "initials": display_name[:2].upper() if display_name else "U",
+        "provider": "password",
+    }
+    # Attach employee fields if matched (so frontend can populate immediately)
+    if emp:
+        user_payload.update({
+            "employee_id": emp.get("employee_id", ""),
+            "department_code": emp.get("department_code", ""),
+            "department_name": emp.get("department_name", ""),
+            "title": emp.get("title", ""),
+            "extension": emp.get("extension", ""),
+        })
+
+    resp = JSONResponse({"status": "success", "user": user_payload})
+    resp.set_cookie(
+        key="mcp_session",
+        value=signed,
+        httponly=True,
+        samesite="lax",
+        path="/",
+        max_age=ttl,
+    )
+    return resp
 
 
 # ── Logout ────────────────────────────────────────────────────────────────
