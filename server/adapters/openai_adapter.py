@@ -427,6 +427,9 @@ class OpenAIAdapter:
                                     fn_args.setdefault("meeting_date", _orig_date)
                                 # For transcribe: ensure file_path is a real, existing path.
                                 # Some model outputs use placeholders like "<please provide path>".
+                                # Also recover from relative/bare filenames that do not exist
+                                # in current working directory by falling back to the uploaded
+                                # original audio path captured in session metadata.
                                 if fn_name == "mcp-transcribe" and _orig_ext in _audio_exts:
                                     _raw_fp = fn_args.get("file_path")
                                     _fp = str(_raw_fp).strip() if _raw_fp is not None else ""
@@ -456,11 +459,17 @@ class OpenAIAdapter:
                                         or ("{" in _fp and "}" in _fp)
                                         or any(marker in _fp_lower for marker in _placeholder_markers)
                                     )
-                                    if (not _fp_exists) and _looks_placeholder:
+                                    _needs_recovery = (not _fp_exists) and bool(_orig_path)
+                                    if _needs_recovery:
                                         fn_args["file_path"] = _orig_path
-                                        logger.info(
-                                            f"[Adapter] Replaced invalid transcribe file_path with original audio path: {_orig_path}"
-                                        )
+                                        if _looks_placeholder:
+                                            logger.info(
+                                                f"[Adapter] Replaced invalid transcribe file_path with original audio path: {_orig_path}"
+                                            )
+                                        else:
+                                            logger.info(
+                                                f"[Adapter] Replaced non-existing transcribe file_path '{_fp}' with original audio path: {_orig_path}"
+                                            )
                                 # For meeting-analyzer: inject full transcript text
                                 if fn_name == "mcp-meeting-analyzer":
                                     if _orig_ext not in _audio_exts:
