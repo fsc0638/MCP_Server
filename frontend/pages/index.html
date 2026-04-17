@@ -157,6 +157,47 @@
 
 </div>
 
+<!-- Login page status banner (success/warning variants) -->
+<div id="loginStatusBanner" style="display:none;position:fixed;top:20px;left:50%;transform:translateX(-50%);padding:10px 22px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,0.18);font-size:0.9rem;font-weight:600;z-index:9999;opacity:0;transition:opacity 0.3s;" role="status" aria-live="polite"></div>
+
+<script>
+  (function () {
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var banner = document.getElementById('loginStatusBanner');
+      var text = '', bg = '', fg = '#fff', shown = false;
+
+      if (params.get('logged_out') === '1') {
+        text = '✓ 已安全登出';
+        bg = '#22c55e';
+        shown = true;
+      } else if (params.get('session_expired') === '1') {
+        text = '⚠️ 登入狀態已失效，請重新登入';
+        bg = '#f59e0b';
+        shown = true;
+      }
+
+      if (shown && banner) {
+        banner.textContent = text;
+        banner.style.background = bg;
+        banner.style.color = fg;
+        banner.style.display = 'block';
+        requestAnimationFrame(function () { banner.style.opacity = '1'; });
+        setTimeout(function () {
+          banner.style.opacity = '0';
+          setTimeout(function () { banner.style.display = 'none'; }, 300);
+        }, 3000);
+
+        // Strip query so refresh doesn't re-trigger
+        if (window.history && window.history.replaceState) {
+          var clean = window.location.pathname + window.location.hash;
+          window.history.replaceState({}, document.title, clean);
+        }
+      }
+    } catch (_) {}
+  })();
+</script>
+
 <script src="../assets/js/script.js"></script>
 </body>
 </html>

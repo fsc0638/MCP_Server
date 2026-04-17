@@ -319,3 +319,160 @@ html, body { height: 100%; overflow: hidden; }
 .page-settings-plan-stat { text-align: center; padding: 9px; background: rgba(255,255,255,0.10); border-radius: 8px; }
 .page-settings-plan-stat-val { font-size: 1rem; font-weight: 700; color: #fff; }
 .page-settings-plan-stat-label { font-size: 0.68rem; color: rgba(255,255,255,0.55); margin-top: 2px; }
+
+/* ─── Identity Verification Card (in Profile section) ─── */
+.page-settings-id-card {
+  background: var(--bg-surface, #fff);
+  border: 1.5px solid var(--border-subtle, #e2e8f0);
+  border-radius: 12px;
+  padding: 16px 18px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.page-settings-id-card.verified {
+  background: #f0fdf4;
+  border-color: #86efac;
+}
+.page-settings-id-card.unverified {
+  background: #fff8e1;
+  border-color: #ffd980;
+}
+.page-settings-id-status {
+  display: flex; align-items: center; gap: 14px;
+}
+.page-settings-id-icon {
+  font-size: 1.8rem; flex-shrink: 0; line-height: 1;
+}
+.page-settings-id-info { flex: 1; min-width: 0; }
+.page-settings-id-title {
+  font-size: 0.92rem; font-weight: 700; color: var(--text-primary, #1e293b);
+  margin-bottom: 2px;
+}
+.page-settings-id-desc {
+  font-size: 0.76rem; color: var(--text-secondary, #64748b);
+}
+.page-settings-btn-primary {
+  padding: 8px 18px; border-radius: 8px;
+  background: var(--kway-blue, #4a90d9); color: #fff;
+  border: none; font-size: 0.82rem; font-weight: 600;
+  cursor: pointer; transition: background 0.15s, transform 0.1s;
+  flex-shrink: 0;
+}
+.page-settings-btn-primary:hover { background: #3a7cc4; }
+.page-settings-btn-primary:active { transform: translateY(1px); }
+.page-settings-btn-primary:disabled {
+  background: #cbd5e1; cursor: not-allowed; transform: none;
+}
+.page-settings-btn-cancel {
+  padding: 8px 18px; border-radius: 8px;
+  background: transparent; color: var(--text-secondary, #64748b);
+  border: 1px solid var(--border-subtle, #e2e8f0);
+  font-size: 0.82rem; cursor: pointer;
+  transition: background 0.15s;
+}
+.page-settings-btn-cancel:hover { background: var(--bg-main, #f8f9fb); }
+
+/* ─── Identity Verification Modal ─── */
+.id-verify-overlay {
+  position: fixed; inset: 0; z-index: 9500;
+  background: rgba(0,0,0,0.45); backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  animation: idVerifyFadeIn 0.18s ease;
+}
+@keyframes idVerifyFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.id-verify-modal {
+  background: var(--bg-surface, #fff);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+  width: 460px; max-width: 92vw;
+  overflow: hidden;
+  animation: idVerifySlideUp 0.22s cubic-bezier(0.34,1.56,0.64,1);
+}
+@keyframes idVerifySlideUp {
+  from { transform: translateY(20px) scale(0.97); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+.id-verify-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 18px 22px; border-bottom: 1px solid var(--border-subtle, #e2e8f0);
+}
+.id-verify-header h3 {
+  margin: 0; font-size: 1.05rem; font-weight: 700; color: var(--text-primary);
+}
+.id-verify-close {
+  background: none; border: none; font-size: 1.5rem; line-height: 1;
+  color: var(--text-tertiary, #94a3b8); cursor: pointer; padding: 0 4px;
+}
+.id-verify-close:hover { color: var(--text-primary); }
+.id-verify-body { padding: 20px 22px; }
+.id-verify-hint {
+  margin: 0 0 14px; font-size: 0.82rem; color: var(--text-secondary, #64748b);
+}
+.id-verify-type-tabs {
+  display: flex; gap: 6px; margin-bottom: 14px;
+  background: var(--bg-main, #f8f9fb); border-radius: 8px; padding: 4px;
+}
+.id-verify-type-tab {
+  flex: 1; padding: 7px 10px;
+  border: none; background: transparent;
+  font-size: 0.78rem; color: var(--text-secondary, #64748b);
+  border-radius: 6px; cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.id-verify-type-tab:hover { color: var(--text-primary); }
+.id-verify-type-tab.is-active {
+  background: #fff; color: var(--kway-blue, #4a90d9); font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+.id-verify-input {
+  width: 100%; padding: 10px 14px;
+  border: 1.5px solid var(--border-subtle, #e2e8f0); border-radius: 8px;
+  font-size: 0.9rem; outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+.id-verify-input:focus { border-color: var(--kway-blue, #4a90d9); }
+.id-verify-error {
+  margin-top: 10px; padding: 8px 12px;
+  background: #fff5f5; color: #c53030; font-size: 0.78rem;
+  border-radius: 6px; border: 1px solid #fed7d7;
+}
+.id-verify-footer {
+  display: flex; gap: 10px; justify-content: flex-end;
+  margin-top: 18px;
+}
+
+/* Step 2: candidates */
+.id-verify-candidates {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 320px; overflow-y: auto;
+}
+.id-verify-candidate {
+  padding: 12px 14px;
+  border: 1.5px solid var(--border-subtle, #e2e8f0); border-radius: 10px;
+  cursor: pointer; background: var(--bg-main, #f8f9fb);
+  transition: border-color 0.15s, background 0.15s;
+}
+.id-verify-candidate:hover {
+  border-color: var(--kway-blue, #4a90d9); background: #fff;
+}
+.id-verify-candidate-name {
+  font-size: 0.88rem; font-weight: 700; color: var(--text-primary);
+  margin-bottom: 3px;
+}
+.id-verify-candidate-meta {
+  font-size: 0.72rem; color: var(--text-tertiary, #94a3b8);
+}
+
+/* Step 3: confirm card */
+.id-verify-confirm-card {
+  padding: 14px 16px;
+  background: var(--bg-main, #f8f9fb);
+  border: 1.5px solid #86efac;
+  border-radius: 10px;
+}
+.id-verify-confirm-row {
+  display: flex; justify-content: space-between;
+  padding: 4px 0; font-size: 0.82rem;
+}
+.id-verify-confirm-row-label { color: var(--text-tertiary); }
+.id-verify-confirm-row-value { color: var(--text-primary); font-weight: 600; }

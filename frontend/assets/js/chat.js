@@ -81,18 +81,128 @@
         localStorage.setItem("kway_chat_session", data.user.id);
         state.sessionId = data.user.id;
 
-        // Update avatar if picture available
-        const avatar = document.querySelector(".page-chat-topbar-avatar");
-        if (avatar && merged.picture) {
-          avatar.style.backgroundImage = `url(${merged.picture})`;
-          avatar.style.backgroundSize = "cover";
-          avatar.textContent = "";
+        // ── Update closure-scoped userData so NEW message bubbles use the real picture ──
+        if (userData) {
+          userData.name = merged.name || userData.name;
+          userData.picture = merged.picture || userData.picture || "";
+          userData.initials = merged.initials || (merged.name ? merged.name.slice(0, 2).toUpperCase() : userData.initials);
+          userData.dept = merged.department || merged.department_name || userData.dept || "";
+          userData.email = merged.email || userData.email || "";
         }
+
+        const pic = merged.picture || "";
+        const displayName = merged.name || "LINE User";
+        const displayInitials = merged.initials || displayName.slice(0, 2).toUpperCase();
+        const deptLine = merged.department || merged.department_name
+          ? `${merged.department || merged.department_name}${merged.title ? " · " + merged.title : ""}`
+          : "已登入";
+
+        // ── Topbar avatar (top-right circle) ──
+        const topbarAvatar = document.getElementById("topbarAvatar");
+        if (topbarAvatar) {
+          if (pic) {
+            topbarAvatar.style.backgroundImage = `url(${pic})`;
+            topbarAvatar.style.backgroundSize = "cover";
+            topbarAvatar.style.backgroundPosition = "center";
+            topbarAvatar.textContent = "";
+          } else {
+            topbarAvatar.textContent = displayInitials;
+          }
+        }
+
+        // ── Right sidebar user card (工作面板 → 資訊) ──
+        const sidebarAvatar = document.getElementById("sidebarAvatar");
+        if (sidebarAvatar) {
+          if (pic) {
+            sidebarAvatar.style.backgroundImage = `url(${pic})`;
+            sidebarAvatar.style.backgroundSize = "cover";
+            sidebarAvatar.style.backgroundPosition = "center";
+            sidebarAvatar.style.background = `center/cover no-repeat url(${pic})`;
+            sidebarAvatar.textContent = "";
+          } else {
+            sidebarAvatar.textContent = displayInitials;
+          }
+        }
+        const sidebarName = document.getElementById("sidebarName");
+        if (sidebarName) sidebarName.textContent = displayName;
+        const sidebarDept = document.getElementById("sidebarDept");
+        if (sidebarDept) sidebarDept.textContent = deptLine;
+
+        // ── Admin panel button — LINE login hydrates role asynchronously, so
+        // the inline visibility check in chat.html runs before role is known.
+        // Re-evaluate here now that we have the authoritative user data.
+        const adminBtn = document.getElementById("btnAdminPanel");
+        if (adminBtn) {
+          adminBtn.style.display = merged.role === "admin" ? "" : "none";
+        }
+
+        // ── First-login identity verification prompt ──
+        // If user hasn't completed onboarding (no employee_id bound), show a
+        // persistent banner linking to settings.html where the full verify
+        // modal lives. Non-blocking — user can still chat as guest.
+        const notVerified = !merged.onboarding_completed || !merged.employee_id;
+        if (notVerified) {
+          _showIdVerifyBanner();
+        } else {
+          _hideIdVerifyBanner();
+        }
+
+        // ── Refresh avatars on already-rendered user messages ──
+        document.querySelectorAll(".page-chat-msg-row--user .avatar.avatar-sm").forEach(el => {
+          if (pic) {
+            el.innerHTML = `<img src="${pic}" referrerpolicy="no-referrer" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" onerror="this.parentElement.textContent='${displayInitials.replace(/'/g, "\\'")}'">`;
+          } else {
+            el.textContent = displayInitials;
+          }
+        });
       }
     } catch (_err) {
       // best effort
     }
   }
+
+  /* ── First-login verification banner ────────────────────────────────── */
+  function _showIdVerifyBanner() {
+    if (document.getElementById("idVerifyBanner")) return;  // already shown
+    // Respect user's temporary dismissal (session-level)
+    if (sessionStorage.getItem("kway_id_banner_dismissed") === "1") return;
+
+    const banner = document.createElement("div");
+    banner.id = "idVerifyBanner";
+    banner.style.cssText = [
+      "position:fixed",
+      "top:62px",
+      "left:50%",
+      "transform:translateX(-50%)",
+      "background:#fff8e1",
+      "color:#78491a",
+      "border:1.5px solid #ffd980",
+      "border-radius:10px",
+      "padding:10px 16px",
+      "box-shadow:0 6px 18px rgba(0,0,0,0.10)",
+      "z-index:500",
+      "font-size:0.82rem",
+      "display:flex",
+      "align-items:center",
+      "gap:12px",
+      "max-width:92vw",
+    ].join(";");
+    banner.innerHTML =
+      '<span style="font-size:1.1rem;">⚠️</span>' +
+      '<span>首次登入尚未完成身分驗證，綁定員工資料後可使用個人化功能</span>' +
+      '<a href="settings.html?verify=1" style="color:#4a90d9;font-weight:700;text-decoration:none;padding:3px 10px;border-radius:6px;border:1px solid #4a90d9;">前往驗證</a>' +
+      '<button onclick="_dismissIdVerifyBanner()" style="background:none;border:none;color:#888;cursor:pointer;font-size:1.1rem;line-height:1;padding:0 2px;" title="稍後再提醒">✕</button>';
+    document.body.appendChild(banner);
+  }
+
+  function _hideIdVerifyBanner() {
+    document.getElementById("idVerifyBanner")?.remove();
+  }
+
+  window._dismissIdVerifyBanner = function () {
+    sessionStorage.setItem("kway_id_banner_dismissed", "1");
+    _hideIdVerifyBanner();
+  };
 
   function showToast(msg, type) {
     const toast = document.getElementById("toast");

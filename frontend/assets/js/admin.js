@@ -1522,12 +1522,44 @@
         </div>
         <div class="admin-drawer-footer">
           <button class="admin-btn" style="color:var(--text-secondary);" onclick="document.getElementById('adminDrawerOverlay')?.remove()">取消</button>
+          <button class="admin-btn" style="color:#c53030;border-color:#fed7d7;" onclick="_unlinkUserIdentity('${_esc(empId)}','${_esc(emp.name||'')}')">解除 LINE/Google 綁定</button>
           <button class="admin-btn admin-btn-primary" onclick="_saveUserFromDrawer('${_esc(empId)}')">儲存</button>
         </div>
       </div>
     `;
     overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
+  };
+
+  /* ── Admin: Unlink Identity ──
+     For a given employee_id, find the corresponding LINE/Google session file
+     under workspace/users/ and delete it, forcing the user to re-verify. */
+  window._unlinkUserIdentity = async function (empId, empName) {
+    const input = prompt(
+      `確認要解除「${empName || empId}」的登入綁定嗎？\n\n` +
+      `使用者下次使用 LINE/Google 登入後將必須重新驗證身分。\n\n` +
+      `請輸入該使用者的 session user_id（例如：line_U09abc123...），\n` +
+      `或留空取消：`,
+      ""
+    );
+    if (!input || !input.trim()) return;
+    const targetId = input.trim();
+
+    try {
+      const resp = await fetch("/api/auth/admin/unlink-employee", {
+        method: "POST", credentials: "include",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ target_user_id: targetId }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) {
+        alert(`解綁失敗：${data.detail || resp.status}`);
+        return;
+      }
+      alert(`已解除 ${targetId} 的綁定，該使用者下次登入需重新驗證身分`);
+    } catch (e) {
+      alert(`網路錯誤：${e.message}`);
+    }
   };
 
   window._openNewUserDrawer = function () {
