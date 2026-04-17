@@ -48,6 +48,10 @@ def _auto_bind_line_user_context(user: dict) -> None:
     if existing_employee_id:
         candidates.append(("stored_employee_id", existing_employee_id))
 
+    line_name = str((user or {}).get("name") or "").strip()
+    if line_name:
+        candidates.append(("line_name", line_name))
+
     employee = None
     match_hint = ""
     for hint, query in candidates:
