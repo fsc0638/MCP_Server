@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import os
+from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Cookie, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
@@ -12,6 +13,30 @@ from server.schemas.user_documents import UserDocumentRenameRequest
 from server.services.user_document_service import ExpiredDocumentError, user_document_service
 
 router = APIRouter(prefix="/api/user-documents", tags=["User Documents"])
+
+
+def _ascii_header_filename(filename: str) -> str:
+    cleaned = (filename or "").replace('"', "_").replace("\\", "_").replace("/", "_")
+    cleaned = cleaned.replace("\r", " ").replace("\n", " ").strip().strip(". ")
+    ext = os.path.splitext(cleaned)[1]
+    ascii_name = cleaned.encode("ascii", "ignore").decode("ascii").strip().strip(". ")
+
+    if not ascii_name or ascii_name == ext:
+        if ext and ext.isascii():
+            return f"document{ext}"
+        return "document"
+
+    if ascii_name.startswith("."):
+        return f"document{ascii_name}"
+    return ascii_name
+
+
+def _build_content_disposition(disposition: str, filename: str) -> str:
+    safe_disposition = "inline" if disposition == "inline" else "attachment"
+    safe_filename = (filename or "document").replace('"', "_").replace("\r", " ").replace("\n", " ")
+    fallback = _ascii_header_filename(safe_filename)
+    encoded = quote(safe_filename, safe="")
+    return f"{safe_disposition}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
 
 
 def _resolve_current_user(mcp_session: str) -> tuple[str, str]:
@@ -123,9 +148,7 @@ def open_user_document_file(
         document = user_document_service.get_document(user_key, doc_id)
         path = user_document_service.get_document_path(user_key, doc_id)
         filename = document.get("display_name") or document.get("original_filename") or os.path.basename(str(path))
-        filename = filename.replace('"', "_")
-        safe_disposition = "inline" if disposition == "inline" else "attachment"
-        headers = {"Content-Disposition": f'{safe_disposition}; filename="{filename}"'}
+        headers = {"Content-Disposition": _build_content_disposition(disposition, filename)}
         return FileResponse(
             path=path,
             media_type=document.get("mime_type") or "application/octet-stream",

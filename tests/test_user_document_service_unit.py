@@ -16,6 +16,8 @@ def test_user_document_service_lifecycle(tmp_path: Path):
 
     assert created["extension"] == ".txt"
     assert created["text_extract_status"] == "pending"
+    assert created["stored_filename"] == "notes.txt"
+    assert (tmp_path / "tester" / "notes.txt").exists()
 
     docs = service.list_documents("tester")
     assert len(docs) == 1
@@ -33,6 +35,28 @@ def test_user_document_service_lifecycle(tmp_path: Path):
 
     service.delete_document("tester", created["doc_id"])
     assert service.list_documents("tester") == []
+
+
+def test_user_document_service_preserves_original_filename_with_suffix_for_duplicates(tmp_path: Path):
+    service = UserDocumentService(root_dir=tmp_path)
+
+    first = service.create_document(
+        user_key="tester",
+        raw_user_id="tester",
+        filename="互動牆.pdf",
+        content=b"first version",
+    )
+    second = service.create_document(
+        user_key="tester",
+        raw_user_id="tester",
+        filename="互動牆.pdf",
+        content=b"second version",
+    )
+
+    assert first["stored_filename"] == "互動牆.pdf"
+    assert second["stored_filename"] == "互動牆_2.pdf"
+    assert (tmp_path / "tester" / "互動牆.pdf").read_bytes() == b"first version"
+    assert (tmp_path / "tester" / "互動牆_2.pdf").read_bytes() == b"second version"
 
 
 def test_user_document_service_expires_and_cleans_up(tmp_path: Path):

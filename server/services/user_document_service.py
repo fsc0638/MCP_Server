@@ -20,6 +20,30 @@ USER_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
 TEXT_EXTRACTABLE_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
+WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    "COM1",
+    "COM2",
+    "COM3",
+    "COM4",
+    "COM5",
+    "COM6",
+    "COM7",
+    "COM8",
+    "COM9",
+    "LPT1",
+    "LPT2",
+    "LPT3",
+    "LPT4",
+    "LPT5",
+    "LPT6",
+    "LPT7",
+    "LPT8",
+    "LPT9",
+}
 
 
 def sanitize_filename(filename: str) -> str:
@@ -28,6 +52,12 @@ def sanitize_filename(filename: str) -> str:
     illegal_chars = {"\\", "/", ":", "*", "?", '"', "<", ">", "|", "\x00"}
     filename = "".join("_" if c in illegal_chars else c for c in filename)
     filename = filename.strip(". ").strip()
+    if not filename:
+        return "uploaded_file"
+    stem, ext = os.path.splitext(filename)
+    reserved_token = stem.split(".", 1)[0].upper()
+    if reserved_token in WINDOWS_RESERVED_NAMES:
+        filename = f"{stem}_{ext}"
     return filename or "uploaded_file"
 
 
@@ -145,6 +175,7 @@ class UserDocumentService:
 
     def _build_document_record(
         self,
+        doc_id: str | None,
         raw_user_id: str,
         original_filename: str,
         stored_filename: str,
@@ -152,7 +183,7 @@ class UserDocumentService:
     ) -> Dict[str, Any]:
         ext = Path(stored_filename).suffix.lower()
         mime_type = mimetypes.guess_type(stored_filename)[0] or "application/octet-stream"
-        doc_id = Path(stored_filename).stem
+        doc_id = doc_id or Path(stored_filename).stem
         created_at = now_iso()
         return {
             "doc_id": doc_id,
@@ -170,19 +201,43 @@ class UserDocumentService:
             "text_extract_status": "pending" if ext in TEXT_EXTRACTABLE_EXTENSIONS else "unsupported",
         }
 
+    def _build_unique_stored_filename(
+        self,
+        user_key: str,
+        preferred_filename: str,
+        reserved_names: set[str] | None = None,
+    ) -> str:
+        safe_name = sanitize_filename(preferred_filename)
+        stem = Path(safe_name).stem or "uploaded_file"
+        ext = Path(safe_name).suffix
+        user_dir = self.user_dir(user_key)
+        used_names = {name for name in (reserved_names or set()) if name}
+
+        candidate = safe_name
+        counter = 2
+        while candidate in used_names or (user_dir / candidate).exists():
+            candidate = f"{stem}_{counter}{ext}"
+            counter += 1
+        return candidate
+
     def create_document(self, user_key: str, raw_user_id: str, filename: str, content: bytes) -> Dict[str, Any]:
         safe_name = sanitize_filename(filename)
         ext = Path(safe_name).suffix.lower()
         if ext not in ALLOWED_EXTENSIONS:
             raise ValueError(f"Unsupported file type: {ext or '(none)'}")
 
+        manifest = self._load_manifest(user_key)
         doc_id = f"doc_{uuid4().hex[:12]}"
-        stored_filename = f"{doc_id}{ext}"
+        stored_filename = self._build_unique_stored_filename(
+            user_key,
+            safe_name,
+            reserved_names={item.get("stored_filename", "") for item in manifest.get("documents", [])},
+        )
         path = self.user_dir(user_key) / stored_filename
         path.write_bytes(content)
 
-        manifest = self._load_manifest(user_key)
         record = self._build_document_record(
+            doc_id=doc_id,
             raw_user_id=raw_user_id,
             original_filename=safe_name,
             stored_filename=stored_filename,
