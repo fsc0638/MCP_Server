@@ -197,7 +197,7 @@ async def process_chat_native(req: ChatRequest):
     )
     task_id = task["task_id"]
 
-    def _make_immediate_success_response(final_text: str):
+    def _make_immediate_success_response(final_text: str, extra_payload: dict | None = None):
         async def _event_generator():
             yield {
                 "data": json.dumps(
@@ -208,9 +208,18 @@ async def process_chat_native(req: ChatRequest):
             session_mgr.append_message(session_id, "user", req.user_input)
             session_mgr.append_message(session_id, "assistant", final_text)
             task_registry.mark_completed(task_id, final_text=final_text, assistant_message_persisted=True)
+            success_payload = {
+                "status": "success",
+                "content": final_text,
+                "task_id": task_id,
+                "session_id": session_id,
+                "turn_id": turn_id,
+            }
+            if extra_payload:
+                success_payload.update(extra_payload)
             yield {
                 "data": json.dumps(
-                    {"status": "success", "content": final_text, "task_id": task_id, "session_id": session_id, "turn_id": turn_id},
+                    success_payload,
                     ensure_ascii=False,
                 )
             }
@@ -274,13 +283,21 @@ async def process_chat_native(req: ChatRequest):
                 document = doc_turn.get("document") or {}
                 doc_id = document.get("doc_id", "")
                 doc_name = document.get("display_name") or document.get("original_filename") or doc_id or "文件"
+                response_meta = None
 
                 if action == "show_preview" and doc_id:
                     final_text = (
-                        f"已為你準備好「{doc_name}」的服務內預覽。\n"
+                        f"已直接為你開啟「{doc_name}」的服務內預覽。\n"
                         f"[在服務內預覽](/api/user-documents/{doc_id}/viewer)\n"
                         f"[下載原檔](/api/user-documents/{doc_id}/file?disposition=attachment)"
                     )
+                    response_meta = {
+                        "document_action": {
+                            "type": "open_preview",
+                            "doc_id": doc_id,
+                            "display_name": doc_name,
+                        }
+                    }
                 elif action == "show_link" and doc_id:
                     final_text = (
                         f"以下是「{doc_name}」可直接開啟的連結：\n"
@@ -297,7 +314,7 @@ async def process_chat_native(req: ChatRequest):
                         f"{snippet or '目前沒有可讀取的文字內容。'}"
                     )
 
-                return _make_immediate_success_response(final_text)
+                return _make_immediate_success_response(final_text, extra_payload=response_meta)
     except Exception as doc_turn_error:
         logger.warning(f"[DocTurn] Fallback to normal chat due to error: {doc_turn_error}")
 

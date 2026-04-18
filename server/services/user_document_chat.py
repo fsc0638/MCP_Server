@@ -9,70 +9,133 @@ from typing import Any, Dict, List
 PENDING_DOCUMENT_KEY = "pending_user_document_choice"
 PENDING_CANDIDATES_KEY = "pending_user_document_candidates"
 
+_DOCUMENT_KEYWORDS = (
+    "文件",
+    "檔案",
+    "file",
+    "files",
+    "document",
+    "documents",
+    "文件中心",
+    "檔案中心",
+    "document center",
+)
+
 _LIST_PATTERNS = (
-    "\u6709\u54ea\u4e9b\u6587\u4ef6",
-    "\u6709\u54ea\u4e9b\u6a94\u6848",
-    "\u76ee\u524d\u6709\u54ea\u4e9b\u6587\u4ef6",
-    "\u76ee\u524d\u6709\u54ea\u4e9b\u6a94\u6848",
-    "\u5217\u51fa\u6587\u4ef6",
-    "\u5217\u51fa\u6a94\u6848",
-    "\u6587\u4ef6\u5217\u8868",
-    "\u6a94\u6848\u5217\u8868",
-    "\u53ef\u67e5\u95b1\u7684\u6587\u4ef6",
-    "\u53ef\u67e5\u95b1\u7684\u6a94\u6848",
+    "有哪些文件",
+    "有哪些檔案",
+    "目前有哪些文件",
+    "目前有哪些檔案",
+    "列出文件",
+    "列出檔案",
+    "文件列表",
+    "檔案列表",
+    "可查閱的文件",
+    "可查閱的檔案",
+    "可檢視的文件",
+    "可檢視的檔案",
+    "我的文件",
+    "我的檔案",
+    "文件中心",
+    "檔案中心",
+    "document center",
 )
 
 _OPEN_PATTERNS = (
-    "\u770b\u6587\u4ef6",
-    "\u770b\u6a94\u6848",
-    "\u6253\u958b\u6587\u4ef6",
-    "\u6253\u958b\u6a94\u6848",
-    "\u958b\u555f\u6587\u4ef6",
-    "\u958b\u555f\u6a94\u6848",
-    "\u986f\u793a\u6587\u4ef6",
-    "\u986f\u793a\u6a94\u6848",
-    "\u6211\u8981\u770b",
-    "\u6211\u60f3\u770b",
-    "\u5e6b\u6211\u770b",
+    "預覽文件",
+    "預覽檔案",
+    "預覽",
+    "查看文件",
+    "查看檔案",
+    "檢視文件",
+    "檢視檔案",
+    "查閱文件",
+    "查閱檔案",
+    "瀏覽文件",
+    "瀏覽檔案",
+    "看文件",
+    "看檔案",
+    "打開文件",
+    "打開檔案",
+    "開啟文件",
+    "開啟檔案",
+    "顯示文件",
+    "顯示檔案",
+    "幫我開",
+    "幫我打開",
+    "幫我預覽",
+    "讓我預覽",
     "show file",
     "open file",
     "show document",
     "open document",
+    "preview",
+    "preview file",
+    "preview document",
+)
+
+_TEXT_PATTERNS = (
+    "文字",
+    "內容",
+    "全文",
+    "文字內容",
+    "文字訊息",
+    "text",
+    "content",
+)
+
+_LINK_PATTERNS = (
+    "連結",
+    "下載",
+    "開啟連結",
+    "提供連結",
+    "link",
+    "download",
 )
 
 _RECENT_PATTERNS = (
-    "\u525b\u525b",
-    "\u525b\u624d",
-    "\u6700\u8fd1",
-    "\u6700\u65b0",
-    "\u4e0a\u6b21",
-    "\u6700\u5f8c",
+    "剛剛",
+    "剛才",
+    "最近",
+    "最新",
+    "上次",
+    "最後",
     "recent",
     "latest",
     "last",
 )
 
 _STOPWORDS = {
-    "\u6211",
-    "\u60f3",
-    "\u8981",
-    "\u770b",
-    "\u4e00\u4e0b",
-    "\u5e6b\u6211",
-    "\u6253\u958b",
-    "\u958b\u555f",
-    "\u986f\u793a",
-    "\u76f4\u63a5",
-    "\u76ee\u524d",
-    "\u6709\u54ea\u4e9b",
-    "\u6587\u4ef6",
-    "\u6a94\u6848",
+    "我",
+    "想",
+    "要",
+    "看",
+    "一下",
+    "幫我",
+    "打開",
+    "開啟",
+    "顯示",
+    "預覽",
+    "查看",
+    "查閱",
+    "瀏覽",
+    "直接",
+    "目前",
+    "有哪些",
+    "文件",
+    "檔案",
+    "文件中心",
+    "檔案中心",
     "file",
     "document",
     "show",
     "open",
+    "preview",
     "read",
+    "list",
 }
+
+_REFERENCE_VERBS = ("看", "打開", "開啟", "顯示", "叫出", "找", "預覽", "查看", "檢視", "查閱", "瀏覽")
 
 
 def _normalize(text: str) -> str:
@@ -83,37 +146,73 @@ def _contains_any(text: str, patterns: tuple[str, ...]) -> bool:
     return any(pattern in text for pattern in patterns)
 
 
+def _contains_document_keyword(text: str) -> bool:
+    return any(keyword in text for keyword in _DOCUMENT_KEYWORDS)
+
+
 def _extract_tokens(text: str) -> List[str]:
-    parts = re.split(r"[^0-9a-zA-Z\u4e00-\u9fff._-]+", _normalize(text))
-    return [part for part in parts if part and part not in _STOPWORDS]
+    normalized = _normalize(text)
+    parts = re.split(r"[^0-9a-zA-Z\u4e00-\u9fff._-]+", normalized)
+    stripped = normalized
+    for stopword in sorted(_STOPWORDS, key=len, reverse=True):
+        stripped = stripped.replace(stopword, " ")
+    stripped_parts = re.split(r"[^0-9a-zA-Z\u4e00-\u9fff._-]+", stripped)
+
+    ordered_tokens: List[str] = []
+    for part in parts + stripped_parts:
+        if part and part not in _STOPWORDS and part not in ordered_tokens:
+            ordered_tokens.append(part)
+    return ordered_tokens
+
+
+def _is_list_request(text: str) -> bool:
+    normalized = _normalize(text)
+    if _contains_any(normalized, _LIST_PATTERNS):
+        return True
+    has_document_keyword = _contains_document_keyword(normalized)
+    has_list_signal = any(pattern in normalized for pattern in ("哪些", "列出", "清單", "列表", "list", "what"))
+    if has_document_keyword and has_list_signal:
+        return True
+    return normalized in {"我的文件", "我的檔案", "文件中心", "檔案中心"}
+
+
+def detect_requested_action(text: str) -> str | None:
+    normalized = _normalize(text)
+    if not normalized:
+        return None
+    if _contains_any(normalized, _LINK_PATTERNS):
+        return "link"
+    if _contains_any(normalized, _TEXT_PATTERNS):
+        return "text"
+    if _contains_any(normalized, _OPEN_PATTERNS):
+        return "preview"
+    return None
 
 
 def detect_display_choice(text: str) -> str | None:
     normalized = _normalize(text)
     if not normalized:
         return None
-    if normalized in {"1", "\u9810\u89bd", "preview", "\u770b\u9810\u89bd", "\u670d\u52d9\u5167\u9810\u89bd", "\u5728\u670d\u52d9\u5167\u9810\u89bd"}:
+    if normalized in {"1", "預覽", "preview", "看預覽", "服務內預覽", "在服務內預覽"}:
         return "preview"
-    if normalized in {"2", "\u6587\u5b57", "text", "\u6587\u5b57\u986f\u793a", "\u6587\u5b57\u8a0a\u606f", "\u986f\u793a\u6587\u5b57"}:
+    if normalized in {"2", "文字", "text", "文字顯示", "文字訊息", "顯示文字"}:
         return "text"
-    if normalized in {"3", "\u9023\u7d50", "link", "\u958b\u555f\u9023\u7d50", "\u63d0\u4f9b\u9023\u7d50", "\u4e0b\u8f09\u9023\u7d50"}:
+    if normalized in {"3", "連結", "link", "開啟連結", "提供連結", "下載連結"}:
         return "link"
     return None
 
 
 def _is_cancel(text: str) -> bool:
     normalized = _normalize(text)
-    return normalized in {"\u53d6\u6d88", "\u7b97\u4e86", "\u4e0d\u7528\u4e86", "cancel", "never mind", "\u4e0d\u7528"}
+    return normalized in {"取消", "算了", "不用了", "cancel", "never mind", "不用"}
 
 
 def _extract_ordinal(text: str) -> int | None:
     normalized = _normalize(text)
-    ordinal_mark = "\u7b2c"
-    item_mark = "\u4efd"
-    generic_mark = "\u500b"
     patterns = (
-        rf"{ordinal_mark}\s*(\d+)\s*{item_mark}",
-        rf"{ordinal_mark}\s*(\d+)\s*{generic_mark}",
+        r"第\s*(\d+)\s*份",
+        r"第\s*(\d+)\s*個",
+        r"^(\d+)\s*[.、]?$",
         r"^(\d+)$",
     )
     for pattern in patterns:
@@ -170,7 +269,7 @@ def _match_documents(text: str, documents: List[Dict[str, Any]]) -> List[Dict[st
         return [item[1] for item in scored[:5]]
 
     if len(documents) == 1 and (
-        _contains_any(normalized, _OPEN_PATTERNS) or any(ext in normalized for ext in (".pdf", ".docx", ".txt", ".md"))
+        detect_requested_action(normalized) or any(ext in normalized for ext in (".pdf", ".docx", ".txt", ".md"))
     ):
         return documents[:1]
 
@@ -178,46 +277,63 @@ def _match_documents(text: str, documents: List[Dict[str, Any]]) -> List[Dict[st
 
 
 def _render_list_message(documents: List[Dict[str, Any]]) -> str:
-    lines = ["\u4f60\u76ee\u524d\u53ef\u67e5\u95b1\u7684\u6587\u4ef6\u5982\u4e0b\uff1a"]
+    lines = ["你目前可查閱的文件如下："]
     for idx, doc in enumerate(documents[:8], start=1):
         name = doc.get("display_name") or doc.get("original_filename") or doc.get("doc_id")
         lines.append(f"{idx}. {name}")
     lines.append("")
-    lines.append("\u5982\u679c\u4f60\u60f3\u6253\u958b\u5176\u4e2d\u4e00\u4efd\uff0c\u76f4\u63a5\u8aaa\u300c\u6211\u8981\u770b\u7b2c 1 \u4efd\u300d\u6216\u300c\u6253\u958b \u6a94\u540d\u300d\u5373\u53ef\u3002")
+    lines.append("如果你想直接查閱，可以直接說「預覽 檔名」、「打開 檔名」或「文字顯示 檔名」。")
     return "\n".join(lines)
 
 
 def _render_choice_prompt(document: Dict[str, Any]) -> str:
     name = document.get("display_name") or document.get("original_filename") or document.get("doc_id")
     return (
-        f"\u6211\u627e\u5230\u6587\u4ef6\u300c{name}\u300d\u3002\n"
-        "\u4f60\u8981\u7528\u54ea\u7a2e\u65b9\u5f0f\u5c55\u793a\uff1f\n"
-        "1. \u5728\u670d\u52d9\u5167\u9810\u89bd\n"
-        "2. \u4ee5\u6587\u5b57\u8a0a\u606f\u986f\u793a\n"
-        "3. \u63d0\u4f9b\u958b\u555f\u9023\u7d50\n"
-        "\u4f60\u53ef\u4ee5\u76f4\u63a5\u56de\u8986\u300c\u9810\u89bd\u300d\u3001\u300c\u6587\u5b57\u300d\u6216\u300c\u9023\u7d50\u300d\u3002"
+        f"我找到文件「{name}」。\n"
+        "你要用哪種方式展示？\n"
+        "1. 在服務內預覽\n"
+        "2. 以文字訊息顯示\n"
+        "3. 提供開啟連結\n"
+        "你可以直接回覆「預覽」、「文字」或「連結」。"
     )
 
 
 def _render_candidate_prompt(documents: List[Dict[str, Any]]) -> str:
-    lines = ["\u6211\u627e\u5230\u591a\u4efd\u53ef\u80fd\u7b26\u5408\u7684\u6587\u4ef6\uff0c\u8acb\u544a\u8a34\u6211\u8981\u6253\u958b\u54ea\u4e00\u4efd\uff1a"]
+    lines = ["我找到多份可能符合的文件，請告訴我要打開哪一份："]
     for idx, doc in enumerate(documents[:5], start=1):
         name = doc.get("display_name") or doc.get("original_filename") or doc.get("doc_id")
         lines.append(f"{idx}. {name}")
     lines.append("")
-    lines.append("\u4f60\u53ef\u4ee5\u56de\u8986\u300c\u7b2c 1 \u4efd\u300d\u6216\u76f4\u63a5\u8f38\u5165\u6a94\u540d\u3002")
+    lines.append("你可以回覆「第 1 份」或直接輸入檔名。")
     return "\n".join(lines)
 
 
 def _is_document_request(text: str) -> bool:
     normalized = _normalize(text)
-    if _contains_any(normalized, _OPEN_PATTERNS):
+    if detect_requested_action(normalized):
         return True
     if any(ext in normalized for ext in (".pdf", ".docx", ".txt", ".md")):
         return True
-    return ("\u6587\u4ef6" in normalized or "\u6a94\u6848" in normalized) and any(
-        word in normalized for word in ("\u770b", "\u6253\u958b", "\u958b\u555f", "\u986f\u793a", "\u53eb\u51fa", "\u627e")
+    return _contains_document_keyword(normalized) and any(
+        word in normalized
+        for word in _REFERENCE_VERBS
     )
+
+
+def _looks_like_document_reference(text: str, documents: List[Dict[str, Any]]) -> bool:
+    normalized = _normalize(text)
+    matches = _match_documents(text, documents)
+    if not matches:
+        return False
+    if any(ext in normalized for ext in (".pdf", ".docx", ".txt", ".md")):
+        return True
+    if any(word in normalized for word in _REFERENCE_VERBS):
+        return True
+
+    tokens = _extract_tokens(text)
+    if len(tokens) == 1:
+        return True
+    return len(tokens) <= 2 and len(normalized) <= 40
 
 
 def resolve_document_turn(
@@ -235,10 +351,10 @@ def resolve_document_turn(
             return {
                 "handled": True,
                 "action": "cancel",
-                "message": "\u5df2\u53d6\u6d88\u9019\u6b21\u6587\u4ef6\u5c55\u793a\u3002\u4f60\u4e4b\u5f8c\u53ef\u4ee5\u518d\u76f4\u63a5\u8ddf\u6211\u8aaa\u60f3\u770b\u54ea\u4e00\u4efd\u6587\u4ef6\u3002",
+                "message": "已取消這次文件展示。你之後可以再直接跟我說想看哪一份文件。",
                 "clear_pending": True,
             }
-        choice = detect_display_choice(normalized)
+        choice = detect_display_choice(normalized) or detect_requested_action(normalized)
         if choice:
             return {
                 "handled": True,
@@ -252,11 +368,19 @@ def resolve_document_turn(
             return {
                 "handled": True,
                 "action": "cancel",
-                "message": "\u5df2\u53d6\u6d88\u6587\u4ef6\u9078\u64c7\u3002\u4f60\u4e4b\u5f8c\u53ef\u4ee5\u518d\u76f4\u63a5\u6307\u5b9a\u60f3\u770b\u7684\u6587\u4ef6\u3002",
+                "message": "已取消文件選擇。你之後可以再直接指定想看的文件。",
                 "clear_pending": True,
             }
         selected = _select_candidate(normalized, pending_candidates)
         if selected:
+            requested_action = detect_requested_action(normalized)
+            if requested_action:
+                return {
+                    "handled": True,
+                    "action": f"show_{requested_action}",
+                    "document": selected,
+                    "clear_pending": True,
+                }
             return {
                 "handled": True,
                 "action": "prompt_choice",
@@ -266,25 +390,24 @@ def resolve_document_turn(
                 "clear_pending_candidates": True,
             }
 
-    if not documents and (
-        _contains_any(normalized, _LIST_PATTERNS) or _is_document_request(normalized) or pending_document or pending_candidates
-    ):
+    if not documents and (_is_list_request(normalized) or _is_document_request(normalized) or pending_document or pending_candidates):
         return {
             "handled": True,
             "action": "no_docs",
-            "message": "\u4f60\u76ee\u524d\u9084\u6c92\u6709\u53ef\u67e5\u95b1\u7684\u6587\u4ef6\u3002\u53ef\u4ee5\u5148\u5f9e\u53f3\u5074\u6587\u4ef6\u4e2d\u5fc3\u4e0a\u50b3 PDF\u3001DOCX\u3001TXT \u6216 MD\u3002",
+            "message": "你目前還沒有可查閱的文件。可以先從右側文件中心上傳 PDF、DOCX、TXT 或 MD。",
             "clear_pending": True,
         }
 
-    if _contains_any(normalized, _LIST_PATTERNS):
+    if _is_list_request(normalized):
         return {
             "handled": True,
             "action": "list",
             "message": _render_list_message(documents),
+            "set_pending_candidates": documents[:8],
             "clear_pending": True,
         }
 
-    if not _is_document_request(normalized):
+    if not _is_document_request(normalized) and not _looks_like_document_reference(normalized, documents):
         return None
 
     matches = _match_documents(normalized, documents)
@@ -293,13 +416,21 @@ def resolve_document_turn(
             "handled": True,
             "action": "no_match",
             "message": (
-                "\u6211\u9084\u6c92\u6709\u627e\u5230\u660e\u78ba\u5c0d\u61c9\u7684\u6587\u4ef6\u540d\u7a31\u3002"
-                "\u4f60\u53ef\u4ee5\u8aaa\u300c\u5217\u51fa\u6587\u4ef6\u300d\u8b93\u6211\u5148\u628a\u76ee\u524d\u53ef\u67e5\u95b1\u7684\u6587\u4ef6\u5217\u7d66\u4f60\u3002"
+                "我還沒有找到明確對應的文件名稱。"
+                "你可以說「列出文件」讓我先把目前可查閱的文件列給你。"
             ),
             "clear_pending": True,
         }
 
+    requested_action = detect_requested_action(normalized)
     if len(matches) == 1:
+        if requested_action:
+            return {
+                "handled": True,
+                "action": f"show_{requested_action}",
+                "document": matches[0],
+                "clear_pending": True,
+            }
         return {
             "handled": True,
             "action": "prompt_choice",

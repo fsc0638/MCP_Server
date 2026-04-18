@@ -327,6 +327,20 @@
   }
   window.closeUserDocumentModal = closeUserDocumentModal;
 
+  function handleDocumentAction(action, task) {
+    if (!action || !task) return;
+    if (action.type === "open_preview" && action.doc_id) {
+      if (task.sessionId === state.sessionId) {
+        setTimeout(function () {
+          openUserDocumentPreview(action.doc_id);
+        }, 0);
+      } else if (!task.documentToastShown) {
+        task.documentToastShown = true;
+        showToast("「" + (action.display_name || "文件") + "」已可預覽", "info");
+      }
+    }
+  }
+
   function updateUserDocumentStats() {
     const count = Array.isArray(state.userDocuments) ? state.userDocuments.length : 0;
     const countEl = document.getElementById("userDocumentCount");
@@ -1858,6 +1872,7 @@
             task.text = parsed.content || task.text;
             removeTyping(task.sessionId);
             showTaskBubble(task, true);
+            handleDocumentAction(parsed.document_action, task);
             return task.text;
           }
           if (parsed.status === "cancelled") {
