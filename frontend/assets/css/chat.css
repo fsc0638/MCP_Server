@@ -989,6 +989,8 @@ html, body { height: 100%; overflow: hidden; }
   overflow: auto;
   min-height: 240px;
   background: #fbfdff;
+  display: flex;
+  flex-direction: column;
 }
 
 .page-chat-doc-modal-loading {
@@ -1010,11 +1012,36 @@ html, body { height: 100%; overflow: hidden; }
 }
 
 .page-chat-doc-modal-frame {
+  flex: 1 1 auto;
   width: 100%;
   min-height: min(70vh, 720px);
   border: none;
   border-radius: 12px;
   background: #fff;
+}
+
+.page-chat-doc-modal.is-fullscreen {
+  padding: 0;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.page-chat-doc-modal.is-fullscreen .page-chat-doc-modal-card {
+  width: 100vw;
+  height: 100vh;
+  max-height: 100vh;
+  border-radius: 0;
+}
+
+.page-chat-doc-modal.is-fullscreen .page-chat-doc-modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px;
+  background: #111827;
+}
+
+.page-chat-doc-modal.is-fullscreen .page-chat-doc-modal-frame {
+  min-height: 0;
+  height: 100%;
 }
 
 .page-chat-stat-row {

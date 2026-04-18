@@ -265,6 +265,73 @@
     });
   }
 
+  let userDocModalPseudoFullscreen = false;
+
+  function isUserDocumentModalBrowserFullscreen(modal) {
+    return !!modal && (
+      document.fullscreenElement === modal ||
+      document.webkitFullscreenElement === modal
+    );
+  }
+
+  function syncUserDocumentModalFullscreenUi() {
+    const modal = document.getElementById("userDocModal");
+    const fullscreenBtn = document.getElementById("userDocModalFullscreenBtn");
+    if (!modal) return;
+
+    const isFullscreen = userDocModalPseudoFullscreen || isUserDocumentModalBrowserFullscreen(modal);
+    modal.classList.toggle("is-fullscreen", isFullscreen);
+
+    if (fullscreenBtn) {
+      fullscreenBtn.textContent = isFullscreen ? "退出全螢幕" : "全螢幕";
+      fullscreenBtn.setAttribute("aria-pressed", isFullscreen ? "true" : "false");
+    }
+  }
+
+  async function exitUserDocumentModalFullscreen() {
+    const modal = document.getElementById("userDocModal");
+    if (!modal) return;
+
+    userDocModalPseudoFullscreen = false;
+    if (isUserDocumentModalBrowserFullscreen(modal)) {
+      try {
+        if (typeof document.exitFullscreen === "function") {
+          await document.exitFullscreen();
+        } else if (typeof document.webkitExitFullscreen === "function") {
+          document.webkitExitFullscreen();
+        }
+      } catch (_err) {
+        // Ignore and let the modal fall back to normal size.
+      }
+    }
+
+    syncUserDocumentModalFullscreenUi();
+  }
+
+  async function toggleUserDocumentModalFullscreen() {
+    const modal = document.getElementById("userDocModal");
+    if (!modal) return;
+
+    if (userDocModalPseudoFullscreen || isUserDocumentModalBrowserFullscreen(modal)) {
+      await exitUserDocumentModalFullscreen();
+      return;
+    }
+
+    try {
+      if (typeof modal.requestFullscreen === "function") {
+        await modal.requestFullscreen();
+      } else if (typeof modal.webkitRequestFullscreen === "function") {
+        modal.webkitRequestFullscreen();
+      } else {
+        userDocModalPseudoFullscreen = true;
+      }
+    } catch (_err) {
+      userDocModalPseudoFullscreen = true;
+    }
+
+    syncUserDocumentModalFullscreenUi();
+  }
+
   function openUserDocumentModal(options) {
     const modal = document.getElementById("userDocModal");
     const title = document.getElementById("userDocModalTitle");
@@ -272,7 +339,8 @@
     const body = document.getElementById("userDocModalBody");
     const link = document.getElementById("userDocModalLink");
     const expandBtn = document.getElementById("userDocModalExpandBtn");
-    if (!modal || !title || !subtitle || !body || !link || !expandBtn) return;
+    const fullscreenBtn = document.getElementById("userDocModalFullscreenBtn");
+    if (!modal || !title || !subtitle || !body || !link || !expandBtn || !fullscreenBtn) return;
 
     title.textContent = options.title || "文件預覽";
     subtitle.textContent = options.subtitle || "";
@@ -314,6 +382,9 @@
       expandBtn.onclick = null;
     }
 
+    fullscreenBtn.style.display = options.mode === "iframe" ? "inline-flex" : "none";
+    userDocModalPseudoFullscreen = false;
+    syncUserDocumentModalFullscreenUi();
     modal.style.display = "flex";
   }
 
@@ -321,8 +392,11 @@
     const modal = document.getElementById("userDocModal");
     const body = document.getElementById("userDocModalBody");
     const expandBtn = document.getElementById("userDocModalExpandBtn");
+    const fullscreenBtn = document.getElementById("userDocModalFullscreenBtn");
     if (body) body.innerHTML = "";
     if (expandBtn) expandBtn.onclick = null;
+    if (fullscreenBtn) fullscreenBtn.style.display = "none";
+    exitUserDocumentModalFullscreen();
     if (modal) modal.style.display = "none";
   }
   window.closeUserDocumentModal = closeUserDocumentModal;
@@ -2546,6 +2620,21 @@
       }
     });
   }
+
+  const userDocModalFullscreenBtn = document.getElementById("userDocModalFullscreenBtn");
+  if (userDocModalFullscreenBtn) {
+    userDocModalFullscreenBtn.addEventListener("click", function () {
+      toggleUserDocumentModalFullscreen();
+    });
+  }
+
+  document.addEventListener("fullscreenchange", syncUserDocumentModalFullscreenUi);
+  document.addEventListener("webkitfullscreenchange", syncUserDocumentModalFullscreenUi);
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && userDocModalPseudoFullscreen) {
+      exitUserDocumentModalFullscreen();
+    }
+  });
 
   syncDocumentCenterVisibility("info");
 
