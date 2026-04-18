@@ -31,6 +31,7 @@
     modelIndex: 0,
     sessionId: localStorage.getItem("kway_chat_session") || generateDraftSessionId(),
     meetingText: "",
+    userDocuments: [],
     sessions: JSON.parse(localStorage.getItem("kway_sessions") || "[]"),
     activeApprovalTaskId: null,
     // ── Per-session isolation state ──
@@ -226,6 +227,397 @@
     }, 3000);
   }
   window.showToast = showToast;
+
+  function formatFileSize(bytes) {
+    const value = Number(bytes || 0);
+    if (!value) return "0 KB";
+    if (value < 1024 * 1024) return Math.max(1, Math.round(value / 1024)) + " KB";
+    return (value / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  function getUserDocumentStatusMeta(status) {
+    switch (String(status || "").toLowerCase()) {
+      case "ready":
+        return { label: "可讀取", className: "" };
+      case "pending":
+        return { label: "整理中", className: " is-pending" };
+      case "failed":
+        return { label: "抽取失敗", className: " is-failed" };
+      default:
+        return { label: "可預覽", className: "" };
+    }
+  }
+
+  function syncDocumentCenterVisibility(activeTab) {
+    document.querySelectorAll(".page-chat-doc-center-panel").forEach(function (el) {
+      el.style.display = activeTab === "info" ? "" : "none";
+    });
+  }
+
+  function openUserDocumentModal(options) {
+    const modal = document.getElementById("userDocModal");
+    const title = document.getElementById("userDocModalTitle");
+    const subtitle = document.getElementById("userDocModalSubtitle");
+    const body = document.getElementById("userDocModalBody");
+    const link = document.getElementById("userDocModalLink");
+    const expandBtn = document.getElementById("userDocModalExpandBtn");
+    if (!modal || !title || !subtitle || !body || !link || !expandBtn) return;
+
+    title.textContent = options.title || "文件預覽";
+    subtitle.textContent = options.subtitle || "";
+    body.innerHTML = "";
+
+    if (options.mode === "loading") {
+      const loading = document.createElement("div");
+      loading.className = "page-chat-doc-modal-loading";
+      loading.textContent = options.loadingText || "正在讀取文件...";
+      body.appendChild(loading);
+    } else if (options.mode === "iframe") {
+      const iframe = document.createElement("iframe");
+      iframe.className = "page-chat-doc-modal-frame";
+      iframe.src = options.src || "";
+      iframe.title = options.title || "文件預覽";
+      body.appendChild(iframe);
+    } else {
+      const pre = document.createElement("pre");
+      pre.className = "page-chat-doc-modal-text";
+      pre.textContent = options.text || "沒有可顯示的內容";
+      body.appendChild(pre);
+    }
+
+    if (options.linkHref) {
+      link.style.display = "inline-flex";
+      link.href = options.linkHref;
+      link.textContent = options.linkLabel || "下載原檔";
+    } else {
+      link.style.display = "none";
+      link.removeAttribute("href");
+    }
+
+    if (typeof options.onExpand === "function") {
+      expandBtn.style.display = "inline-flex";
+      expandBtn.textContent = options.expandLabel || "載入全文";
+      expandBtn.onclick = options.onExpand;
+    } else {
+      expandBtn.style.display = "none";
+      expandBtn.onclick = null;
+    }
+
+    modal.style.display = "flex";
+  }
+
+  function closeUserDocumentModal() {
+    const modal = document.getElementById("userDocModal");
+    const body = document.getElementById("userDocModalBody");
+    const expandBtn = document.getElementById("userDocModalExpandBtn");
+    if (body) body.innerHTML = "";
+    if (expandBtn) expandBtn.onclick = null;
+    if (modal) modal.style.display = "none";
+  }
+  window.closeUserDocumentModal = closeUserDocumentModal;
+
+  function updateUserDocumentStats() {
+    const count = Array.isArray(state.userDocuments) ? state.userDocuments.length : 0;
+    const countEl = document.getElementById("userDocumentCount");
+    const statEl = document.getElementById("statUserDocCount");
+    if (countEl) countEl.textContent = String(count);
+    if (statEl) statEl.textContent = String(count);
+  }
+
+  function renderUserDocumentEmpty(message) {
+    const empty = document.getElementById("userDocumentEmpty");
+    const list = document.getElementById("userDocumentList");
+    if (!empty || !list) return;
+    empty.textContent = message || "尚未上傳文件";
+    empty.style.display = "";
+    list.innerHTML = "";
+    updateUserDocumentStats();
+  }
+
+  function renderUserDocuments(documents) {
+    const list = document.getElementById("userDocumentList");
+    const empty = document.getElementById("userDocumentEmpty");
+    if (!list || !empty) return;
+
+    state.userDocuments = Array.isArray(documents) ? documents.slice() : [];
+    updateUserDocumentStats();
+    list.innerHTML = "";
+
+    if (!state.userDocuments.length) {
+      empty.textContent = "尚未上傳文件";
+      empty.style.display = "";
+      return;
+    }
+
+    empty.style.display = "none";
+
+    state.userDocuments.forEach(function (doc) {
+      const item = document.createElement("div");
+      item.className = "page-chat-doc-item";
+
+      const head = document.createElement("div");
+      head.className = "page-chat-doc-item-head";
+
+      const info = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "page-chat-doc-item-name";
+      name.textContent = doc.display_name || doc.original_filename || doc.stored_filename || doc.doc_id;
+
+      const meta = document.createElement("div");
+      meta.className = "page-chat-doc-item-meta";
+      meta.textContent = [
+        (doc.extension || "").replace(".", "").toUpperCase() || "FILE",
+        formatFileSize(doc.size),
+      ].join(" · ");
+
+      info.appendChild(name);
+      info.appendChild(meta);
+
+      const statusMeta = getUserDocumentStatusMeta(doc.text_extract_status);
+      const status = document.createElement("span");
+      status.className = "page-chat-doc-status" + statusMeta.className;
+      status.textContent = statusMeta.label;
+
+      head.appendChild(info);
+      head.appendChild(status);
+
+      const actions = document.createElement("div");
+      actions.className = "page-chat-doc-item-actions";
+
+      const previewBtn = document.createElement("button");
+      previewBtn.type = "button";
+      previewBtn.className = "page-chat-doc-action-btn";
+      previewBtn.textContent = "預覽";
+      previewBtn.addEventListener("click", function () {
+        openUserDocumentPreview(doc.doc_id);
+      });
+
+      const textBtn = document.createElement("button");
+      textBtn.type = "button";
+      textBtn.className = "page-chat-doc-action-btn";
+      textBtn.textContent = "文字";
+      textBtn.addEventListener("click", function () {
+        openUserDocumentText(doc.doc_id, doc.display_name || doc.original_filename || "文件");
+      });
+
+      const renameBtn = document.createElement("button");
+      renameBtn.type = "button";
+      renameBtn.className = "page-chat-doc-action-btn";
+      renameBtn.textContent = "改名";
+      renameBtn.addEventListener("click", function () {
+        renameUserDocument(doc.doc_id, doc.display_name || doc.original_filename || "");
+      });
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "page-chat-doc-action-btn is-danger";
+      deleteBtn.textContent = "刪除";
+      deleteBtn.addEventListener("click", function () {
+        deleteUserDocument(doc.doc_id, doc.display_name || doc.original_filename || "文件");
+      });
+
+      actions.appendChild(previewBtn);
+      actions.appendChild(textBtn);
+      actions.appendChild(renameBtn);
+      actions.appendChild(deleteBtn);
+
+      item.appendChild(head);
+      item.appendChild(actions);
+      list.appendChild(item);
+    });
+  }
+
+  async function loadUserDocuments(options) {
+    const opts = options || {};
+    if (!opts.silent) {
+      renderUserDocumentEmpty("正在讀取文件列表...");
+    }
+    try {
+      const res = await fetch("/api/user-documents", { credentials: "same-origin" });
+      if (res.status === 401) {
+        state.userDocuments = [];
+        renderUserDocumentEmpty("登入後即可使用文件中心");
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        throw new Error(data.detail || "Load failed");
+      }
+      renderUserDocuments(data.documents || []);
+      if (opts.withToast) showToast("已刷新文件列表", "success");
+    } catch (err) {
+      state.userDocuments = [];
+      renderUserDocumentEmpty("文件列表載入失敗");
+      if (!opts.silent) showToast("文件列表載入失敗：" + (err.message || "未知錯誤"), "error");
+    }
+  }
+
+  async function openUserDocumentPreview(docId) {
+    openUserDocumentModal({
+      title: "文件預覽",
+      subtitle: "正在準備內容...",
+      mode: "loading",
+      loadingText: "正在讀取文件...",
+    });
+    try {
+      const res = await fetch("/api/user-documents/" + encodeURIComponent(docId) + "/preview", {
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        throw new Error(data.detail || "Preview failed");
+      }
+
+      const displayName = (data.document && (data.document.display_name || data.document.original_filename)) || "文件";
+      if (data.preview_type === "pdf-inline") {
+        openUserDocumentModal({
+          title: displayName,
+          subtitle: "服務內 PDF 預覽",
+          mode: "iframe",
+          src: data.inline_url,
+          linkHref: data.inline_url,
+          linkLabel: "新分頁預覽",
+        });
+        return;
+      }
+
+      openUserDocumentModal({
+        title: displayName,
+        subtitle: data.truncated ? "目前顯示預覽片段" : "目前顯示文件文字內容",
+        mode: "text",
+        text: data.text_preview || "",
+        linkHref: data.download_url,
+        linkLabel: "下載原檔",
+        onExpand: data.truncated
+          ? function () {
+              openUserDocumentText(docId, displayName);
+            }
+          : null,
+      });
+    } catch (err) {
+      openUserDocumentModal({
+        title: "文件預覽",
+        subtitle: "",
+        mode: "text",
+        text: "文件預覽失敗：" + (err.message || "未知錯誤"),
+      });
+    }
+  }
+
+  async function openUserDocumentText(docId, displayName) {
+    openUserDocumentModal({
+      title: displayName || "文件文字內容",
+      subtitle: "正在讀取全文...",
+      mode: "loading",
+      loadingText: "正在載入全文...",
+    });
+    try {
+      const res = await fetch(
+        "/api/user-documents/" + encodeURIComponent(docId) + "/content?offset=0&limit=200000",
+        { credentials: "same-origin" }
+      );
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        throw new Error(data.detail || "Content failed");
+      }
+      openUserDocumentModal({
+        title: displayName || ((data.document && data.document.display_name) || "文件文字內容"),
+        subtitle: data.truncated ? "已載入首段內容" : "已載入完整文字",
+        mode: "text",
+        text: data.content || "",
+        linkHref: "/api/user-documents/" + encodeURIComponent(docId) + "/file?disposition=attachment",
+        linkLabel: "下載原檔",
+      });
+    } catch (err) {
+      openUserDocumentModal({
+        title: displayName || "文件文字內容",
+        subtitle: "",
+        mode: "text",
+        text: "文字內容載入失敗：" + (err.message || "未知錯誤"),
+      });
+    }
+  }
+
+  async function renameUserDocument(docId, currentName) {
+    const nextName = window.prompt("新的文件名稱", currentName || "");
+    if (!nextName || nextName === currentName) return;
+    try {
+      const res = await fetch("/api/user-documents/" + encodeURIComponent(docId) + "/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ display_name: nextName }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        throw new Error(data.detail || "Rename failed");
+      }
+      showToast("已更新文件名稱", "success");
+      loadUserDocuments({ silent: true });
+    } catch (err) {
+      showToast("文件改名失敗：" + (err.message || "未知錯誤"), "error");
+    }
+  }
+
+  async function deleteUserDocument(docId, currentName) {
+    if (!window.confirm("確定要刪除「" + (currentName || "文件") + "」嗎？")) return;
+    try {
+      const res = await fetch("/api/user-documents/" + encodeURIComponent(docId), {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        throw new Error(data.detail || "Delete failed");
+      }
+      showToast("已刪除文件", "success");
+      loadUserDocuments({ silent: true });
+      closeUserDocumentModal();
+    } catch (err) {
+      showToast("文件刪除失敗：" + (err.message || "未知錯誤"), "error");
+    }
+  }
+
+  function triggerUserDocumentUpload() {
+    const input = document.getElementById("userDocUploadInput");
+    if (!input) return;
+    input.value = "";
+    input.onchange = async function () {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const MAX_BYTES = 25 * 1024 * 1024;
+      if (file.size > MAX_BYTES) {
+        showToast("文件過大，請控制在 25 MB 內", "error");
+        return;
+      }
+
+      showToast("正在上傳「" + file.name + "」...", "info");
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        const res = await fetch("/api/user-documents/upload", {
+          method: "POST",
+          credentials: "same-origin",
+          body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== "success") {
+          throw new Error(data.detail || "Upload failed");
+        }
+        showToast("已上傳「" + file.name + "」", "success");
+        loadUserDocuments({ silent: true });
+      } catch (err) {
+        showToast("文件上傳失敗：" + (err.message || "未知錯誤"), "error");
+      }
+    };
+    input.click();
+  }
+
+  window.refreshUserDocuments = function () {
+    loadUserDocuments({ silent: false, withToast: true });
+  };
+  window.triggerUserDocumentUpload = triggerUserDocumentUpload;
 
   function escapeHtml(text) {
     return String(text)
@@ -1162,7 +1554,7 @@
 
   async function loadSideInfo() {
     try {
-      const [skillsRes, docsRes] = await Promise.all([fetch("/skills/list"), fetch("/api/documents/list")]);
+      const skillsRes = await fetch("/skills/list");
 
       const toolsTab = document.querySelector("#tab-tools .page-chat-info-section");
       if (toolsTab && skillsRes.ok) {
@@ -1181,19 +1573,6 @@
           });
         }
         toolsTab.innerHTML = html;
-      }
-
-      if (docsRes.ok) {
-        const docs = await docsRes.json();
-        const infoCards = document.querySelectorAll("#tab-info .page-chat-info-card");
-        if (infoCards[0]) {
-          infoCards[0].insertAdjacentHTML(
-            "beforeend",
-            '<div class="page-chat-stat-row"><span class="page-chat-stat-row-label">Indexed docs</span><span class="page-chat-stat-row-value">' +
-              String(docs.total || 0) +
-              '</span></div>'
-          );
-        }
       }
     } catch (_err) {
       // non-blocking enhancement
@@ -1682,6 +2061,7 @@
       const el = document.getElementById("tab-" + tab);
       if (el) el.style.display = tab === name ? "block" : "none";
     });
+    syncDocumentCenterVisibility(name);
   };
 
   window.cycleModel = function () {
@@ -2099,6 +2479,17 @@
   if (sidebarName) sidebarName.textContent = safeName;
   if (sidebarDept) sidebarDept.textContent = (userData.dept || "MCP Workspace") + " · Connected";
 
+  const userDocModal = document.getElementById("userDocModal");
+  if (userDocModal) {
+    userDocModal.addEventListener("click", function (event) {
+      if (event.target === userDocModal) {
+        closeUserDocumentModal();
+      }
+    });
+  }
+
+  syncDocumentCenterVisibility("info");
+
   setInterval(updateSessionDuration, 1000);
   updateSessionDuration();
   updateStats();
@@ -2106,6 +2497,7 @@
 
   hydrateAuthFromServer().finally(function () {
     loadSideInfo();
+    loadUserDocuments({ silent: true });
     renderConversationList();
     window.loadConversationById(state.sessionId, true);
     syncComposerState();

@@ -431,6 +431,24 @@
           </section>
         </div>
 
+        <section class="page-chat-info-section page-chat-doc-center-panel" aria-label="我的文件中心">
+          <div class="page-chat-info-section-title">我的文件中心</div>
+          <div class="page-chat-info-card page-chat-doc-center-card">
+            <div class="page-chat-doc-center-toolbar">
+              <div class="page-chat-doc-center-summary">
+                <span>目前可查閱</span>
+                <strong id="userDocumentCount">0</strong>
+              </div>
+              <div class="page-chat-doc-center-actions">
+                <button class="page-chat-doc-toolbar-btn" type="button" onclick="triggerUserDocumentUpload()">上傳</button>
+                <button class="page-chat-doc-toolbar-btn page-chat-doc-toolbar-btn--ghost" type="button" onclick="refreshUserDocuments()">刷新</button>
+              </div>
+            </div>
+            <input type="file" id="userDocUploadInput" accept=".pdf,.docx,.txt,.md" style="display:none;" aria-hidden="true" />
+            <div class="page-chat-doc-empty" id="userDocumentEmpty">尚未上傳文件</div>
+            <div class="page-chat-doc-list" id="userDocumentList"></div>
+          </div>
+        </section>
       </div>
       <!-- Workflow: Dashboard (shown in wf-mode) -->
       <div class="wf-dashboard-wrap" id="wfDashboardWrap"></div>
@@ -488,6 +506,23 @@
       <button class="btn-secondary" onclick="closeDeleteModal()">取消</button>
       <button class="btn-danger" id="confirmDeleteBtn">確認刪除</button>
     </div>
+  </div>
+</div>
+
+<div class="page-chat-doc-modal" id="userDocModal" style="display:none;">
+  <div class="page-chat-doc-modal-card">
+    <div class="page-chat-doc-modal-header">
+      <div>
+        <div class="page-chat-doc-modal-title" id="userDocModalTitle">文件預覽</div>
+        <div class="page-chat-doc-modal-subtitle" id="userDocModalSubtitle"></div>
+      </div>
+      <button class="page-chat-doc-modal-close" type="button" onclick="closeUserDocumentModal()" aria-label="關閉文件預覽">×</button>
+    </div>
+    <div class="page-chat-doc-modal-actions">
+      <a class="page-chat-doc-modal-link" id="userDocModalLink" href="#" target="_blank" rel="noopener noreferrer">下載原檔</a>
+      <button class="page-chat-doc-modal-link page-chat-doc-modal-link--ghost" id="userDocModalExpandBtn" type="button" style="display:none;">載入全文</button>
+    </div>
+    <div class="page-chat-doc-modal-body" id="userDocModalBody"></div>
   </div>
 </div>
 

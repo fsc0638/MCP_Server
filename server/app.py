@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from server.routes import models, documents, chat, skills, workspace, resources, auth, workflow
+from server.routes.user_documents import router as user_documents_router
 from server.integrations.line_connector import router as line_router
 from main import PROJECT_ROOT
 from server.dependencies.uma import get_uma_instance as get_uma
@@ -33,6 +34,7 @@ app.include_router(workspace.router)
 app.include_router(resources.router)
 app.include_router(auth.router)
 app.include_router(workflow.router)
+app.include_router(user_documents_router)
 app.include_router(line_router)
 
 frontend_dir = PROJECT_ROOT / "frontend"
