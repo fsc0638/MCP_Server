@@ -6,6 +6,7 @@ import re
 import uuid
 from typing import AsyncGenerator
 
+from fastapi import HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from main import PROJECT_ROOT
@@ -137,7 +138,10 @@ async def process_chat_native(req: ChatRequest):
         api_key=req.api_key,
     )
     if not adapter.is_available:
-        return {"status": "error", "message": f"{provider.capitalize()} adapter is not available"}
+        raise HTTPException(
+            status_code=503,
+            detail=f"{provider.capitalize()} adapter is not available",
+        )
 
     from server.services.runtime import get_universal_system_prompt
 

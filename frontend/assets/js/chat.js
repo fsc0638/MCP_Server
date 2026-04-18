@@ -2051,12 +2051,34 @@
       const res = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
         removeTyping(requestSessionId);
         const errText = await res.text();
-        throw new Error("HTTP " + res.status + ": " + errText);
+        let detail = errText;
+        try {
+          const parsed = JSON.parse(errText);
+          detail = parsed.detail || parsed.message || errText;
+        } catch (_err) {
+          // keep raw text
+        }
+        throw new Error("HTTP " + res.status + ": " + detail);
+      }
+
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+      if (!contentType.includes("text/event-stream")) {
+        removeTyping(requestSessionId);
+        const rawText = await res.text();
+        let detail = rawText || "Server did not return an event stream";
+        try {
+          const parsed = JSON.parse(rawText);
+          detail = parsed.detail || parsed.message || rawText;
+        } catch (_err) {
+          // keep raw text
+        }
+        throw new Error(detail);
       }
       if (attachedFileForTurn && !keepPendingAudio) {
         delete state.sessionPendingAudioFile[requestSessionId];
