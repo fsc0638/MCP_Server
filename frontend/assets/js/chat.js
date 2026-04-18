@@ -248,6 +248,17 @@
     }
   }
 
+  function formatUserDocumentExpiry(expiresAt) {
+    if (!expiresAt) return "";
+    const target = new Date(expiresAt);
+    if (Number.isNaN(target.getTime())) return "";
+    const diffMs = target.getTime() - Date.now();
+    const diffDays = Math.ceil(diffMs / 86400000);
+    if (diffDays <= 0) return "今天到期";
+    if (diffDays === 1) return "1 天後到期";
+    return diffDays + " 天後到期";
+  }
+
   function syncDocumentCenterVisibility(activeTab) {
     document.querySelectorAll(".page-chat-doc-center-panel").forEach(function (el) {
       el.style.display = activeTab === "info" ? "" : "none";
@@ -365,10 +376,13 @@
 
       const meta = document.createElement("div");
       meta.className = "page-chat-doc-item-meta";
-      meta.textContent = [
+      const metaParts = [
         (doc.extension || "").replace(".", "").toUpperCase() || "FILE",
         formatFileSize(doc.size),
-      ].join(" · ");
+      ];
+      const expiryLabel = formatUserDocumentExpiry(doc.expires_at);
+      if (expiryLabel) metaParts.push(expiryLabel);
+      meta.textContent = metaParts.join(" · ");
 
       info.appendChild(name);
       info.appendChild(meta);
@@ -470,11 +484,11 @@
 
       const displayName = (data.document && (data.document.display_name || data.document.original_filename)) || "文件";
       if (data.preview_type === "pdf-inline") {
-        openUserDocumentModal({
-          title: displayName,
-          subtitle: "服務內 PDF 預覽",
-          mode: "iframe",
-          src: data.inline_url,
+      openUserDocumentModal({
+        title: displayName,
+        subtitle: "服務內 PDF 預覽",
+        mode: "iframe",
+        src: data.inline_url,
           linkHref: data.inline_url,
           linkLabel: "新分頁預覽",
         });
@@ -486,8 +500,8 @@
         subtitle: data.truncated ? "目前顯示預覽片段" : "目前顯示文件文字內容",
         mode: "text",
         text: data.text_preview || "",
-        linkHref: data.download_url,
-        linkLabel: "下載原檔",
+        linkHref: data.viewer_url || data.download_url,
+        linkLabel: data.viewer_url ? "完整預覽" : "下載原檔",
         onExpand: data.truncated
           ? function () {
               openUserDocumentText(docId, displayName);
@@ -522,11 +536,17 @@
       }
       openUserDocumentModal({
         title: displayName || ((data.document && data.document.display_name) || "文件文字內容"),
-        subtitle: data.truncated ? "已載入首段內容" : "已載入完整文字",
+        subtitle: data.truncated ? "已載入首段內容，完整內容可改用預覽頁查看" : "已載入完整文字",
         mode: "text",
-        text: data.content || "",
+        text: (data.content || "") + (data.truncated ? "\n\n[內容仍然很長，建議改用完整預覽頁閱讀。]" : ""),
         linkHref: "/api/user-documents/" + encodeURIComponent(docId) + "/file?disposition=attachment",
         linkLabel: "下載原檔",
+        onExpand: data.truncated
+          ? function () {
+              window.open("/api/user-documents/" + encodeURIComponent(docId) + "/viewer", "_blank", "noopener");
+            }
+          : null,
+        expandLabel: "完整預覽",
       });
     } catch (err) {
       openUserDocumentModal({

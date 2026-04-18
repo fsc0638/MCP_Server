@@ -1,6 +1,7 @@
 from pathlib import Path
+from datetime import datetime, timedelta
 
-from server.services.user_document_service import UserDocumentService
+from server.services.user_document_service import ExpiredDocumentError, UserDocumentService
 
 
 def test_user_document_service_lifecycle(tmp_path: Path):
@@ -32,3 +33,29 @@ def test_user_document_service_lifecycle(tmp_path: Path):
 
     service.delete_document("tester", created["doc_id"])
     assert service.list_documents("tester") == []
+
+
+def test_user_document_service_expires_and_cleans_up(tmp_path: Path):
+    service = UserDocumentService(root_dir=tmp_path, ttl_days=1)
+
+    created = service.create_document(
+        user_key="tester",
+        raw_user_id="tester",
+        filename="notes.txt",
+        content="hello document center".encode("utf-8"),
+    )
+
+    manifest = service._load_manifest("tester")
+    manifest["documents"][0]["expires_at"] = (datetime.now() - timedelta(days=2)).isoformat(timespec="seconds")
+    service._save_manifest("tester", manifest)
+
+    assert service.list_documents("tester") == []
+
+    try:
+        service.get_document("tester", created["doc_id"])
+        assert False, "Expected document to be expired"
+    except ExpiredDocumentError:
+        pass
+
+    summary = service.cleanup_expired_documents()
+    assert summary["removed_documents"] == 1

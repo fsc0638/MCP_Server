@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from uuid import uuid4
@@ -41,10 +41,24 @@ def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+
+class ExpiredDocumentError(Exception):
+    """Raised when a document record exists but is past its retention window."""
+
+
 class UserDocumentService:
-    def __init__(self, root_dir: Path | None = None):
+    def __init__(self, root_dir: Path | None = None, ttl_days: int = 14):
         self.root_dir = Path(root_dir or USER_DOCUMENTS_DIR)
         self.root_dir.mkdir(parents=True, exist_ok=True)
+        self.ttl_days = max(int(ttl_days or 14), 1)
 
     def resolve_user_from_cookie(self, signed_cookie: str) -> Tuple[str, str]:
         """Return (folder_key, raw_user_id) for the current web session."""
@@ -78,16 +92,43 @@ class UserDocumentService:
         documents = data.get("documents")
         if not isinstance(documents, list):
             data["documents"] = []
+        changed = False
+        hydrated = []
+        for item in data.get("documents", []):
+            doc, item_changed = self._hydrate_document(dict(item))
+            hydrated.append(doc)
+            changed = changed or item_changed
+        data["documents"] = hydrated
+        if changed:
+            self._save_manifest(user_key, data)
         return data
 
     def _save_manifest(self, user_key: str, data: Dict[str, Any]) -> None:
         path = self.manifest_path(user_key)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _find_document(self, user_key: str, doc_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    def _hydrate_document(self, item: Dict[str, Any]) -> Tuple[Dict[str, Any], bool]:
+        changed = False
+        created_at = item.get("created_at") or now_iso()
+        if item.get("created_at") != created_at:
+            item["created_at"] = created_at
+            changed = True
+        if not item.get("updated_at"):
+            item["updated_at"] = created_at
+            changed = True
+        if not item.get("expires_at"):
+            base = parse_iso(created_at) or datetime.now()
+            item["expires_at"] = (base + timedelta(days=self.ttl_days)).isoformat(timespec="seconds")
+            changed = True
+        item["expired"] = self.is_document_expired(item)
+        return item, changed
+
+    def _find_document(self, user_key: str, doc_id: str, allow_expired: bool = False) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         manifest = self._load_manifest(user_key)
         for item in manifest.get("documents", []):
             if item.get("doc_id") == doc_id:
+                if item.get("expired") and not allow_expired:
+                    raise ExpiredDocumentError(f"Document '{doc_id}' has expired")
                 return manifest, item
         raise FileNotFoundError(f"Document '{doc_id}' not found")
 
@@ -124,6 +165,7 @@ class UserDocumentService:
             "size": size,
             "created_at": created_at,
             "updated_at": created_at,
+            "expires_at": (datetime.now() + timedelta(days=self.ttl_days)).isoformat(timespec="seconds"),
             "preview_type": "pdf-inline" if ext == ".pdf" else "text",
             "text_extract_status": "pending" if ext in TEXT_EXTRACTABLE_EXTENSIONS else "unsupported",
         }
@@ -150,25 +192,34 @@ class UserDocumentService:
         self._save_manifest(user_key, manifest)
         return record
 
-    def list_documents(self, user_key: str) -> List[Dict[str, Any]]:
+    def is_document_expired(self, document: Dict[str, Any], now: datetime | None = None) -> bool:
+        expires_at = parse_iso(document.get("expires_at"))
+        if not expires_at:
+            return False
+        return expires_at <= (now or datetime.now())
+
+    def list_documents(self, user_key: str, include_expired: bool = False) -> List[Dict[str, Any]]:
         manifest = self._load_manifest(user_key)
         documents = []
         for item in manifest.get("documents", []):
             doc = dict(item)
             cache_exists = self._text_cache_path(user_key, doc.get("doc_id", "")).exists()
             doc["has_text_cache"] = cache_exists
+            doc["expired"] = self.is_document_expired(doc)
+            if doc["expired"] and not include_expired:
+                continue
             documents.append(doc)
         documents.sort(key=lambda item: item.get("created_at", ""), reverse=True)
         return documents
 
-    def get_document(self, user_key: str, doc_id: str) -> Dict[str, Any]:
-        _, item = self._find_document(user_key, doc_id)
+    def get_document(self, user_key: str, doc_id: str, allow_expired: bool = False) -> Dict[str, Any]:
+        _, item = self._find_document(user_key, doc_id, allow_expired=allow_expired)
         doc = dict(item)
         doc["has_text_cache"] = self._text_cache_path(user_key, doc_id).exists()
         return doc
 
-    def get_document_path(self, user_key: str, doc_id: str) -> Path:
-        _, item = self._find_document(user_key, doc_id)
+    def get_document_path(self, user_key: str, doc_id: str, allow_expired: bool = False) -> Path:
+        _, item = self._find_document(user_key, doc_id, allow_expired=allow_expired)
         path = (self.user_dir(user_key) / item["stored_filename"]).resolve()
         if not str(path).startswith(str(self.user_dir(user_key).resolve())):
             raise ValueError("Invalid document path")
@@ -177,7 +228,7 @@ class UserDocumentService:
         return path
 
     def ensure_text_cache(self, user_key: str, doc_id: str) -> Dict[str, Any]:
-        manifest, item = self._find_document(user_key, doc_id)
+        manifest, item = self._find_document(user_key, doc_id, allow_expired=True)
         updated = dict(item)
         if updated.get("extension") not in TEXT_EXTRACTABLE_EXTENSIONS:
             updated["text_extract_status"] = "unsupported"
@@ -185,7 +236,7 @@ class UserDocumentService:
             self._save_manifest(user_key, manifest)
             return updated
 
-        path = self.get_document_path(user_key, doc_id)
+        path = self.get_document_path(user_key, doc_id, allow_expired=True)
         text, error = extract_file_content(str(path))
         cache_path = self._text_cache_path(user_key, doc_id)
         if error:
@@ -246,7 +297,7 @@ class UserDocumentService:
         return updated
 
     def delete_document(self, user_key: str, doc_id: str) -> None:
-        manifest, item = self._find_document(user_key, doc_id)
+        manifest, item = self._find_document(user_key, doc_id, allow_expired=True)
         path = self.user_dir(user_key) / item["stored_filename"]
         if path.exists():
             path.unlink()
@@ -255,6 +306,40 @@ class UserDocumentService:
             cache_path.unlink()
         manifest["documents"] = [doc for doc in manifest.get("documents", []) if doc.get("doc_id") != doc_id]
         self._save_manifest(user_key, manifest)
+
+    def cleanup_expired_documents(self) -> Dict[str, int]:
+        summary = {"removed_documents": 0, "removed_users": 0}
+        for user_dir in self.root_dir.iterdir():
+            if not user_dir.is_dir():
+                continue
+            user_key = user_dir.name
+            manifest = self._load_manifest(user_key)
+            kept_documents = []
+            removed_for_user = 0
+            for item in manifest.get("documents", []):
+                if self.is_document_expired(item):
+                    doc_id = item.get("doc_id", "")
+                    stored_filename = item.get("stored_filename", "")
+                    file_path = user_dir / stored_filename
+                    if file_path.exists():
+                        file_path.unlink()
+                    cache_path = self._text_cache_path(user_key, doc_id)
+                    if cache_path.exists():
+                        cache_path.unlink()
+                    removed_for_user += 1
+                    summary["removed_documents"] += 1
+                else:
+                    kept_documents.append(item)
+            manifest["documents"] = kept_documents
+            self._save_manifest(user_key, manifest)
+            remaining_entries = [entry for entry in user_dir.iterdir() if entry.name != "manifest.json"]
+            if removed_for_user and not kept_documents and not remaining_entries:
+                manifest_path = self.manifest_path(user_key)
+                if manifest_path.exists():
+                    manifest_path.unlink()
+                user_dir.rmdir()
+                summary["removed_users"] += 1
+        return summary
 
 
 user_document_service = UserDocumentService()

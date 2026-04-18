@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Cookie, File, HTTPException, Que
 from fastapi.responses import FileResponse, HTMLResponse
 
 from server.schemas.user_documents import UserDocumentRenameRequest
-from server.services.user_document_service import user_document_service
+from server.services.user_document_service import ExpiredDocumentError, user_document_service
 
 router = APIRouter(prefix="/api/user-documents", tags=["User Documents"])
 
@@ -49,9 +49,12 @@ async def upload_user_document(
 
 
 @router.get("")
-def list_user_documents(mcp_session: str = Cookie(default="", alias="mcp_session")):
+def list_user_documents(
+    include_expired: bool = Query(default=False),
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
     user_key, _ = _resolve_current_user(mcp_session)
-    documents = user_document_service.list_documents(user_key)
+    documents = user_document_service.list_documents(user_key, include_expired=include_expired)
     return {"status": "success", "total": len(documents), "documents": documents}
 
 
@@ -63,6 +66,8 @@ def get_user_document(doc_id: str, mcp_session: str = Cookie(default="", alias="
         return {"status": "success", "document": document}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ExpiredDocumentError as exc:
+        raise HTTPException(status_code=410, detail=str(exc))
 
 
 @router.get("/{doc_id}/preview")
@@ -72,10 +77,13 @@ def preview_user_document(doc_id: str, mcp_session: str = Cookie(default="", ali
         payload = user_document_service.build_preview_payload(user_key, doc_id)
         payload["inline_url"] = f"/api/user-documents/{doc_id}/file?disposition=inline"
         payload["download_url"] = f"/api/user-documents/{doc_id}/file?disposition=attachment"
+        payload["viewer_url"] = f"/api/user-documents/{doc_id}/viewer"
         payload["content_url"] = f"/api/user-documents/{doc_id}/content"
         return payload
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ExpiredDocumentError as exc:
+        raise HTTPException(status_code=410, detail=str(exc))
 
 
 @router.get("/{doc_id}/content")
@@ -100,6 +108,8 @@ def get_user_document_content(
         }
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ExpiredDocumentError as exc:
+        raise HTTPException(status_code=410, detail=str(exc))
 
 
 @router.get("/{doc_id}/file")
@@ -125,6 +135,8 @@ def open_user_document_file(
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except ExpiredDocumentError as exc:
+        raise HTTPException(status_code=410, detail=str(exc))
 
 
 @router.get("/{doc_id}/viewer", response_class=HTMLResponse)
@@ -176,6 +188,8 @@ def view_user_document(doc_id: str, mcp_session: str = Cookie(default="", alias=
         return HTMLResponse(html_doc)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ExpiredDocumentError as exc:
+        raise HTTPException(status_code=410, detail=str(exc))
 
 
 @router.post("/{doc_id}/rename")
@@ -190,6 +204,8 @@ def rename_user_document(
         return {"status": "success", "document": document}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ExpiredDocumentError as exc:
+        raise HTTPException(status_code=410, detail=str(exc))
 
 
 @router.delete("/{doc_id}")
