@@ -9,6 +9,7 @@ class ChatRequest(BaseModel):
     user_input: str
     session_id: Optional[str] = "default"
     turn_id: Optional[str] = None
+    user_id: Optional[str] = None
     model: Optional[str] = "openai"
     provider: Optional[str] = None
     api_base: Optional[str] = None

@@ -628,8 +628,10 @@
 
   function formatText(text) {
     return escapeHtml(text)
+      .replace(/\[([^\]\n]+)\]\(((?:https?:\/\/|\/)[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/\n/g, "<br>")
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+      ;
   }
 
   function getRelativeTimeString(timestamp) {

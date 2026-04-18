@@ -193,6 +193,110 @@ async def process_chat_native(req: ChatRequest):
     )
     task_id = task["task_id"]
 
+    def _make_immediate_success_response(final_text: str):
+        async def _event_generator():
+            yield {
+                "data": json.dumps(
+                    {"status": "task_started", "task_id": task_id, "session_id": session_id, "turn_id": turn_id},
+                    ensure_ascii=False,
+                )
+            }
+            session_mgr.append_message(session_id, "user", req.user_input)
+            session_mgr.append_message(session_id, "assistant", final_text)
+            task_registry.mark_completed(task_id, final_text=final_text, assistant_message_persisted=True)
+            yield {
+                "data": json.dumps(
+                    {"status": "success", "content": final_text, "task_id": task_id, "session_id": session_id, "turn_id": turn_id},
+                    ensure_ascii=False,
+                )
+            }
+
+        return EventSourceResponse(_event_generator(), media_type="text/event-stream")
+
+    try:
+        from server.services.user_document_chat import (
+            PENDING_CANDIDATES_KEY,
+            PENDING_DOCUMENT_KEY,
+            resolve_document_turn,
+        )
+        from server.services.user_document_service import sanitize_user_key, user_document_service
+
+        raw_user_id = (req.user_id or "").strip()
+        if raw_user_id:
+            user_doc_key = sanitize_user_key(raw_user_id)
+            documents = user_document_service.list_documents(user_doc_key)
+            documents_by_id = {doc.get("doc_id"): doc for doc in documents}
+
+            pending_doc_meta = session_mgr.get_metadata(session_id, PENDING_DOCUMENT_KEY, default=None)
+            pending_doc_id = pending_doc_meta.get("doc_id") if isinstance(pending_doc_meta, dict) else ""
+            pending_document = documents_by_id.get(pending_doc_id) if pending_doc_id else None
+
+            pending_candidate_ids = session_mgr.get_metadata(session_id, PENDING_CANDIDATES_KEY, default=[]) or []
+            pending_candidates = [documents_by_id[doc_id] for doc_id in pending_candidate_ids if doc_id in documents_by_id]
+
+            doc_turn = resolve_document_turn(
+                req.user_input,
+                documents,
+                pending_document=pending_document,
+                pending_candidates=pending_candidates,
+            )
+            if doc_turn:
+                if doc_turn.get("clear_pending") or doc_turn.get("clear_pending_document"):
+                    session_mgr.set_metadata(session_id, PENDING_DOCUMENT_KEY, None)
+                if doc_turn.get("clear_pending") or doc_turn.get("clear_pending_candidates"):
+                    session_mgr.set_metadata(session_id, PENDING_CANDIDATES_KEY, [])
+
+                selected_doc = doc_turn.get("set_pending_document")
+                if selected_doc:
+                    session_mgr.set_metadata(
+                        session_id,
+                        PENDING_DOCUMENT_KEY,
+                        {
+                            "doc_id": selected_doc.get("doc_id"),
+                            "display_name": selected_doc.get("display_name") or selected_doc.get("original_filename"),
+                        },
+                    )
+
+                selected_candidates = doc_turn.get("set_pending_candidates")
+                if selected_candidates:
+                    session_mgr.set_metadata(
+                        session_id,
+                        PENDING_CANDIDATES_KEY,
+                        [doc.get("doc_id") for doc in selected_candidates if doc.get("doc_id")],
+                    )
+
+                action = doc_turn.get("action", "")
+                final_text = doc_turn.get("message", "")
+                document = doc_turn.get("document") or {}
+                doc_id = document.get("doc_id", "")
+                doc_name = document.get("display_name") or document.get("original_filename") or doc_id or "文件"
+
+                if action == "show_preview" and doc_id:
+                    final_text = (
+                        f"已為你準備好「{doc_name}」的服務內預覽。\n"
+                        f"[在服務內預覽](/api/user-documents/{doc_id}/viewer)\n"
+                        f"[下載原檔](/api/user-documents/{doc_id}/file?disposition=attachment)"
+                    )
+                elif action == "show_link" and doc_id:
+                    final_text = (
+                        f"以下是「{doc_name}」可直接開啟的連結：\n"
+                        f"[服務內預覽](/api/user-documents/{doc_id}/viewer)\n"
+                        f"[下載原檔](/api/user-documents/{doc_id}/file?disposition=attachment)"
+                    )
+                elif action == "show_text" and doc_id:
+                    _, doc_text = user_document_service.get_text_content(user_doc_key, doc_id)
+                    snippet = (doc_text or "").strip()
+                    if len(snippet) > 8000:
+                        snippet = snippet[:8000].rstrip() + "\n\n[內容較長，先顯示前 8000 字。]"
+                    final_text = (
+                        f"以下是「{doc_name}」的文字內容：\n\n"
+                        f"{snippet or '目前沒有可讀取的文字內容。'}"
+                    )
+
+                return _make_immediate_success_response(final_text)
+    except Exception as doc_turn_error:
+        logger.warning(f"[DocTurn] Fallback to normal chat due to error: {doc_turn_error}")
+
     logger.info(f"Chat Request: [Model: {req.model}] [Lang: {req.language}] [Detail: {req.detail_level}]")
     dynamic_prompt = get_universal_system_prompt(
         platform="web",

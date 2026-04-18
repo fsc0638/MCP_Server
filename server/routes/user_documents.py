@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import html
 import os
 
 from fastapi import APIRouter, BackgroundTasks, Cookie, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from server.schemas.user_documents import UserDocumentRenameRequest
 from server.services.user_document_service import user_document_service
@@ -124,6 +125,57 @@ def open_user_document_file(
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/{doc_id}/viewer", response_class=HTMLResponse)
+def view_user_document(doc_id: str, mcp_session: str = Cookie(default="", alias="mcp_session")):
+    user_key, _ = _resolve_current_user(mcp_session)
+    try:
+        payload = user_document_service.build_preview_payload(user_key, doc_id)
+        document = payload["document"]
+        title = html.escape(document.get("display_name") or document.get("original_filename") or "Document Viewer")
+
+        if payload.get("preview_type") == "pdf-inline":
+            body = (
+                f'<iframe src="/api/user-documents/{doc_id}/file?disposition=inline" '
+                'style="width:100%;height:78vh;border:none;border-radius:16px;background:#fff;"></iframe>'
+            )
+        else:
+            _, text = user_document_service.get_text_content(user_key, doc_id)
+            body = (
+                '<pre style="white-space:pre-wrap;word-break:break-word;line-height:1.75;'
+                'font-size:15px;color:#0f172a;background:#f8fafc;border:1px solid #dbe4f0;'
+                'padding:20px;border-radius:16px;overflow:auto;max-height:78vh;">'
+                f'{html.escape(text or "沒有可預覽的文字內容")}</pre>'
+            )
+
+        html_doc = f"""<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+</head>
+<body style="margin:0;background:#edf3fb;font-family:Arial,sans-serif;color:#0f172a;">
+  <main style="max-width:1080px;margin:0 auto;padding:24px;">
+    <header style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px;">
+      <div>
+        <h1 style="margin:0;font-size:24px;">{title}</h1>
+        <p style="margin:6px 0 0;color:#475569;">User Document Center Preview</p>
+      </div>
+      <a href="/api/user-documents/{doc_id}/file?disposition=attachment"
+         style="display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;
+                border-radius:999px;background:#18409b;color:#fff;text-decoration:none;font-weight:700;">
+        下載原檔
+      </a>
+    </header>
+    {body}
+  </main>
+</body>
+</html>"""
+        return HTMLResponse(html_doc)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.post("/{doc_id}/rename")
