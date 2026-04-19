@@ -63,20 +63,29 @@
   const chatTitleText = document.getElementById("chatTitleText");
   const chatRoot = document.querySelector(".page-chat-root");
   const chatBody = document.getElementById("chatBody");
+  const chatMobileOverlay = document.getElementById("chatMobileOverlay");
+  const chatPrimaryNav = document.getElementById("chatPrimaryNav");
+  const chatSidebarLeft = document.getElementById("chatSidebarLeft");
   const primaryNavToggleButtons = [
     document.getElementById("chatPrimaryNavToggle"),
     document.getElementById("chatPrimaryNavInlineToggle"),
   ].filter(Boolean);
+  const leftPanelToggleButtons = [document.getElementById("chatSidebarLeftToggle")].filter(Boolean);
+  const rightPanelToggleButtons = [document.getElementById("chatSidebarRightToggle")].filter(Boolean);
+  const rightPanelCloseButton = document.getElementById("chatSidebarRightCloseBtn");
   const columnResizerHandles = Array.from(document.querySelectorAll(".page-chat-column-resizer"));
   const PRIMARY_NAV_COLLAPSED_KEY = "kway_chat_primary_nav_collapsed";
   const CHAT_DESKTOP_LAYOUT_KEY = "kway_chat_desktop_layout";
   const DESKTOP_LAYOUT_MEDIA = window.matchMedia("(min-width: 1101px)");
+  const RIGHT_PANEL_DRAWER_MEDIA = window.matchMedia("(max-width: 1280px)");
+  const SIDE_PANEL_DRAWER_MEDIA = window.matchMedia("(max-width: 1024px)");
   const DEFAULT_DESKTOP_LAYOUT = { nav: 96, left: 240, right: 276 };
   const MIN_DESKTOP_LAYOUT = { nav: 72, left: 200, right: 220, main: 420 };
   const MAX_DESKTOP_LAYOUT = { nav: 180, left: 420, right: 420 };
   let isPrimaryNavCollapsed = true;
   let desktopLayoutWidths = { ...DEFAULT_DESKTOP_LAYOUT };
   let activeColumnResize = null;
+  let openResponsivePanel = null;
   const initialWelcomeMarkup = (() => {
     const staticWelcome = document.getElementById("chatWelcome");
     if (!staticWelcome) return "";
@@ -258,6 +267,75 @@
     } else {
       clearDesktopLayoutStyles();
     }
+
+    syncResponsivePanels();
+  }
+
+  function usesResponsiveDrawer(panelName) {
+    if (panelName === "right") return RIGHT_PANEL_DRAWER_MEDIA.matches;
+    if (panelName === "left" || panelName === "nav") return SIDE_PANEL_DRAWER_MEDIA.matches;
+    return false;
+  }
+
+  function updatePanelToggleButtons() {
+    const navExpanded = usesResponsiveDrawer("nav")
+      ? openResponsivePanel === "nav"
+      : !isPrimaryNavCollapsed;
+
+    primaryNavToggleButtons.forEach(function (button) {
+      const usesDrawer = usesResponsiveDrawer("nav");
+      button.setAttribute("aria-expanded", String(navExpanded));
+      button.setAttribute("title", usesDrawer ? (navExpanded ? "關閉主選單" : "開啟主選單") : (navExpanded ? "隱藏主選單" : "展開主選單"));
+      button.classList.toggle("is-active", navExpanded);
+    });
+
+    leftPanelToggleButtons.forEach(function (button) {
+      const isOpen = openResponsivePanel === "left";
+      button.setAttribute("aria-expanded", String(isOpen));
+      button.setAttribute("title", isOpen ? "關閉對話記錄" : "開啟對話記錄");
+      button.classList.toggle("is-active", isOpen);
+    });
+
+    rightPanelToggleButtons.forEach(function (button) {
+      const isOpen = openResponsivePanel === "right";
+      button.setAttribute("aria-expanded", String(isOpen));
+      button.setAttribute("title", isOpen ? "關閉工作面板" : "開啟工作面板");
+      button.classList.toggle("is-active", isOpen);
+    });
+  }
+
+  function setResponsivePanel(panelName) {
+    const nextPanel = panelName && usesResponsiveDrawer(panelName) ? panelName : null;
+    openResponsivePanel = nextPanel;
+
+    if (chatBody) {
+      chatBody.classList.toggle("is-primary-nav-drawer-open", nextPanel === "nav");
+      chatBody.classList.toggle("is-left-panel-open", nextPanel === "left");
+      chatBody.classList.toggle("is-right-panel-open", nextPanel === "right");
+    }
+
+    if (chatMobileOverlay) {
+      chatMobileOverlay.classList.toggle("is-open", !!nextPanel);
+    }
+
+    updatePanelToggleButtons();
+  }
+
+  function closeResponsivePanels() {
+    setResponsivePanel(null);
+  }
+
+  function toggleResponsivePanel(panelName) {
+    if (!usesResponsiveDrawer(panelName)) return;
+    setResponsivePanel(openResponsivePanel === panelName ? null : panelName);
+  }
+
+  function syncResponsivePanels() {
+    if (openResponsivePanel && !usesResponsiveDrawer(openResponsivePanel)) {
+      closeResponsivePanels();
+      return;
+    }
+    setResponsivePanel(openResponsivePanel);
   }
 
   function applyPrimaryNavCollapsed(nextCollapsed, options) {
@@ -267,13 +345,7 @@
     if (chatBody) {
       chatBody.classList.toggle("is-primary-nav-collapsed", isPrimaryNavCollapsed);
     }
-
-    primaryNavToggleButtons.forEach(function (button) {
-      const isExpanded = !isPrimaryNavCollapsed;
-      button.setAttribute("aria-expanded", String(isExpanded));
-      button.setAttribute("title", isExpanded ? "隱藏主選單" : "展開主選單");
-      button.classList.toggle("is-active", isExpanded);
-    });
+    updatePanelToggleButtons();
 
     if (opts.persist !== false) {
       localStorage.setItem(PRIMARY_NAV_COLLAPSED_KEY, isPrimaryNavCollapsed ? "1" : "0");
@@ -281,6 +353,12 @@
   }
 
   function togglePrimaryNav(forceCollapsed) {
+    if (usesResponsiveDrawer("nav")) {
+      const shouldOpen = typeof forceCollapsed === "boolean" ? !forceCollapsed : openResponsivePanel !== "nav";
+      setResponsivePanel(shouldOpen ? "nav" : null);
+      return;
+    }
+
     const nextCollapsed =
       typeof forceCollapsed === "boolean" ? forceCollapsed : !isPrimaryNavCollapsed;
     applyPrimaryNavCollapsed(nextCollapsed);
@@ -292,6 +370,59 @@
     button.addEventListener("click", function () {
       togglePrimaryNav();
     });
+  });
+
+  leftPanelToggleButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      toggleResponsivePanel("left");
+    });
+  });
+
+  rightPanelToggleButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      toggleResponsivePanel("right");
+    });
+  });
+
+  if (rightPanelCloseButton) {
+    rightPanelCloseButton.addEventListener("click", function () {
+      if (usesResponsiveDrawer("right")) {
+        closeResponsivePanels();
+      }
+    });
+  }
+
+  if (chatMobileOverlay) {
+    chatMobileOverlay.addEventListener("click", function () {
+      closeResponsivePanels();
+    });
+  }
+
+  if (chatPrimaryNav) {
+    chatPrimaryNav.addEventListener("click", function (event) {
+      if (usesResponsiveDrawer("nav") && event.target.closest(".page-chat-primary-nav-btn")) {
+        closeResponsivePanels();
+      }
+    });
+  }
+
+  if (chatSidebarLeft) {
+    chatSidebarLeft.addEventListener("click", function (event) {
+      if (!usesResponsiveDrawer("left")) return;
+      if (
+        event.target.closest(".page-chat-conv-item") ||
+        event.target.closest(".page-chat-new-btn") ||
+        event.target.closest(".page-chat-sidebar-header .btn-icon")
+      ) {
+        closeResponsivePanels();
+      }
+    });
+  }
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && openResponsivePanel) {
+      closeResponsivePanels();
+    }
   });
 
   columnResizerHandles.forEach(function (handle) {
@@ -307,6 +438,17 @@
   } else if (typeof DESKTOP_LAYOUT_MEDIA.addListener === "function") {
     DESKTOP_LAYOUT_MEDIA.addListener(handleDesktopLayoutResize);
   }
+  if (typeof RIGHT_PANEL_DRAWER_MEDIA.addEventListener === "function") {
+    RIGHT_PANEL_DRAWER_MEDIA.addEventListener("change", syncResponsivePanels);
+  } else if (typeof RIGHT_PANEL_DRAWER_MEDIA.addListener === "function") {
+    RIGHT_PANEL_DRAWER_MEDIA.addListener(syncResponsivePanels);
+  }
+  if (typeof SIDE_PANEL_DRAWER_MEDIA.addEventListener === "function") {
+    SIDE_PANEL_DRAWER_MEDIA.addEventListener("change", syncResponsivePanels);
+  } else if (typeof SIDE_PANEL_DRAWER_MEDIA.addListener === "function") {
+    SIDE_PANEL_DRAWER_MEDIA.addListener(syncResponsivePanels);
+  }
+  syncResponsivePanels();
 
   async function hydrateAuthFromServer() {
     try {
