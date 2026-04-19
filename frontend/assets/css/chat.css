@@ -287,6 +287,8 @@ html, body { height: 100%; overflow: hidden; }
 
 /* ── Left sidebar ────────────────────────────────────────────── */
 .page-chat-primary-nav {
+  grid-column: 1;
+  grid-row: 1;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -431,6 +433,8 @@ html, body { height: 100%; overflow: hidden; }
 }
 
 .page-chat-sidebar-left {
+  grid-column: 2;
+  grid-row: 1;
   display: flex; flex-direction: column;
   background: var(--bg-sidebar);
   border-right: 1px solid var(--border-subtle);
@@ -521,8 +525,11 @@ html, body { height: 100%; overflow: hidden; }
 
 /* ── Center / Chat main ──────────────────────────────────────── */
 .page-chat-main {
+  grid-column: 3;
+  grid-row: 1;
   display: flex; flex-direction: column; overflow: hidden;
   background: var(--bg-base);
+  min-width: 0;
 }
 
 .page-chat-main-topbar {
@@ -824,6 +831,8 @@ html, body { height: 100%; overflow: hidden; }
 
 /* ── Right panel ─────────────────────────────────────────────── */
 .page-chat-sidebar-right {
+  grid-column: 4;
+  grid-row: 1;
   display: flex; flex-direction: column;
   background: var(--bg-sidebar);
   border-left: 1px solid var(--border-subtle);
