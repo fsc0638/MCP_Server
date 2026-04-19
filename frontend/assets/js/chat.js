@@ -61,6 +61,13 @@
   const sendBtn = document.getElementById("sendBtn");
   const modelName = document.getElementById("modelName");
   const chatTitleText = document.getElementById("chatTitleText");
+  const chatBody = document.getElementById("chatBody");
+  const primaryNavToggleButtons = [
+    document.getElementById("chatPrimaryNavToggle"),
+    document.getElementById("chatPrimaryNavInlineToggle"),
+  ].filter(Boolean);
+  const PRIMARY_NAV_COLLAPSED_KEY = "kway_chat_primary_nav_collapsed";
+  let isPrimaryNavCollapsed = true;
   const initialWelcomeMarkup = (() => {
     const staticWelcome = document.getElementById("chatWelcome");
     if (!staticWelcome) return "";
@@ -68,6 +75,48 @@
     staticWelcome.remove();
     return markup;
   })();
+
+  function readStoredBoolean(key, fallbackValue) {
+    const stored = localStorage.getItem(key);
+    if (stored === null) return fallbackValue;
+    return stored === "1";
+  }
+
+  function applyPrimaryNavCollapsed(nextCollapsed, options) {
+    const opts = options || {};
+    isPrimaryNavCollapsed = !!nextCollapsed;
+
+    if (chatBody) {
+      chatBody.classList.toggle("is-primary-nav-collapsed", isPrimaryNavCollapsed);
+    }
+
+    primaryNavToggleButtons.forEach(function (button) {
+      const isExpanded = !isPrimaryNavCollapsed;
+      button.setAttribute("aria-expanded", String(isExpanded));
+      button.setAttribute("title", isExpanded ? "隱藏主選單" : "展開主選單");
+      button.classList.toggle("is-active", isExpanded);
+    });
+
+    if (opts.persist !== false) {
+      localStorage.setItem(PRIMARY_NAV_COLLAPSED_KEY, isPrimaryNavCollapsed ? "1" : "0");
+    }
+  }
+
+  function togglePrimaryNav(forceCollapsed) {
+    const nextCollapsed =
+      typeof forceCollapsed === "boolean" ? forceCollapsed : !isPrimaryNavCollapsed;
+    applyPrimaryNavCollapsed(nextCollapsed);
+  }
+
+  window.togglePrimaryNav = togglePrimaryNav;
+
+  primaryNavToggleButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      togglePrimaryNav();
+    });
+  });
+
+  applyPrimaryNavCollapsed(readStoredBoolean(PRIMARY_NAV_COLLAPSED_KEY, true), { persist: false });
 
   async function hydrateAuthFromServer() {
     try {

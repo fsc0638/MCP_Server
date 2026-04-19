@@ -20,6 +20,20 @@
   <!-- Global header / Topbar -->
   <header class="page-chat-topbar" role="banner" data-analytics-region="chat-topbar">
     <div class="page-chat-topbar-left">
+      <button
+        class="page-chat-shell-toggle"
+        id="chatPrimaryNavToggle"
+        type="button"
+        aria-label="切換主選單"
+        aria-controls="chatPrimaryNav"
+        aria-expanded="false"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true">
+          <line x1="4" y1="7" x2="20" y2="7"></line>
+          <line x1="4" y1="12" x2="20" y2="12"></line>
+          <line x1="4" y1="17" x2="20" y2="17"></line>
+        </svg>
+      </button>
       <a href="index.html" class="logo page-chat-topbar-logo" aria-label="Agent K 首頁">
         <div class="logo-mark" aria-hidden="true" style="background:none;">
           <img src="../assets/images/kw_logo.png" width="28" height="28" alt="" />
@@ -82,10 +96,10 @@
   </header>
 
   <!-- App body -->
-  <div id="chatBody" class="page-chat-body">
+  <div id="chatBody" class="page-chat-body is-primary-nav-collapsed">
 
     <!-- Primary navigation -->
-    <aside class="page-chat-primary-nav" aria-label="主選單">
+    <aside class="page-chat-primary-nav" id="chatPrimaryNav" aria-label="主選單">
       <div class="page-chat-primary-nav-header">
         <span class="page-chat-primary-nav-kicker">主選單</span>
       </div>
@@ -157,6 +171,20 @@
     <main class="page-chat-main" aria-label="對話區域" data-analytics-region="chat-main">
       <div class="page-chat-main-topbar">
         <div class="page-chat-main-title-wrap">
+          <button
+            class="page-chat-inline-toggle"
+            id="chatPrimaryNavInlineToggle"
+            type="button"
+            aria-label="切換主選單"
+            aria-controls="chatPrimaryNav"
+            aria-expanded="false"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true">
+              <line x1="4" y1="7" x2="20" y2="7"></line>
+              <line x1="4" y1="12" x2="20" y2="12"></line>
+              <line x1="4" y1="17" x2="20" y2="17"></line>
+            </svg>
+          </button>
           <div class="page-chat-conv-icon page-chat-conv-icon--blue" style="width:26px;height:26px;font-size:0.72rem;" aria-hidden="true">✦</div>
           <span class="page-chat-main-title" id="chatTitleText">歡迎使用 Agent K</span>
           <span class="badge badge-blue">進行中</span>
