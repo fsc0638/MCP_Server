@@ -92,6 +92,11 @@ VIEWER_PAGE_CSS = """
     color: #fff;
     border-color: transparent;
   }
+  .viewer-action.is-selected {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: rgba(24,64,155,0.18);
+  }
   .viewer-body {
     padding: 24px;
   }
@@ -253,7 +258,41 @@ def _build_text_pre_block(text: str) -> str:
     )
 
 
-def _build_viewer_page(title: str, subtitle: str, body: str, doc_id: str) -> str:
+def _build_error_block(title: str, message: str) -> str:
+    safe_title = html.escape(title)
+    safe_message = html.escape(message or "目前無法完成這個預覽。")
+    return (
+        '<section style="padding:18px 20px;border-radius:18px;'
+        'background:linear-gradient(180deg,#fff7ed,#fff);border:1px solid rgba(249,115,22,0.18);">'
+        f'<h2 style="margin:0 0 8px;font-size:1.05rem;color:#9a3412;">{safe_title}</h2>'
+        f'<p style="margin:0;color:#7c2d12;line-height:1.7;">{safe_message}</p>'
+        "</section>"
+    )
+
+
+def _build_viewer_actions(doc_id: str, mode: str, is_docx: bool) -> str:
+    if is_docx:
+        actions = [
+            (f"/api/user-documents/{doc_id}/viewer", "HTML 預覽", "is-selected" if mode != "pdf" else ""),
+            (f"/api/user-documents/{doc_id}/viewer?mode=pdf", "PDF 預覽", "is-selected" if mode == "pdf" else ""),
+            (f"/api/user-documents/{doc_id}/file?disposition=attachment", "下載原檔", "is-primary"),
+        ]
+    else:
+        actions = [
+            (f"/api/user-documents/{doc_id}/file?disposition=inline", "原檔開啟", ""),
+            (f"/api/user-documents/{doc_id}/file?disposition=attachment", "下載原檔", "is-primary"),
+        ]
+
+    html_parts: list[str] = []
+    for href, label, css_class in actions:
+        class_name = "viewer-action"
+        if css_class:
+            class_name += f" {css_class}"
+        html_parts.append(f'<a class="{class_name}" href="{href}">{label}</a>')
+    return "".join(html_parts)
+
+
+def _build_viewer_page(title: str, subtitle: str, body: str, actions_html: str) -> str:
     return f"""<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -270,10 +309,7 @@ def _build_viewer_page(title: str, subtitle: str, body: str, doc_id: str) -> str
           <h1 class="viewer-title">{title}</h1>
           <p class="viewer-subtitle">{subtitle}</p>
         </div>
-        <div class="viewer-actions">
-          <a class="viewer-action" href="/api/user-documents/{doc_id}/file?disposition=inline">原檔開啟</a>
-          <a class="viewer-action is-primary" href="/api/user-documents/{doc_id}/file?disposition=attachment">下載原檔</a>
-        </div>
+        <div class="viewer-actions">{actions_html}</div>
       </header>
       <div class="viewer-body">
         {body}
@@ -336,6 +372,8 @@ def preview_user_document(doc_id: str, mcp_session: str = Cookie(default="", ali
         payload["viewer_url"] = f"/api/user-documents/{doc_id}/viewer"
         if payload.get("preview_type") == "html-inline":
             payload["inline_url"] = payload["viewer_url"]
+            payload["pdf_inline_url"] = f"/api/user-documents/{doc_id}/pdf-preview"
+            payload["pdf_viewer_url"] = f"/api/user-documents/{doc_id}/viewer?mode=pdf"
         else:
             payload["inline_url"] = f"/api/user-documents/{doc_id}/file?disposition=inline"
         payload["download_url"] = f"/api/user-documents/{doc_id}/file?disposition=attachment"
@@ -398,14 +436,40 @@ def open_user_document_file(
         raise HTTPException(status_code=410, detail=str(exc))
 
 
+@router.get("/{doc_id}/pdf-preview")
+def open_user_document_pdf_preview(doc_id: str, mcp_session: str = Cookie(default="", alias="mcp_session")):
+    user_key, _ = _resolve_current_user(mcp_session)
+    try:
+        document = user_document_service.get_document(user_key, doc_id)
+        pdf_path = user_document_service.ensure_docx_pdf_preview(user_key, doc_id)
+        display_name = document.get("display_name") or document.get("original_filename") or f"{doc_id}.docx"
+        pdf_name = os.path.splitext(display_name)[0] + ".pdf"
+        headers = {"Content-Disposition": _build_content_disposition("inline", pdf_name)}
+        return FileResponse(path=pdf_path, media_type="application/pdf", headers=headers)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ExpiredDocumentError as exc:
+        raise HTTPException(status_code=410, detail=str(exc))
+
+
 @router.get("/{doc_id}/viewer", response_class=HTMLResponse)
-def view_user_document(doc_id: str, mcp_session: str = Cookie(default="", alias="mcp_session")):
+def view_user_document(
+    doc_id: str,
+    mode: str = Query(default="auto"),
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
     user_key, _ = _resolve_current_user(mcp_session)
     try:
         payload = user_document_service.build_preview_payload(user_key, doc_id)
         document = payload["document"]
         title = html.escape(document.get("display_name") or document.get("original_filename") or "Document Viewer")
         subtitle = "User Document Center Preview"
+        is_docx = payload.get("preview_type") == "html-inline"
+        mode = "pdf" if (is_docx and mode == "pdf") else "html"
 
         if payload.get("preview_type") == "pdf-inline":
             body = (
@@ -413,25 +477,39 @@ def view_user_document(doc_id: str, mcp_session: str = Cookie(default="", alias=
                 'style="width:100%;height:78vh;border:none;border-radius:16px;background:#fff;"></iframe>'
             )
         elif payload.get("preview_type") == "html-inline":
-            try:
-                path = user_document_service.get_document_path(user_key, doc_id)
-                rendered_html = render_docx_to_html(str(path))
-                subtitle = "DOCX HTML Preview"
-                body = (
-                    '<section class="docx-preview-shell">'
-                    '<div class="docx-preview-tip">已將 Word 文件轉為服務內 HTML 預覽，保留段落與表格結構。</div>'
-                    f"{rendered_html}"
-                    "</section>"
-                )
-            except Exception:
-                _, text = user_document_service.get_text_content(user_key, doc_id)
-                subtitle = "DOCX Text Preview (HTML fallback)"
-                body = _build_text_pre_block(text)
+            if mode == "pdf":
+                try:
+                    user_document_service.ensure_docx_pdf_preview(user_key, doc_id)
+                    subtitle = "DOCX PDF Preview"
+                    body = (
+                        f'<iframe src="/api/user-documents/{doc_id}/pdf-preview" '
+                        'style="width:100%;height:78vh;border:none;border-radius:16px;background:#fff;"></iframe>'
+                    )
+                except RuntimeError as exc:
+                    subtitle = "DOCX PDF Preview Unavailable"
+                    body = _build_error_block("暫時無法產生 PDF 預覽", str(exc))
+            else:
+                try:
+                    path = user_document_service.get_document_path(user_key, doc_id)
+                    rendered_html = render_docx_to_html(str(path))
+                    subtitle = "DOCX HTML Preview"
+                    body = (
+                        '<section class="docx-preview-shell">'
+                        '<div class="docx-preview-tip">已將 Word 文件轉為服務內 HTML 預覽，保留段落與表格結構。</div>'
+                        f"{rendered_html}"
+                        "</section>"
+                    )
+                except Exception as exc:
+                    _, text = user_document_service.get_text_content(user_key, doc_id)
+                    subtitle = "DOCX Text Preview (HTML fallback)"
+                    body = _build_error_block("DOCX HTML 預覽失敗，已改用文字內容", str(exc))
+                    body += _build_text_pre_block(text)
         else:
             _, text = user_document_service.get_text_content(user_key, doc_id)
             body = _build_text_pre_block(text)
 
-        return HTMLResponse(_build_viewer_page(title, subtitle, body, doc_id))
+        actions_html = _build_viewer_actions(doc_id, mode, is_docx)
+        return HTMLResponse(_build_viewer_page(title, subtitle, body, actions_html))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ExpiredDocumentError as exc:

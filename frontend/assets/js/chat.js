@@ -572,13 +572,21 @@
 
       const displayName = (data.document && (data.document.display_name || data.document.original_filename)) || "文件";
       if (data.preview_type === "pdf-inline" || data.preview_type === "html-inline") {
+        const htmlPreviewLink = data.viewer_url || data.download_url;
+        const pdfPreviewLink = data.preview_type === "html-inline" ? (data.pdf_viewer_url || data.pdf_inline_url) : null;
         openUserDocumentModal({
           title: displayName,
           subtitle: data.preview_type === "pdf-inline" ? "服務內 PDF 預覽" : "服務內 DOCX HTML 預覽",
           mode: "iframe",
           src: data.inline_url || data.viewer_url,
-          linkHref: data.viewer_url || data.download_url,
-          linkLabel: "完整預覽",
+          linkHref: pdfPreviewLink || htmlPreviewLink,
+          linkLabel: pdfPreviewLink ? "PDF 預覽" : "完整預覽",
+          onExpand: data.preview_type === "html-inline" && htmlPreviewLink
+            ? function () {
+                window.open(htmlPreviewLink, "_blank", "noopener");
+              }
+            : null,
+          expandLabel: data.preview_type === "html-inline" && htmlPreviewLink ? "新分頁開啟" : undefined,
         });
         return;
       }

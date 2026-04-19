@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from main import PROJECT_ROOT
 from server.services.auth_session_store import get_auth_session_store
+from server.services.docx_preview import convert_docx_to_pdf
 from server.services.file_extractor import extract_file_content
 from server.services.session_token_cookie import verify_token
 
@@ -186,6 +187,9 @@ class UserDocumentService:
     def _text_cache_path(self, user_key: str, doc_id: str) -> Path:
         return self.user_dir(user_key) / f"{doc_id}.extracted.txt"
 
+    def _pdf_preview_path(self, user_key: str, doc_id: str) -> Path:
+        return self.user_dir(user_key) / f"{doc_id}.preview.pdf"
+
     def _build_document_record(
         self,
         doc_id: str | None,
@@ -331,6 +335,21 @@ class UserDocumentService:
             return document, ""
         return document, cache_path.read_text(encoding="utf-8")
 
+    def ensure_docx_pdf_preview(self, user_key: str, doc_id: str) -> Path:
+        document = self.get_document(user_key, doc_id)
+        if document.get("extension") != ".docx":
+            raise ValueError("PDF preview is only supported for DOCX documents")
+
+        source_path = self.get_document_path(user_key, doc_id)
+        preview_path = self._pdf_preview_path(user_key, doc_id)
+        if preview_path.exists() and preview_path.stat().st_mtime >= source_path.stat().st_mtime:
+            return preview_path
+
+        convert_docx_to_pdf(str(source_path), str(preview_path))
+        if not preview_path.exists():
+            raise RuntimeError("PDF preview generation failed")
+        return preview_path
+
     def build_preview_payload(self, user_key: str, doc_id: str, preview_chars: int = 6000) -> Dict[str, Any]:
         document = self.get_document(user_key, doc_id)
         preview_type = resolve_preview_type(document.get("extension"))
@@ -380,6 +399,9 @@ class UserDocumentService:
         cache_path = self._text_cache_path(user_key, doc_id)
         if cache_path.exists():
             cache_path.unlink()
+        pdf_preview_path = self._pdf_preview_path(user_key, doc_id)
+        if pdf_preview_path.exists():
+            pdf_preview_path.unlink()
         manifest["documents"] = [doc for doc in manifest.get("documents", []) if doc.get("doc_id") != doc_id]
         self._save_manifest(user_key, manifest)
 
@@ -402,6 +424,9 @@ class UserDocumentService:
                     cache_path = self._text_cache_path(user_key, doc_id)
                     if cache_path.exists():
                         cache_path.unlink()
+                    pdf_preview_path = self._pdf_preview_path(user_key, doc_id)
+                    if pdf_preview_path.exists():
+                        pdf_preview_path.unlink()
                     removed_for_user += 1
                     summary["removed_documents"] += 1
                 else:

@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import html
 import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import Any, Iterator
 
 
@@ -84,6 +88,34 @@ def render_docx_to_html(docx_path: str) -> str:
     return '<article class="docx-preview-fragment">' + "".join(parts) + "</article>"
 
 
+def convert_docx_to_pdf(docx_path: str, pdf_path: str) -> None:
+    """Convert a DOCX file to PDF for inline preview.
+
+    Conversion order:
+    1. `docx2pdf` (best on Windows with Word installed)
+    2. `soffice --headless` if LibreOffice is available
+    """
+    source = Path(docx_path).resolve()
+    target = Path(pdf_path).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    errors: list[str] = []
+
+    try:
+        _convert_via_docx2pdf(source, target)
+        return
+    except Exception as exc:
+        errors.append(str(exc))
+
+    try:
+        _convert_via_soffice(source, target)
+        return
+    except Exception as exc:
+        errors.append(str(exc))
+
+    joined = "；".join(err for err in errors if err) or "沒有可用的 DOCX 轉 PDF 轉換器。"
+    raise RuntimeError(joined)
+
+
 def _get_block_tag(paragraph: Any) -> tuple[str, str | None]:
     style_name = ((paragraph.style.name if paragraph.style else "") or "").strip()
     normalized = style_name.lower()
@@ -141,6 +173,58 @@ def _escape_run_text(value: str) -> str:
     escaped = html.escape(value)
     escaped = escaped.replace("\t", "&emsp;")
     return escaped.replace("\n", "<br>")
+
+
+def _convert_via_docx2pdf(source: Path, target: Path) -> None:
+    try:
+        from docx2pdf import convert as convert_docx2pdf
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("docx2pdf 未安裝，無法使用 Word 轉檔。") from exc
+
+    temp_target = target.with_name(target.stem + ".build.pdf")
+    temp_target.unlink(missing_ok=True)
+
+    try:
+        convert_docx2pdf(str(source), str(temp_target))
+    except Exception as exc:
+        temp_target.unlink(missing_ok=True)
+        raise RuntimeError(f"docx2pdf 轉換失敗：{exc}") from exc
+
+    if not temp_target.exists():
+        raise RuntimeError("docx2pdf 沒有產生 PDF 檔案。")
+
+    temp_target.replace(target)
+
+
+def _convert_via_soffice(source: Path, target: Path) -> None:
+    soffice = shutil.which("soffice")
+    if not soffice:
+        raise RuntimeError("找不到 LibreOffice soffice，無法使用 headless 轉檔。")
+
+    with tempfile.TemporaryDirectory(prefix="docx-pdf-preview-") as temp_dir:
+        temp_path = Path(temp_dir)
+        cmd = [
+            soffice,
+            "--headless",
+            "--convert-to",
+            "pdf:writer_pdf_Export",
+            "--outdir",
+            str(temp_path),
+            str(source),
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("LibreOffice 轉檔逾時。") from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            raise RuntimeError(f"LibreOffice 轉檔失敗：{stderr or exc}") from exc
+
+        produced = temp_path / (source.stem + ".pdf")
+        if not produced.exists():
+            raise RuntimeError("LibreOffice 沒有產生 PDF 檔案。")
+
+        shutil.move(str(produced), str(target))
 
 
 def _render_table(table: Any) -> str:
