@@ -59,6 +59,9 @@
   const chatMessages = document.getElementById("chatMessages");
   const chatInput = document.getElementById("chatInput");
   const sendBtn = document.getElementById("sendBtn");
+  const audioUploadBtn = document.getElementById("audioUploadBtn");
+  const audioRecorderBtn = document.getElementById("audioRecorderBtn");
+  const audioFileInput = document.getElementById("audioFileInput");
   const modelName = document.getElementById("modelName");
   const chatTitleText = document.getElementById("chatTitleText");
   const chatRoot = document.querySelector(".page-chat-root");
@@ -93,6 +96,25 @@
     staticWelcome.remove();
     return markup;
   })();
+  const audioRecorderState = {
+    supported:
+      !!(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function")
+      && typeof window.MediaRecorder !== "undefined",
+    isRecording: false,
+    isProcessing: false,
+    stream: null,
+    mediaRecorder: null,
+    chunks: [],
+    startedAt: 0,
+    mimeType: "",
+    fileExtension: "webm",
+    monitorContext: null,
+    monitorSource: null,
+    monitorAnalyser: null,
+    monitorTimerId: 0,
+    signalPeak: 0,
+    inputLabel: "",
+  };
 
   function readStoredBoolean(key, fallbackValue) {
     const stored = localStorage.getItem(key);
@@ -108,6 +130,226 @@
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return fallbackValue;
     return numeric;
+  }
+
+  function resolveRecordedAudioMimeType() {
+    if (typeof window.MediaRecorder === "undefined" || typeof window.MediaRecorder.isTypeSupported !== "function") {
+      return "";
+    }
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/ogg;codecs=opus",
+      "audio/ogg",
+    ];
+    return candidates.find((candidate) => window.MediaRecorder.isTypeSupported(candidate)) || "";
+  }
+
+  function inferAudioExtensionFromMimeType(mimeType) {
+    const normalized = String(mimeType || "").toLowerCase();
+    if (normalized.indexOf("mp4") !== -1 || normalized.indexOf("m4a") !== -1 || normalized.indexOf("aac") !== -1) {
+      return "m4a";
+    }
+    if (normalized.indexOf("ogg") !== -1) {
+      return "ogg";
+    }
+    if (normalized.indexOf("wav") !== -1) {
+      return "wav";
+    }
+    return "webm";
+  }
+
+  function buildRecordedAudioFilename(extension) {
+    const now = new Date();
+    const yyyy = String(now.getFullYear());
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const hh = String(now.getHours()).padStart(2, "0");
+    const min = String(now.getMinutes()).padStart(2, "0");
+    const sec = String(now.getSeconds()).padStart(2, "0");
+    return "recording-" + yyyy + mm + dd + "-" + hh + min + sec + "." + (extension || "webm");
+  }
+
+  function createRecordedAudioFile(blob, filename) {
+    if (typeof window.File === "function") {
+      return new File([blob], filename, { type: blob.type || "audio/webm" });
+    }
+    blob.name = filename;
+    return blob;
+  }
+
+  async function waitForAudioTrackReady(track, timeoutMs) {
+    if (!track || !track.muted) return;
+    const waitMs = Math.max(0, Number(timeoutMs || 1200));
+    await new Promise(function (resolve) {
+      let settled = false;
+      let timerId = 0;
+
+      function finish() {
+        if (settled) return;
+        settled = true;
+        if (timerId) window.clearTimeout(timerId);
+        track.removeEventListener("unmute", finish);
+        resolve();
+      }
+
+      track.addEventListener("unmute", finish, { once: true });
+      timerId = window.setTimeout(finish, waitMs);
+    });
+  }
+
+  function stopAudioSignalMonitor() {
+    if (audioRecorderState.monitorTimerId) {
+      window.clearInterval(audioRecorderState.monitorTimerId);
+      audioRecorderState.monitorTimerId = 0;
+    }
+    if (audioRecorderState.monitorSource) {
+      try {
+        audioRecorderState.monitorSource.disconnect();
+      } catch (_err) {
+        // ignore disconnect errors
+      }
+      audioRecorderState.monitorSource = null;
+    }
+    if (audioRecorderState.monitorAnalyser) {
+      try {
+        audioRecorderState.monitorAnalyser.disconnect();
+      } catch (_err) {
+        // ignore disconnect errors
+      }
+      audioRecorderState.monitorAnalyser = null;
+    }
+    if (audioRecorderState.monitorContext) {
+      try {
+        audioRecorderState.monitorContext.close();
+      } catch (_err) {
+        // ignore close errors
+      }
+      audioRecorderState.monitorContext = null;
+    }
+  }
+
+  function startAudioSignalMonitor(stream) {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    audioRecorderState.signalPeak = 0;
+    if (!AudioContextCtor || !stream) return;
+
+    try {
+      const ctx = new AudioContextCtor();
+      if (typeof ctx.resume === "function") {
+        ctx.resume().catch(function () {
+          // ignore resume errors and keep best-effort monitoring
+        });
+      }
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+
+      audioRecorderState.monitorContext = ctx;
+      audioRecorderState.monitorSource = source;
+      audioRecorderState.monitorAnalyser = analyser;
+
+      const sampleFloat = typeof analyser.getFloatTimeDomainData === "function";
+      const floatBuffer = sampleFloat ? new Float32Array(analyser.fftSize) : null;
+      const byteBuffer = sampleFloat ? null : new Uint8Array(analyser.fftSize);
+
+      audioRecorderState.monitorTimerId = window.setInterval(function () {
+        let peak = 0;
+        if (floatBuffer) {
+          analyser.getFloatTimeDomainData(floatBuffer);
+          for (let i = 0; i < floatBuffer.length; i += 1) {
+            const level = Math.abs(floatBuffer[i]);
+            if (level > peak) peak = level;
+          }
+        } else if (byteBuffer) {
+          analyser.getByteTimeDomainData(byteBuffer);
+          for (let i = 0; i < byteBuffer.length; i += 1) {
+            const level = Math.abs((byteBuffer[i] - 128) / 128);
+            if (level > peak) peak = level;
+          }
+        }
+        if (peak > audioRecorderState.signalPeak) {
+          audioRecorderState.signalPeak = peak;
+        }
+      }, 120);
+    } catch (_err) {
+      stopAudioSignalMonitor();
+    }
+  }
+
+  function releaseAudioRecorderStream() {
+    if (!audioRecorderState.stream) return;
+    audioRecorderState.stream.getTracks().forEach((track) => {
+      try {
+        track.stop();
+      } catch (_err) {
+        // ignore track stop errors
+      }
+    });
+    audioRecorderState.stream = null;
+  }
+
+  function resetAudioRecorderState() {
+    stopAudioSignalMonitor();
+    releaseAudioRecorderStream();
+    audioRecorderState.isRecording = false;
+    audioRecorderState.isProcessing = false;
+    audioRecorderState.mediaRecorder = null;
+    audioRecorderState.chunks = [];
+    audioRecorderState.startedAt = 0;
+    audioRecorderState.mimeType = "";
+    audioRecorderState.fileExtension = "webm";
+    audioRecorderState.signalPeak = 0;
+    audioRecorderState.inputLabel = "";
+  }
+
+  function explainRecorderError(err) {
+    const name = err && err.name ? String(err.name) : "";
+    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+      return "尚未取得麥克風權限，請允許瀏覽器使用麥克風後再試一次。";
+    }
+    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+      return "找不到可用的麥克風裝置，請確認手機、平板或電腦已接上麥克風。";
+    }
+    if (name === "NotReadableError" || name === "TrackStartError") {
+      return "麥克風目前被其他程式占用，請關閉其他錄音應用後再試。";
+    }
+    if (name === "SecurityError") {
+      return "目前頁面環境不允許直接錄音，請改用安全連線或既有的音檔上傳。";
+    }
+    return "無法啟動錄音功能，請稍後再試或改用音檔上傳。";
+  }
+
+  function syncAudioRecorderButton() {
+    if (!audioRecorderBtn) return;
+    const isUnsupported = !audioRecorderState.supported;
+    const isRecording = !!audioRecorderState.isRecording;
+    const isProcessing = !!audioRecorderState.isProcessing;
+
+    audioRecorderBtn.classList.toggle("is-recording", isRecording);
+    audioRecorderBtn.classList.toggle("is-processing", isProcessing);
+    audioRecorderBtn.disabled = isProcessing;
+    audioRecorderBtn.setAttribute("aria-pressed", isRecording ? "true" : "false");
+
+    if (isUnsupported) {
+      audioRecorderBtn.setAttribute("aria-label", "目前瀏覽器不支援直接錄音");
+      audioRecorderBtn.setAttribute("title", "目前瀏覽器不支援直接錄音");
+      return;
+    }
+    if (isRecording) {
+      audioRecorderBtn.setAttribute("aria-label", "停止錄音並決定是否儲存到文件中心");
+      audioRecorderBtn.setAttribute("title", "錄音中，點一下停止並決定是否儲存到文件中心");
+      return;
+    }
+    if (isProcessing) {
+      audioRecorderBtn.setAttribute("aria-label", "正在處理錄音");
+      audioRecorderBtn.setAttribute("title", "正在處理錄音");
+      return;
+    }
+    audioRecorderBtn.setAttribute("aria-label", "開始錄音並可儲存到文件中心");
+    audioRecorderBtn.setAttribute("title", "開始錄音並可儲存到文件中心");
   }
 
   function readStoredDesktopLayout() {
@@ -952,14 +1194,17 @@
       }
 
       const displayName = (data.document && (data.document.display_name || data.document.original_filename)) || "文件";
-      if (data.preview_type === "pdf-inline" || data.preview_type === "html-inline") {
+      if (data.preview_type === "pdf-inline" || data.preview_type === "html-inline" || data.preview_type === "audio-inline") {
         const htmlPreviewLink = data.viewer_url || data.download_url;
         const pdfPreviewLink = data.preview_type === "html-inline" ? (data.pdf_viewer_url || data.pdf_inline_url) : null;
         openUserDocumentModal({
           title: displayName,
-          subtitle: data.preview_type === "pdf-inline" ? "服務內 PDF 預覽" : "服務內 DOCX HTML 預覽",
+          subtitle:
+            data.preview_type === "pdf-inline"
+              ? "服務內 PDF 預覽"
+              : (data.preview_type === "audio-inline" ? "服務內音訊預覽" : "服務內 DOCX HTML 預覽"),
           mode: "iframe",
-          src: data.inline_url || data.viewer_url,
+          src: data.preview_type === "audio-inline" ? (data.viewer_url || data.inline_url) : (data.inline_url || data.viewer_url),
           linkHref: pdfPreviewLink || htmlPreviewLink,
           linkLabel: pdfPreviewLink ? "PDF 預覽" : "完整預覽",
           onExpand: data.preview_type === "html-inline" && htmlPreviewLink
@@ -1711,6 +1956,7 @@
         '<polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>' +
         '</svg>';
     }
+    syncAudioRecorderButton();
   }
 
   // Cancel all active tasks for the current session (server + client side)
@@ -2469,7 +2715,6 @@
 
     if (chatInput) {
       chatInput.value = "";
-      // 同步清除該 session 的草稿
       state.sessionInputDrafts[requestSessionId] = "";
       autoResize(chatInput);
     }
@@ -2894,8 +3139,191 @@
     return att;
   }
 
+  async function uploadRecordedAudioToDocumentCenter(file) {
+    if (!file) return false;
+    const MAX_BYTES = 25 * 1024 * 1024;
+    if (file.size > MAX_BYTES) {
+      showToast("錄音檔過大，請控制在 25 MB 內", "error");
+      return false;
+    }
+
+    const filename = String(file.name || buildRecordedAudioFilename("webm"));
+    showToast("正在儲存錄音到文件中心...", "info");
+    const formData = new FormData();
+    formData.append("file", file, filename);
+
+    try {
+      const res = await fetch("/api/user-documents/upload", {
+        method: "POST",
+        credentials: "same-origin",
+        body: formData,
+      });
+      const rawText = await res.text();
+      let data = null;
+      try {
+        data = rawText ? JSON.parse(rawText) : null;
+      } catch (_err) {
+        data = null;
+      }
+      if (!res.ok || !data || data.status !== "success") {
+        throw new Error((data && (data.detail || data.message)) || rawText || ("HTTP " + res.status));
+      }
+      showToast("錄音已儲存到文件中心", "success");
+      loadUserDocuments({ silent: true });
+      return true;
+    } catch (err) {
+      showToast("錄音儲存失敗：" + (err.message || "未知錯誤"), "error");
+      return false;
+    }
+  }
+
+  async function handleRecordedAudioStopped() {
+    stopAudioSignalMonitor();
+    releaseAudioRecorderStream();
+    const chunks = audioRecorderState.chunks.slice();
+    const mimeType = audioRecorderState.mimeType || "audio/webm";
+    const fileExtension = audioRecorderState.fileExtension || inferAudioExtensionFromMimeType(mimeType);
+    const signalPeak = Number(audioRecorderState.signalPeak || 0);
+    const inputLabel = audioRecorderState.inputLabel || "";
+
+    audioRecorderState.mediaRecorder = null;
+    audioRecorderState.chunks = [];
+    audioRecorderState.startedAt = 0;
+
+    if (!chunks.length) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast("沒有錄到音訊內容，請再試一次。", "error");
+      return;
+    }
+
+    const blob = new Blob(chunks, { type: mimeType });
+    if (!blob.size) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast("錄音內容為空白，請確認麥克風正常後再試一次。", "error");
+      return;
+    }
+
+    if (signalPeak < 0.0035) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast(
+        "這段錄音沒有收到有效聲音，可能選到靜音或錯誤的麥克風"
+          + (inputLabel ? "（目前裝置：" + inputLabel + "）" : "")
+          + "，所以沒有儲存。",
+        "error"
+      );
+      return;
+    }
+
+    const filename = buildRecordedAudioFilename(fileExtension);
+    const shouldSave = window.confirm("要將剛才的錄音儲存到文件中心嗎？");
+    if (!shouldSave) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast("已取消儲存錄音", "info");
+      return;
+    }
+
+    const recordedFile = createRecordedAudioFile(blob, filename);
+    await uploadRecordedAudioToDocumentCenter(recordedFile);
+    resetAudioRecorderState();
+    syncAudioRecorderButton();
+  }
+
+  async function startAudioRecording() {
+    if (!audioRecorderState.supported) {
+      showToast("目前瀏覽器不支援直接錄音，請改用音檔上傳。", "error");
+      return;
+    }
+    if (audioRecorderState.isRecording || audioRecorderState.isProcessing) {
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      });
+      const audioTrack = stream.getAudioTracks && stream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = true;
+        audioRecorderState.inputLabel = audioTrack.label || "";
+        await waitForAudioTrackReady(audioTrack, 1200);
+      }
+      const preferredMimeType = resolveRecordedAudioMimeType();
+      const recorderOptions = preferredMimeType ? { mimeType: preferredMimeType } : undefined;
+      const mediaRecorder = recorderOptions ? new MediaRecorder(stream, recorderOptions) : new MediaRecorder(stream);
+
+      audioRecorderState.stream = stream;
+      audioRecorderState.mediaRecorder = mediaRecorder;
+      audioRecorderState.startedAt = Date.now();
+      audioRecorderState.mimeType = mediaRecorder.mimeType || preferredMimeType || "";
+      audioRecorderState.fileExtension = inferAudioExtensionFromMimeType(audioRecorderState.mimeType);
+      audioRecorderState.chunks = [];
+      audioRecorderState.isRecording = true;
+      audioRecorderState.isProcessing = false;
+      audioRecorderState.signalPeak = 0;
+
+      mediaRecorder.ondataavailable = function (event) {
+        if (event.data && event.data.size > 0) {
+          audioRecorderState.chunks.push(event.data);
+        }
+      };
+      mediaRecorder.onerror = function () {
+        resetAudioRecorderState();
+        syncAudioRecorderButton();
+        showToast("錄音過程發生錯誤，請再試一次。", "error");
+      };
+      mediaRecorder.onstop = function () {
+        handleRecordedAudioStopped().catch(function (err) {
+          resetAudioRecorderState();
+          syncAudioRecorderButton();
+          showToast("錄音處理失敗：" + ((err && err.message) || "未知錯誤"), "error");
+        });
+      };
+
+      startAudioSignalMonitor(stream);
+      mediaRecorder.start(250);
+      syncAudioRecorderButton();
+      showToast(
+        "已開始錄音，再按一次紅色按鈕即可停止。"
+          + (audioRecorderState.inputLabel ? " 目前麥克風：" + audioRecorderState.inputLabel : ""),
+        "info"
+      );
+    } catch (err) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast(explainRecorderError(err), "error");
+    }
+  }
+
+  function stopAudioRecording() {
+    if (!audioRecorderState.mediaRecorder || audioRecorderState.mediaRecorder.state === "inactive") {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      return;
+    }
+
+    audioRecorderState.isRecording = false;
+    audioRecorderState.isProcessing = true;
+    syncAudioRecorderButton();
+
+    try {
+      audioRecorderState.mediaRecorder.stop();
+    } catch (_err) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast("停止錄音失敗，請再試一次。", "error");
+    }
+  }
+
   window.triggerAudioUpload = function () {
-    const audioFileInput = document.getElementById("audioFileInput");
     if (!audioFileInput) return;
     audioFileInput.value = "";
     audioFileInput.onchange = async function () {
@@ -2907,6 +3335,10 @@
       formData.append("file", file);
 
       try {
+        if (audioUploadBtn) {
+          audioUploadBtn.classList.add("is-transcribing");
+        }
+
         const res = await fetch("/workspace/upload", { method: "POST", body: formData });
         const data = await res.json();
         if (data.status !== "success") throw new Error(data.detail || "Upload failed");
@@ -2930,10 +3362,25 @@
         });
       } catch (err) {
         showToast("音檔上傳失敗：" + err.message, "error");
+      } finally {
+        if (audioUploadBtn) {
+          audioUploadBtn.classList.remove("is-transcribing");
+        }
       }
     };
     audioFileInput.click();
   };
+
+  if (audioRecorderBtn) {
+    syncAudioRecorderButton();
+    audioRecorderBtn.addEventListener("click", function () {
+      if (audioRecorderState.isRecording) {
+        stopAudioRecording();
+      } else {
+        startAudioRecording();
+      }
+    });
+  }
 
   if (chatInput && sendBtn) {
     chatInput.addEventListener("input", function () {
@@ -3023,6 +3470,10 @@
     if (event.key === "Escape" && userDocModalPseudoFullscreen) {
       exitUserDocumentModalFullscreen();
     }
+  });
+  window.addEventListener("pagehide", function () {
+    resetAudioRecorderState();
+    syncAudioRecorderButton();
   });
 
   syncDocumentCenterVisibility("info");

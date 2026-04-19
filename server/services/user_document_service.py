@@ -19,8 +19,19 @@ from server.services.session_token_cookie import verify_token
 USER_DOCUMENTS_DIR = PROJECT_ROOT / "Agent_workspace" / "user_documents"
 USER_DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
-ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
+ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".webm", ".flac"}
+ALLOWED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", *ALLOWED_AUDIO_EXTENSIONS}
 TEXT_EXTRACTABLE_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
+AUDIO_MIME_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".webm": "audio/webm",
+    ".flac": "audio/flac",
+}
 WINDOWS_RESERVED_NAMES = {
     "CON",
     "PRN",
@@ -87,7 +98,16 @@ def resolve_preview_type(extension: str | None) -> str:
         return "pdf-inline"
     if ext == ".docx":
         return "html-inline"
+    if ext in ALLOWED_AUDIO_EXTENSIONS:
+        return "audio-inline"
     return "text"
+
+
+def resolve_document_mime_type(stored_filename: str) -> str:
+    ext = Path(stored_filename or "").suffix.lower()
+    if ext in AUDIO_MIME_TYPES:
+        return AUDIO_MIME_TYPES[ext]
+    return mimetypes.guess_type(stored_filename)[0] or "application/octet-stream"
 
 
 class ExpiredDocumentError(Exception):
@@ -164,6 +184,10 @@ class UserDocumentService:
         if item.get("preview_type") != expected_preview_type:
             item["preview_type"] = expected_preview_type
             changed = True
+        expected_mime_type = resolve_document_mime_type(item.get("stored_filename") or item.get("original_filename") or "")
+        if item.get("mime_type") != expected_mime_type:
+            item["mime_type"] = expected_mime_type
+            changed = True
         item["expired"] = self.is_document_expired(item)
         return item, changed
 
@@ -199,7 +223,7 @@ class UserDocumentService:
         size: int,
     ) -> Dict[str, Any]:
         ext = Path(stored_filename).suffix.lower()
-        mime_type = mimetypes.guess_type(stored_filename)[0] or "application/octet-stream"
+        mime_type = resolve_document_mime_type(stored_filename)
         doc_id = doc_id or Path(stored_filename).stem
         created_at = now_iso()
         return {

@@ -476,6 +476,19 @@ def view_user_document(
                 f'<iframe src="/api/user-documents/{doc_id}/file?disposition=inline" '
                 'style="width:100%;height:78vh;border:none;border-radius:16px;background:#fff;"></iframe>'
             )
+        elif payload.get("preview_type") == "audio-inline":
+            subtitle = "Audio Preview"
+            body = (
+                '<section style="padding:32px 24px;border-radius:20px;'
+                'background:linear-gradient(180deg,#ffffff,#f8fafc);border:1px solid rgba(219,228,240,0.95);">'
+                '<div style="max-width:680px;margin:0 auto;text-align:center;">'
+                '<div style="font-size:0.92rem;color:#475569;line-height:1.75;margin-bottom:18px;">'
+                '這份錄音已儲存在文件中心，可直接在頁面中播放或下載原檔。'
+                '</div>'
+                f'<audio controls preload="metadata" style="width:min(100%,560px);" src="/api/user-documents/{doc_id}/file?disposition=inline"></audio>'
+                "</div>"
+                "</section>"
+            )
         elif payload.get("preview_type") == "html-inline":
             if mode == "pdf":
                 try:

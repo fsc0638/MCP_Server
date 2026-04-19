@@ -739,6 +739,11 @@ html, body { height: 100%; overflow: hidden; }
   background: var(--kway-blue-pale);
   transform: scale(1.08);
 }
+.page-chat-tool-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
 .page-chat-input-actions { display: flex; align-items: center; gap: 8px; }
 .page-chat-model-select {
   display: flex; align-items: center; gap: 6px; padding: 5px 12px;
@@ -777,7 +782,6 @@ html, body { height: 100%; overflow: hidden; }
   opacity: 0.35; cursor: not-allowed; transform: none;
   box-shadow: none;
 }
-
 /* ── Send button in stop mode (AI is responding) ──────────────────
    Red pulsing square to clearly signal "interrupt" affordance */
 .page-chat-send-btn.is-stop-mode {
@@ -1427,9 +1431,27 @@ html, body { height: 100%; overflow: hidden; }
   background: var(--accent-teal-pale);
   animation: audioIconPulse 1.5s ease-in-out infinite;
 }
+.page-chat-tool-btn.is-recording {
+  color: #ffffff;
+  background: #dc2626;
+  box-shadow: 0 4px 14px rgba(220,38,38,0.30);
+  animation: audioRecordPulse 1.15s ease-in-out infinite;
+}
+.page-chat-tool-btn.is-recording:hover {
+  color: #ffffff;
+  background: #b91c1c;
+}
+.page-chat-tool-btn.is-processing {
+  color: #0f766e;
+  background: rgba(15,118,110,0.10);
+}
 @keyframes audioIconPulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.45; }
+}
+@keyframes audioRecordPulse {
+  0%, 100% { box-shadow: 0 4px 14px rgba(220,38,38,0.28); }
+  50% { box-shadow: 0 4px 18px rgba(220,38,38,0.55), 0 0 0 4px rgba(220,38,38,0.12); }
 }
 
 /* ── Audio upload card ───────────────────────────────────────── */
