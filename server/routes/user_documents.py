@@ -10,9 +10,202 @@ from fastapi import APIRouter, BackgroundTasks, Cookie, File, HTTPException, Que
 from fastapi.responses import FileResponse, HTMLResponse
 
 from server.schemas.user_documents import UserDocumentRenameRequest
+from server.services.docx_preview import render_docx_to_html
 from server.services.user_document_service import ExpiredDocumentError, user_document_service
 
 router = APIRouter(prefix="/api/user-documents", tags=["User Documents"])
+
+
+VIEWER_PAGE_CSS = """
+  :root {
+    color-scheme: light;
+    --page-bg: #edf3fb;
+    --card-bg: rgba(255,255,255,0.94);
+    --card-border: rgba(148,163,184,0.22);
+    --text-main: #0f172a;
+    --text-muted: #475569;
+    --accent: #18409b;
+    --accent-soft: #e8f0ff;
+    --table-head: #eef4ff;
+    --table-border: #dbe4f0;
+    --shadow: 0 20px 45px rgba(15, 23, 42, 0.08);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(circle at top left, rgba(24,64,155,0.10), transparent 38%),
+      linear-gradient(180deg, #f5f8ff 0%, var(--page-bg) 100%);
+    font-family: "Segoe UI", "Noto Sans TC", Arial, sans-serif;
+    color: var(--text-main);
+  }
+  main { max-width: 1120px; margin: 0 auto; padding: 28px 20px 36px; }
+  .viewer-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 24px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    backdrop-filter: blur(10px);
+  }
+  .viewer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 22px 24px;
+    border-bottom: 1px solid var(--card-border);
+    background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(246,249,255,0.96));
+  }
+  .viewer-title {
+    margin: 0;
+    font-size: 1.5rem;
+    line-height: 1.25;
+    letter-spacing: -0.02em;
+  }
+  .viewer-subtitle {
+    margin: 8px 0 0;
+    color: var(--text-muted);
+    font-size: 0.92rem;
+  }
+  .viewer-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .viewer-action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 42px;
+    padding: 0 16px;
+    border-radius: 999px;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 0.92rem;
+    border: 1px solid var(--card-border);
+    color: var(--text-main);
+    background: #fff;
+  }
+  .viewer-action.is-primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: transparent;
+  }
+  .viewer-body {
+    padding: 24px;
+  }
+  .docx-preview-shell {
+    background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,250,252,0.98));
+    border: 1px solid var(--table-border);
+    border-radius: 18px;
+    padding: 20px;
+  }
+  .docx-preview-tip {
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: var(--accent-soft);
+    color: var(--text-muted);
+    font-size: 0.86rem;
+    line-height: 1.6;
+  }
+  .docx-preview-fragment {
+    color: var(--text-main);
+    font-size: 1rem;
+    line-height: 1.75;
+  }
+  .docx-preview-fragment h1,
+  .docx-preview-fragment h2,
+  .docx-preview-fragment h3,
+  .docx-preview-fragment h4,
+  .docx-preview-fragment h5,
+  .docx-preview-fragment h6 {
+    margin: 1.25em 0 0.45em;
+    line-height: 1.3;
+    letter-spacing: -0.02em;
+  }
+  .docx-preview-fragment h1:first-child,
+  .docx-preview-fragment h2:first-child,
+  .docx-preview-fragment h3:first-child {
+    margin-top: 0;
+  }
+  .docx-preview-title {
+    margin-top: 0;
+    margin-bottom: 0.4em;
+    font-size: 1.95rem;
+  }
+  .docx-preview-subtitle {
+    margin-top: 0;
+    color: var(--text-muted);
+    font-size: 1.02rem;
+  }
+  .docx-preview-fragment p {
+    margin: 0 0 0.95em;
+  }
+  .docx-preview-fragment ul,
+  .docx-preview-fragment ol {
+    margin: 0 0 1.1em;
+    padding-left: 1.5em;
+  }
+  .docx-preview-fragment li + li {
+    margin-top: 0.35em;
+  }
+  .docx-preview-spacer {
+    height: 0.9rem;
+  }
+  .docx-preview-table-wrap {
+    margin: 1.1em 0 1.3em;
+    overflow-x: auto;
+    border: 1px solid var(--table-border);
+    border-radius: 16px;
+    background: #fff;
+  }
+  .docx-preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 420px;
+  }
+  .docx-preview-table th,
+  .docx-preview-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--table-border);
+    border-right: 1px solid var(--table-border);
+    vertical-align: top;
+    text-align: left;
+    line-height: 1.65;
+    font-size: 0.94rem;
+  }
+  .docx-preview-table th:last-child,
+  .docx-preview-table td:last-child {
+    border-right: none;
+  }
+  .docx-preview-table tr:last-child td {
+    border-bottom: none;
+  }
+  .docx-preview-table thead th {
+    background: var(--table-head);
+    font-weight: 700;
+  }
+  @media (max-width: 720px) {
+    main { padding: 16px 12px 24px; }
+    .viewer-card { border-radius: 18px; }
+    .viewer-header {
+      flex-direction: column;
+      align-items: flex-start;
+      padding: 18px;
+    }
+    .viewer-body {
+      padding: 16px;
+    }
+    .docx-preview-shell {
+      padding: 14px;
+    }
+    .docx-preview-title {
+      font-size: 1.55rem;
+    }
+  }
+"""
 
 
 def _ascii_header_filename(filename: str) -> str:
@@ -49,6 +242,46 @@ def _resolve_current_user(mcp_session: str) -> tuple[str, str]:
         if reason in {"invalid_session", "session_expired"}:
             raise HTTPException(status_code=401, detail=reason)
         raise HTTPException(status_code=500, detail=reason)
+
+
+def _build_text_pre_block(text: str) -> str:
+    return (
+        '<pre style="white-space:pre-wrap;word-break:break-word;line-height:1.75;'
+        'font-size:15px;color:#0f172a;background:#f8fafc;border:1px solid #dbe4f0;'
+        'padding:20px;border-radius:16px;overflow:auto;max-height:78vh;">'
+        f'{html.escape(text or "這份文件目前沒有可顯示的內容。")}</pre>'
+    )
+
+
+def _build_viewer_page(title: str, subtitle: str, body: str, doc_id: str) -> str:
+    return f"""<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title}</title>
+  <style>{VIEWER_PAGE_CSS}</style>
+</head>
+<body>
+  <main>
+    <section class="viewer-card">
+      <header class="viewer-header">
+        <div>
+          <h1 class="viewer-title">{title}</h1>
+          <p class="viewer-subtitle">{subtitle}</p>
+        </div>
+        <div class="viewer-actions">
+          <a class="viewer-action" href="/api/user-documents/{doc_id}/file?disposition=inline">原檔開啟</a>
+          <a class="viewer-action is-primary" href="/api/user-documents/{doc_id}/file?disposition=attachment">下載原檔</a>
+        </div>
+      </header>
+      <div class="viewer-body">
+        {body}
+      </div>
+    </section>
+  </main>
+</body>
+</html>"""
 
 
 @router.post("/upload")
@@ -100,9 +333,12 @@ def preview_user_document(doc_id: str, mcp_session: str = Cookie(default="", ali
     user_key, _ = _resolve_current_user(mcp_session)
     try:
         payload = user_document_service.build_preview_payload(user_key, doc_id)
-        payload["inline_url"] = f"/api/user-documents/{doc_id}/file?disposition=inline"
-        payload["download_url"] = f"/api/user-documents/{doc_id}/file?disposition=attachment"
         payload["viewer_url"] = f"/api/user-documents/{doc_id}/viewer"
+        if payload.get("preview_type") == "html-inline":
+            payload["inline_url"] = payload["viewer_url"]
+        else:
+            payload["inline_url"] = f"/api/user-documents/{doc_id}/file?disposition=inline"
+        payload["download_url"] = f"/api/user-documents/{doc_id}/file?disposition=attachment"
         payload["content_url"] = f"/api/user-documents/{doc_id}/content"
         return payload
     except FileNotFoundError as exc:
@@ -169,46 +405,33 @@ def view_user_document(doc_id: str, mcp_session: str = Cookie(default="", alias=
         payload = user_document_service.build_preview_payload(user_key, doc_id)
         document = payload["document"]
         title = html.escape(document.get("display_name") or document.get("original_filename") or "Document Viewer")
+        subtitle = "User Document Center Preview"
 
         if payload.get("preview_type") == "pdf-inline":
             body = (
                 f'<iframe src="/api/user-documents/{doc_id}/file?disposition=inline" '
                 'style="width:100%;height:78vh;border:none;border-radius:16px;background:#fff;"></iframe>'
             )
+        elif payload.get("preview_type") == "html-inline":
+            try:
+                path = user_document_service.get_document_path(user_key, doc_id)
+                rendered_html = render_docx_to_html(str(path))
+                subtitle = "DOCX HTML Preview"
+                body = (
+                    '<section class="docx-preview-shell">'
+                    '<div class="docx-preview-tip">已將 Word 文件轉為服務內 HTML 預覽，保留段落與表格結構。</div>'
+                    f"{rendered_html}"
+                    "</section>"
+                )
+            except Exception:
+                _, text = user_document_service.get_text_content(user_key, doc_id)
+                subtitle = "DOCX Text Preview (HTML fallback)"
+                body = _build_text_pre_block(text)
         else:
             _, text = user_document_service.get_text_content(user_key, doc_id)
-            body = (
-                '<pre style="white-space:pre-wrap;word-break:break-word;line-height:1.75;'
-                'font-size:15px;color:#0f172a;background:#f8fafc;border:1px solid #dbe4f0;'
-                'padding:20px;border-radius:16px;overflow:auto;max-height:78vh;">'
-                f'{html.escape(text or "沒有可預覽的文字內容")}</pre>'
-            )
+            body = _build_text_pre_block(text)
 
-        html_doc = f"""<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{title}</title>
-</head>
-<body style="margin:0;background:#edf3fb;font-family:Arial,sans-serif;color:#0f172a;">
-  <main style="max-width:1080px;margin:0 auto;padding:24px;">
-    <header style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px;">
-      <div>
-        <h1 style="margin:0;font-size:24px;">{title}</h1>
-        <p style="margin:6px 0 0;color:#475569;">User Document Center Preview</p>
-      </div>
-      <a href="/api/user-documents/{doc_id}/file?disposition=attachment"
-         style="display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;
-                border-radius:999px;background:#18409b;color:#fff;text-decoration:none;font-weight:700;">
-        下載原檔
-      </a>
-    </header>
-    {body}
-  </main>
-</body>
-</html>"""
-        return HTMLResponse(html_doc)
+        return HTMLResponse(_build_viewer_page(title, subtitle, body, doc_id))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ExpiredDocumentError as exc:
@@ -239,3 +462,5 @@ def delete_user_document(doc_id: str, mcp_session: str = Cookie(default="", alia
         return {"status": "success", "doc_id": doc_id}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ExpiredDocumentError as exc:
+        raise HTTPException(status_code=410, detail=str(exc))

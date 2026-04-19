@@ -80,6 +80,15 @@ def parse_iso(value: str | None) -> datetime | None:
         return None
 
 
+def resolve_preview_type(extension: str | None) -> str:
+    ext = (extension or "").lower()
+    if ext == ".pdf":
+        return "pdf-inline"
+    if ext == ".docx":
+        return "html-inline"
+    return "text"
+
+
 class ExpiredDocumentError(Exception):
     """Raised when a document record exists but is past its retention window."""
 
@@ -150,6 +159,10 @@ class UserDocumentService:
             base = parse_iso(created_at) or datetime.now()
             item["expires_at"] = (base + timedelta(days=self.ttl_days)).isoformat(timespec="seconds")
             changed = True
+        expected_preview_type = resolve_preview_type(item.get("extension"))
+        if item.get("preview_type") != expected_preview_type:
+            item["preview_type"] = expected_preview_type
+            changed = True
         item["expired"] = self.is_document_expired(item)
         return item, changed
 
@@ -197,7 +210,7 @@ class UserDocumentService:
             "created_at": created_at,
             "updated_at": created_at,
             "expires_at": (datetime.now() + timedelta(days=self.ttl_days)).isoformat(timespec="seconds"),
-            "preview_type": "pdf-inline" if ext == ".pdf" else "text",
+            "preview_type": resolve_preview_type(ext),
             "text_extract_status": "pending" if ext in TEXT_EXTRACTABLE_EXTENSIONS else "unsupported",
         }
 
@@ -320,11 +333,19 @@ class UserDocumentService:
 
     def build_preview_payload(self, user_key: str, doc_id: str, preview_chars: int = 6000) -> Dict[str, Any]:
         document = self.get_document(user_key, doc_id)
-        if document.get("preview_type") == "pdf-inline":
+        preview_type = resolve_preview_type(document.get("extension"))
+        if preview_type == "pdf-inline":
             return {
                 "status": "success",
                 "document": document,
                 "preview_type": "pdf-inline",
+                "truncated": False,
+            }
+        if preview_type == "html-inline":
+            return {
+                "status": "success",
+                "document": document,
+                "preview_type": "html-inline",
                 "truncated": False,
             }
 

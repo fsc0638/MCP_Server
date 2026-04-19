@@ -571,14 +571,14 @@
       }
 
       const displayName = (data.document && (data.document.display_name || data.document.original_filename)) || "文件";
-      if (data.preview_type === "pdf-inline") {
-      openUserDocumentModal({
-        title: displayName,
-        subtitle: "服務內 PDF 預覽",
-        mode: "iframe",
-        src: data.inline_url,
-          linkHref: data.inline_url,
-          linkLabel: "新分頁預覽",
+      if (data.preview_type === "pdf-inline" || data.preview_type === "html-inline") {
+        openUserDocumentModal({
+          title: displayName,
+          subtitle: data.preview_type === "pdf-inline" ? "服務內 PDF 預覽" : "服務內 DOCX HTML 預覽",
+          mode: "iframe",
+          src: data.inline_url || data.viewer_url,
+          linkHref: data.viewer_url || data.download_url,
+          linkLabel: "完整預覽",
         });
         return;
       }
