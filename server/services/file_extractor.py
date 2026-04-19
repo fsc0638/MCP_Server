@@ -2,7 +2,7 @@
 
 We reuse the same extraction policy used in LINE connector:
 - PDF: pdfplumber -> pypdf
-- DOCX: python-docx -> docx2txt
+- DOCX: python-docx -> docx2txt -> stdlib XML parsing
 - XLSX/XLS/CSV: pandas to markdown
 - Fallback: read as text with errors=replace
 
@@ -12,6 +12,8 @@ Images are intentionally not extracted here (by user request).
 from __future__ import annotations
 
 from typing import Tuple
+
+from server.services.docx_preview import extract_docx_plain_text
 
 
 def extract_file_content(file_path: str) -> Tuple[str, str | None]:
@@ -59,22 +61,4 @@ def _extract_pdf(file_path: str) -> str:
 
 
 def _extract_docx(file_path: str) -> str:
-    try:
-        from docx import Document
-
-        doc = Document(file_path)
-        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
-        for table in doc.tables:
-            for row in table.rows:
-                row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
-                if row_text:
-                    paragraphs.append(row_text)
-        text = "\n".join(paragraphs)
-        if text.strip():
-            return text
-    except Exception:
-        pass
-
-    import docx2txt
-
-    return docx2txt.process(file_path) or ""
+    return extract_docx_plain_text(file_path)
