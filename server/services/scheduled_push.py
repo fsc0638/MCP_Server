@@ -582,6 +582,43 @@ class ScheduledPushService:
         today = datetime.now().strftime("%Y-%m-%d")
         original_request = config.get("original_request", "")
 
+        # ── Workflow task: execute via WorkflowExecutor (no LLM needed) ──
+        if task_type == "workflow":
+            workflow_id = config.get("workflow_id", "")
+            if not workflow_id:
+                return "排程工作流執行失敗：未指定 workflow_id"
+            try:
+                import asyncio
+                from server.services.workflow_executor import get_workflow_executor
+                from server.services.workflow_matcher import get_workflow_matcher
+                matcher = get_workflow_matcher()
+                # Load workflow data
+                workflows = matcher._scan_workflows()
+                wf_data = next((w for w in workflows if w["id"] == workflow_id), None)
+                if not wf_data:
+                    return f"排程工作流執行失敗：找不到 {workflow_id}"
+                executor = get_workflow_executor()
+                result = asyncio.get_event_loop().run_until_complete(
+                    executor.execute(
+                        workflow=wf_data,
+                        user_input=original_request or f"排程執行 {wf_data.get('name', workflow_id)}",
+                        user_context={"session_id": session_id},
+                    )
+                )
+                output = result.get("final_output", "")
+                if not output:
+                    output = f"工作流「{wf_data.get('name', workflow_id)}」排程執行完成"
+                # Audit log
+                try:
+                    from server.services.workflow_audit import log_workflow_execution
+                    log_workflow_execution(workflow_id, wf_data.get("name", ""), session_id, result, trigger="schedule")
+                except Exception:
+                    pass
+                return output
+            except Exception as e:
+                logger.error(f"[ScheduledPush] Workflow execution failed: {e}")
+                return f"排程工作流執行失敗：{str(e)}"
+
         # ── Auto-correct: if type is wrong but request looks like news, upgrade to "news" ──
         # LLM often misclassifies news requests as "custom" or "reminder"
         if task_type in ("custom", "reminder") and original_request:
@@ -853,6 +890,9 @@ class ScheduledPushService:
                 f"{fmt_hint}\n"
                 f"用繁體中文回覆。"
             )
+        elif task_type == "workflow":
+            # Execute a workflow directly (no LLM prompt — handled by WorkflowExecutor)
+            return "__WORKFLOW__"
         elif task_type == "custom":
             prompt = config.get("prompt", "")
             return f"現在時間：{today}\n用繁體中文回覆。\n\n{prompt}"

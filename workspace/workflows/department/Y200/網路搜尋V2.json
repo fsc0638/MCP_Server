@@ -1,0 +1,134 @@
+{
+  "id": "網路搜尋V2",
+  "name": "網路搜尋V2",
+  "description": "測試，當使用者需求搜尋AI相關網路新聞時，呼叫此工作流",
+  "icon": "",
+  "tags": [],
+  "trigger_keywords": [],
+  "variables": [
+    {
+      "name": "keyword",
+      "type": "string",
+      "source": "user_input",
+      "default_value": "AI",
+      "description": "",
+      "required": false
+    },
+    {
+      "name": "var_2",
+      "type": "string",
+      "source": "user_input",
+      "default_value": "",
+      "description": "",
+      "required": false
+    },
+    {
+      "name": "var_3",
+      "type": "string",
+      "source": "user_input",
+      "default_value": "",
+      "description": "",
+      "required": false
+    },
+    {
+      "name": "var_4",
+      "type": "string",
+      "source": "user_input",
+      "default_value": "",
+      "description": "",
+      "required": false
+    },
+    {
+      "name": "var_5",
+      "type": "string",
+      "source": "user_input",
+      "default_value": "",
+      "description": "",
+      "required": false
+    },
+    {
+      "name": "var_6",
+      "type": "string",
+      "source": "user_input",
+      "default_value": "",
+      "description": "",
+      "required": false
+    },
+    {
+      "name": "var_7",
+      "type": "string",
+      "source": "user_input",
+      "default_value": "",
+      "description": "",
+      "required": false
+    }
+  ],
+  "blocks": [
+    {
+      "id": 1,
+      "type": "start",
+      "x": 40,
+      "y": 40,
+      "label": "開始",
+      "config": {}
+    },
+    {
+      "id": 2,
+      "type": "web-search",
+      "x": 240,
+      "y": 40,
+      "label": "網路搜尋",
+      "config": {
+        "params": {
+          "input": {
+            "source": "variable",
+            "value": "{{keyword}}"
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "end",
+      "x": 440,
+      "y": 40,
+      "label": "結束",
+      "config": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": 1,
+      "to": 2
+    },
+    {
+      "from": 2,
+      "to": 3
+    }
+  ],
+  "trigger": {
+    "enabled": false,
+    "mode": "auto",
+    "priority": 10,
+    "cron": ""
+  },
+  "execution": {
+    "default_model": "",
+    "timeout": 30,
+    "token_budget": 0,
+    "on_error": "stop",
+    "max_retries": 3
+  },
+  "security": {
+    "require_auth": false,
+    "allowed_roles": [],
+    "rate_limit": 0,
+    "audit_log": true,
+    "encrypt_variables": false
+  },
+  "context": {},
+  "scope": "department",
+  "owner": "Y200",
+  "updated_at": "2026-04-17T10:24:03.336315",
+  "created_at": "2026-04-17T09:45:56.659068"
+}

@@ -2,7 +2,7 @@
   "use strict";
 
   const ACTIVE_TASK_STATUSES = new Set(["running", "tool_call", "requires_approval", "approved"]);
-  const TERMINAL_TASK_STATUSES = new Set(["completed", "error", "rejected"]);
+  const TERMINAL_TASK_STATUSES = new Set(["completed", "error", "rejected", "cancelled"]);
 
   function generatePersistedSessionId() {
     return "web-" + Math.random().toString(36).slice(2, 10);
@@ -41,6 +41,7 @@
     sessionMeetingText: {},          // sessionId -> string
     sessionHistoryLoaded: {},        // sessionId -> boolean (避免重複載入)
     sessionInputDrafts: {},          // sessionId -> string (未送出的草稿)
+    sessionPendingAudioFile: {},     // sessionId -> { path: string, name: string }
   };
   localStorage.setItem("kway_chat_session", state.sessionId);
 
@@ -69,22 +70,140 @@
 
   async function hydrateAuthFromServer() {
     try {
-      const existing = sessionStorage.getItem("kway_user");
-      if (existing) return;
-
       const res = await fetch("/api/auth/me", { credentials: "include" });
       if (!res.ok) return;
 
       const data = await res.json();
       if (data && data.status === "success" && data.user && data.user.id) {
-        sessionStorage.setItem("kway_user", JSON.stringify(data.user));
+        // Merge server data with existing sessionStorage (server is authoritative)
+        const existing = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+        const merged = { ...existing, ...data.user };
+        sessionStorage.setItem("kway_user", JSON.stringify(merged));
         localStorage.setItem("kway_chat_session", data.user.id);
         state.sessionId = data.user.id;
+
+        // ── Update closure-scoped userData so NEW message bubbles use the real picture ──
+        if (userData) {
+          userData.name = merged.name || userData.name;
+          userData.picture = merged.picture || userData.picture || "";
+          userData.initials = merged.initials || (merged.name ? merged.name.slice(0, 2).toUpperCase() : userData.initials);
+          userData.dept = merged.department || merged.department_name || userData.dept || "";
+          userData.email = merged.email || userData.email || "";
+        }
+
+        const pic = merged.picture || "";
+        const displayName = merged.name || "LINE User";
+        const displayInitials = merged.initials || displayName.slice(0, 2).toUpperCase();
+        const deptLine = merged.department || merged.department_name
+          ? `${merged.department || merged.department_name}${merged.title ? " · " + merged.title : ""}`
+          : "已登入";
+
+        // ── Topbar avatar (top-right circle) ──
+        const topbarAvatar = document.getElementById("topbarAvatar");
+        if (topbarAvatar) {
+          if (pic) {
+            topbarAvatar.style.backgroundImage = `url(${pic})`;
+            topbarAvatar.style.backgroundSize = "cover";
+            topbarAvatar.style.backgroundPosition = "center";
+            topbarAvatar.textContent = "";
+          } else {
+            topbarAvatar.textContent = displayInitials;
+          }
+        }
+
+        // ── Right sidebar user card (工作面板 → 資訊) ──
+        const sidebarAvatar = document.getElementById("sidebarAvatar");
+        if (sidebarAvatar) {
+          if (pic) {
+            sidebarAvatar.style.backgroundImage = `url(${pic})`;
+            sidebarAvatar.style.backgroundSize = "cover";
+            sidebarAvatar.style.backgroundPosition = "center";
+            sidebarAvatar.style.background = `center/cover no-repeat url(${pic})`;
+            sidebarAvatar.textContent = "";
+          } else {
+            sidebarAvatar.textContent = displayInitials;
+          }
+        }
+        const sidebarName = document.getElementById("sidebarName");
+        if (sidebarName) sidebarName.textContent = displayName;
+        const sidebarDept = document.getElementById("sidebarDept");
+        if (sidebarDept) sidebarDept.textContent = deptLine;
+
+        // ── Admin panel button — LINE login hydrates role asynchronously, so
+        // the inline visibility check in chat.html runs before role is known.
+        // Re-evaluate here now that we have the authoritative user data.
+        const adminBtn = document.getElementById("btnAdminPanel");
+        if (adminBtn) {
+          adminBtn.style.display = merged.role === "admin" ? "" : "none";
+        }
+
+        // ── First-login identity verification prompt ──
+        // If user hasn't completed onboarding (no employee_id bound), show a
+        // persistent banner linking to settings.html where the full verify
+        // modal lives. Non-blocking — user can still chat as guest.
+        const notVerified = !merged.onboarding_completed || !merged.employee_id;
+        if (notVerified) {
+          _showIdVerifyBanner();
+        } else {
+          _hideIdVerifyBanner();
+        }
+
+        // ── Refresh avatars on already-rendered user messages ──
+        document.querySelectorAll(".page-chat-msg-row--user .avatar.avatar-sm").forEach(el => {
+          if (pic) {
+            el.innerHTML = `<img src="${pic}" referrerpolicy="no-referrer" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" onerror="this.parentElement.textContent='${displayInitials.replace(/'/g, "\\'")}'">`;
+          } else {
+            el.textContent = displayInitials;
+          }
+        });
       }
     } catch (_err) {
       // best effort
     }
   }
+
+  /* ── First-login verification banner ────────────────────────────────── */
+  function _showIdVerifyBanner() {
+    if (document.getElementById("idVerifyBanner")) return;  // already shown
+    // Respect user's temporary dismissal (session-level)
+    if (sessionStorage.getItem("kway_id_banner_dismissed") === "1") return;
+
+    const banner = document.createElement("div");
+    banner.id = "idVerifyBanner";
+    banner.style.cssText = [
+      "position:fixed",
+      "top:62px",
+      "left:50%",
+      "transform:translateX(-50%)",
+      "background:#fff8e1",
+      "color:#78491a",
+      "border:1.5px solid #ffd980",
+      "border-radius:10px",
+      "padding:10px 16px",
+      "box-shadow:0 6px 18px rgba(0,0,0,0.10)",
+      "z-index:500",
+      "font-size:0.82rem",
+      "display:flex",
+      "align-items:center",
+      "gap:12px",
+      "max-width:92vw",
+    ].join(";");
+    banner.innerHTML =
+      '<span style="font-size:1.1rem;">⚠️</span>' +
+      '<span>首次登入尚未完成身分驗證，綁定員工資料後可使用個人化功能</span>' +
+      '<a href="settings.html?verify=1" style="color:#4a90d9;font-weight:700;text-decoration:none;padding:3px 10px;border-radius:6px;border:1px solid #4a90d9;">前往驗證</a>' +
+      '<button onclick="_dismissIdVerifyBanner()" style="background:none;border:none;color:#888;cursor:pointer;font-size:1.1rem;line-height:1;padding:0 2px;" title="稍後再提醒">✕</button>';
+    document.body.appendChild(banner);
+  }
+
+  function _hideIdVerifyBanner() {
+    document.getElementById("idVerifyBanner")?.remove();
+  }
+
+  window._dismissIdVerifyBanner = function () {
+    sessionStorage.setItem("kway_id_banner_dismissed", "1");
+    _hideIdVerifyBanner();
+  };
 
   function showToast(msg, type) {
     const toast = document.getElementById("toast");
@@ -263,6 +382,7 @@
     moveSessionScopedValue(state.sessionMeetingText, sessionId, realSessionId, "");
     moveSessionScopedValue(state.sessionHistoryLoaded, sessionId, realSessionId, false);
     moveSessionScopedValue(state.sessionInputDrafts, sessionId, realSessionId, "");
+    moveSessionScopedValue(state.sessionPendingAudioFile, sessionId, realSessionId, null);
     moveSessionScopedValue(state.sessionHistoryCache, sessionId, realSessionId, []);
     moveSessionScopedValue(state.sessionLoadTokens, sessionId, realSessionId, 0);
 
@@ -310,16 +430,41 @@
     };
   }
 
+  function isLocalAudioHandoffPrompt(content) {
+    if (typeof content !== "string") return false;
+    return (
+      content.indexOf("我已收到音檔「") === 0 &&
+      content.indexOf("你希望我接下來做什麼？例如：") !== -1 &&
+      content.indexOf("1. 轉逐字稿") !== -1 &&
+      content.indexOf("3. 產出 Todo 並上傳 Notion") !== -1
+    );
+  }
+
   function getCachedHistory(sessionId) {
     const cached = state.sessionHistoryCache[sessionId];
     if (!Array.isArray(cached)) return [];
-    return cached.map(cloneHistoryMessage).filter(Boolean);
+    return cached
+      .map(cloneHistoryMessage)
+      .filter(Boolean)
+      .filter((msg) => !(msg.role === "assistant" && isLocalAudioHandoffPrompt(msg.content)));
   }
 
   function setCachedHistory(sessionId, history) {
     state.sessionHistoryCache[sessionId] = (Array.isArray(history) ? history : [])
       .map(cloneHistoryMessage)
       .filter(Boolean);
+  }
+
+  function pruneLocalAudioHandoffPromptFromCache(sessionId) {
+    const current = getCachedHistory(sessionId);
+    if (!current.length) return;
+    const filtered = current.filter((msg) => {
+      if (!msg || msg.role !== "assistant") return true;
+      return !isLocalAudioHandoffPrompt(msg.content);
+    });
+    if (filtered.length !== current.length) {
+      setCachedHistory(sessionId, filtered);
+    }
   }
 
   function getHistorySignature(msg) {
@@ -337,6 +482,8 @@
       return getCachedHistory(sessionId);
     }
 
+    // Cleanup local-only handoff prompts from previous frontend versions.
+    pruneLocalAudioHandoffPromptFromCache(sessionId);
     const cachedHistory = getCachedHistory(sessionId);
     if (cachedHistory.length === 0) {
       setCachedHistory(sessionId, remoteHistory);
@@ -427,6 +574,7 @@
     delete state.sessionMeetingText[sessionId];
     delete state.sessionHistoryLoaded[sessionId];
     delete state.sessionInputDrafts[sessionId];
+    delete state.sessionPendingAudioFile[sessionId];
     delete state.sessionLoadTokens[sessionId];
   }
 
@@ -645,10 +793,75 @@
   function syncComposerState() {
     if (!sendBtn) return;
     const hasText = !!(chatInput && chatInput.value.trim());
-    // 只有當前 session 有活躍任務時才禁用發送按鈕
-    // 其他 session 的背景任務不影響當前 session 的輸入
     const hasActiveTaskInCurrentSession = listActiveTasksForSession(state.sessionId).length > 0;
-    sendBtn.disabled = !hasText || hasActiveTaskInCurrentSession;
+
+    if (hasActiveTaskInCurrentSession) {
+      // ── Stop mode: AI 正在回覆 ──
+      sendBtn.classList.add("is-stop-mode");
+      sendBtn.disabled = false;
+      sendBtn.setAttribute("aria-label", "停止 AI 回覆");
+      sendBtn.setAttribute("title", "停止 AI 回覆");
+      sendBtn.dataset.mode = "stop";
+      // Swap icon to a square stop icon
+      sendBtn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<rect x="6" y="6" width="12" height="12" rx="2" ry="2" fill="currentColor"/>' +
+        '</svg>';
+    } else {
+      // ── Send mode (default) ──
+      sendBtn.classList.remove("is-stop-mode");
+      sendBtn.disabled = !hasText;
+      sendBtn.setAttribute("aria-label", "送出訊息");
+      sendBtn.setAttribute("title", "送出訊息");
+      sendBtn.dataset.mode = "send";
+      sendBtn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<line x1="22" y1="2" x2="11" y2="13"></line>' +
+        '<polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>' +
+        '</svg>';
+    }
+  }
+
+  // Cancel all active tasks for the current session (server + client side)
+  async function stopAllActiveTasks() {
+    const sessionId = state.sessionId;
+    const active = listActiveTasksForSession(sessionId);
+    if (!active.length) return;
+
+    // 1. Tell server to cancel (non-blocking on error)
+    try {
+      await fetch(`/chat/stop_all/${encodeURIComponent(sessionId)}`, {
+        method: "POST",
+        credentials: "same-origin",
+      });
+    } catch (err) {
+      console.warn("[stopAll] server call failed:", err);
+    }
+
+    // 2. Locally mark tasks as cancelled (server will also send SSE cancelled
+    //    event, but we do it here immediately so UI responds instantly)
+    active.forEach((task) => {
+      task.status = "cancelled";
+      task.completed = true;
+      task.error = "已中止";
+      // Close any open SSE reader for this task
+      if (task.reader) {
+        try { task.reader.cancel(); } catch (_) {}
+      }
+    });
+
+    // 3. Clear typing, update bubble (append [已中止] marker if partial text)
+    removeTyping(sessionId);
+    active.forEach((task) => {
+      if (task.text) {
+        showTaskBubble(task, true);
+      }
+    });
+
+    // 4. Re-enable input
+    syncComposerState();
+    renderConversationList();
+    if (window.showToast) showToast("已中止 AI 回覆", "info");
   }
 
   function getTypingIndicatorId(sessionId) {
@@ -785,12 +998,21 @@
     const initials = role === "user" ? safeInitials || "U" : "AI";
     const bubbleId = "bubble-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
 
+    // Build avatar HTML — user: LINE picture or initials; AI: AgentK logo
+    let avatarHtml;
+    if (role === "user") {
+      const pic = userData && typeof userData.picture === "string" && userData.picture.trim() ? userData.picture.trim() : "";
+      if (pic) {
+        avatarHtml = '<div class="avatar avatar-sm"><img src="' + escapeHtml(pic) + '" referrerpolicy="no-referrer" style="width:100%;height:100%;border-radius:50%;object-fit:cover;" onerror="this.parentElement.textContent=\'' + escapeHtml(initials) + '\'" /></div>';
+      } else {
+        avatarHtml = '<div class="avatar avatar-sm">' + escapeHtml(initials) + '</div>';
+      }
+    } else {
+      avatarHtml = '<div class="avatar avatar-sm avatar-ai"><img src="../assets/images/kw_logo.png" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" /></div>';
+    }
+
     row.innerHTML =
-      '<div class="avatar avatar-sm ' +
-      (role === "ai" ? "avatar-ai" : "") +
-      '">' +
-      escapeHtml(initials) +
-      '</div>' +
+      avatarHtml +
       '<div class="page-chat-msg-body">' +
       '<div class="page-chat-msg-bubble" id="' + bubbleId + '">' + formatText(text) + '</div>' +
       '<div class="page-chat-msg-meta">' +
@@ -815,7 +1037,7 @@
     row.className = "page-chat-typing-row";
     row.id = getTypingIndicatorId(sessionId);
     row.innerHTML =
-      '<div class="avatar avatar-sm avatar-ai">AI</div>' +
+      '<div class="avatar avatar-sm avatar-ai"><img src="../assets/images/kw_logo.png" style="width:100%;height:100%;object-fit:cover;border-radius:50%;" /></div>' +
       '<div class="page-chat-typing-bubble">' +
       '<div class="page-chat-typing-dot"></div>' +
       '<div class="page-chat-typing-dot"></div>' +
@@ -1237,6 +1459,17 @@
             showTaskBubble(task, true);
             return task.text;
           }
+          if (parsed.status === "cancelled") {
+            // Server confirms cancellation (either from our stop button or admin action)
+            task.status = "cancelled";
+            task.completed = true;
+            task.text = (parsed.content || task.text || "") + (task.text ? "\n\n[已中止]" : "[已中止]");
+            task.error = "";
+            removeTyping(task.sessionId);
+            showTaskBubble(task, true);
+            syncComposerState();
+            return task.text;
+          }
           if (parsed.status === "error") {
             task.status = "error";
             task.completed = true;
@@ -1329,9 +1562,24 @@
     }
   }
 
-  async function sendMessage(text) {
+  async function sendMessage(text, options) {
+    const opts = options || {};
     const content = (text || "").trim();
     let requestSessionId = state.sessionId;
+    const pendingAudio = state.sessionPendingAudioFile[requestSessionId] || null;
+    const explicitAttachedFile =
+      typeof opts.attachedFile === "string" ? opts.attachedFile.trim() : "";
+    // Generic attachment queued via 📎 button (takes precedence if neither of
+    // explicit nor pending audio applies).
+    const pendingAttachment = !explicitAttachedFile && !(pendingAudio && pendingAudio.path)
+      ? _takeSessionAttachment(requestSessionId)
+      : null;
+    const attachedFileForTurn =
+      explicitAttachedFile
+      || (pendingAudio && pendingAudio.path ? pendingAudio.path : "")
+      || (pendingAttachment && pendingAttachment.path ? pendingAttachment.path : "");
+    const uploadHandoff = !!opts.uploadHandoff;
+    const keepPendingAudio = !!opts.keepPendingAudio;
     // 只檢查當前 session 自己是否還在 pending;其他 session 的 task 完全不影響
     if (!content || listActiveTasksForSession(requestSessionId).length > 0) return;
 
@@ -1349,6 +1597,7 @@
     syncComposerState();
 
     ensureSessionExists(requestSessionId, "新對話", "開始新的對話...");
+    pruneLocalAudioHandoffPromptFromCache(requestSessionId);
     // 渲染到該 session 自己的 container(即使使用者切到其他 session,這筆訊息仍然留在原 session)
     renderMessage(requestSessionId, "user", content);
     appendCachedHistoryMessage(requestSessionId, "user", content);
@@ -1391,6 +1640,12 @@
         language: language,
         detail_level: detailLevel,
       };
+      if (attachedFileForTurn) {
+        payload.attached_file = attachedFileForTurn;
+      }
+      if (uploadHandoff) {
+        payload.upload_handoff = true;
+      }
 
       const res = await fetch("/chat", {
         method: "POST",
@@ -1401,6 +1656,9 @@
         removeTyping(requestSessionId);
         const errText = await res.text();
         throw new Error("HTTP " + res.status + ": " + errText);
+      }
+      if (attachedFileForTurn && !keepPendingAudio) {
+        delete state.sessionPendingAudioFile[requestSessionId];
       }
 
       renderConversationList();
@@ -1644,6 +1902,96 @@
     if (session) window.loadConversationById(session.id, true);
   };
 
+  // ── Generic file attachment (PDF/DOCX/images/etc.) ──
+  // Uses /api/upload/personal which stores into
+  // Agent_workspace/line_uploads/{user_id}/ — same pool as LINE Bot uploads.
+  window.triggerGenericUpload = function () {
+    const fileInput = document.getElementById("genericFileInput");
+    if (!fileInput) return;
+    fileInput.value = "";
+    fileInput.onchange = async function () {
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      // Size guard: 50 MB cap for web uploads
+      const MAX_BYTES = 50 * 1024 * 1024;
+      if (file.size > MAX_BYTES) {
+        showToast(`檔案過大（${(file.size / 1048576).toFixed(1)} MB），上限 50 MB`, "error");
+        return;
+      }
+
+      showToast("正在上傳 " + file.name + "...", "info");
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        const res = await fetch("/api/upload/personal", {
+          method: "POST",
+          credentials: "same-origin",
+          body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== "success") {
+          throw new Error(data.detail || "Upload failed");
+        }
+
+        // Queue as attachment for the NEXT message send
+        state.sessionPendingAttachment = state.sessionPendingAttachment || {};
+        state.sessionPendingAttachment[state.sessionId] = {
+          path: String(data.filepath || ""),
+          name: file.name || String(data.filename || ""),
+          size: data.size || file.size,
+        };
+        _renderAttachChip();
+        showToast(`已附加「${file.name}」，輸入訊息後送出`, "success");
+      } catch (err) {
+        showToast("檔案上傳失敗：" + (err.message || "未知錯誤"), "error");
+      }
+    };
+    fileInput.click();
+  };
+
+  function _renderAttachChip() {
+    const row = document.getElementById("attachChipRow");
+    if (!row) return;
+    const att = (state.sessionPendingAttachment || {})[state.sessionId];
+    if (!att) {
+      row.style.display = "none";
+      row.innerHTML = "";
+      return;
+    }
+    const sizeKB = att.size ? Math.round(att.size / 1024) : 0;
+    const safeName = escapeHtml(att.name || "file");
+    row.style.display = "flex";
+    row.innerHTML =
+      '<div class="page-chat-attach-chip" role="button" tabindex="0">' +
+      '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>' +
+      '<polyline points="14 2 14 8 20 8"/></svg>' +
+      '<span class="page-chat-attach-chip-name">' + safeName + '</span>' +
+      (sizeKB ? '<span class="page-chat-attach-chip-size">' + sizeKB + ' KB</span>' : '') +
+      '<button class="page-chat-attach-chip-remove" onclick="window._clearAttachChip()" aria-label="移除附件" title="移除">✕</button>' +
+      '</div>';
+  }
+
+  window._clearAttachChip = function () {
+    if (state.sessionPendingAttachment) {
+      delete state.sessionPendingAttachment[state.sessionId];
+    }
+    _renderAttachChip();
+  };
+
+  function _takeSessionAttachment(sessionId) {
+    // Pop the attachment (single-use: after send, it's gone)
+    if (!state.sessionPendingAttachment) return null;
+    const att = state.sessionPendingAttachment[sessionId];
+    if (att) {
+      delete state.sessionPendingAttachment[sessionId];
+      _renderAttachChip();
+    }
+    return att;
+  }
+
   window.triggerAudioUpload = function () {
     const audioFileInput = document.getElementById("audioFileInput");
     if (!audioFileInput) return;
@@ -1661,10 +2009,23 @@
         const data = await res.json();
         if (data.status !== "success") throw new Error(data.detail || "Upload failed");
 
-        const msg = "幫我將這個音訊檔案轉換為逐字稿，file_path: " + data.filepath;
-        if (chatInput) chatInput.value = msg;
+        state.sessionPendingAudioFile[state.sessionId] = {
+          path: String(data.filepath || ""),
+          name: file.name || String(data.filename || ""),
+        };
+        pruneLocalAudioHandoffPromptFromCache(state.sessionId);
+        const safeName = file.name || String(data.filename || "音檔");
+        const uploadMessage = "已上傳「" + safeName + "」檔案";
+        if (chatInput) {
+          chatInput.value = "";
+          autoResize(chatInput);
+        }
         showToast("已上傳 " + file.name, "success");
-        sendMessage(msg);
+        syncComposerState();
+        sendMessage(uploadMessage, {
+          attachedFile: String(data.filepath || ""),
+          uploadHandoff: true,
+        });
       } catch (err) {
         showToast("音檔上傳失敗：" + err.message, "error");
       }
@@ -1684,11 +2045,20 @@
     chatInput.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        sendMessage(chatInput.value);
+        // Enter in stop mode = stop, not send
+        if (sendBtn.dataset.mode === "stop") {
+          stopAllActiveTasks();
+        } else {
+          sendMessage(chatInput.value);
+        }
       }
     });
     sendBtn.addEventListener("click", function () {
-      sendMessage(chatInput.value);
+      if (sendBtn.dataset.mode === "stop") {
+        stopAllActiveTasks();
+      } else {
+        sendMessage(chatInput.value);
+      }
     });
   }
 

@@ -275,7 +275,8 @@ class GeminiAdapter:
             augmented_query = visual_parts + [augmented_query]
 
         tools_enabled = kwargs.get("tools_enabled", True)
-        tools = self.get_tools(user_query=user_query) if tools_enabled else []
+        max_tools = kwargs.get("max_tools", 10)
+        tools = self.get_tools(user_query=user_query, max_tools=max_tools) if tools_enabled else []
 
         def _normalize_json_schema_for_gemini(schema: dict) -> dict:
             """Gemini proto expects Schema enum types (e.g. OBJECT/STRING), not JSONSchema 'object'/'string'.

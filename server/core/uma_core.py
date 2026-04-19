@@ -15,8 +15,8 @@ class UMA:
     The main interface for Unified Model Adapter.
     Integrates Registry, Converter, and Executor.
     """
-    def __init__(self, skills_home: str, dept_skills_home: str = None, user_skills_home: str = None, project_root: str = None):
-        self.registry = SkillRegistry(skills_home, dept_skills_home, user_skills_home)
+    def __init__(self, skills_home: str, dept_skills_home: str = None, personal_skills_home: str = None, project_root: str = None):
+        self.registry = SkillRegistry(skills_home, dept_skills_home, personal_skills_home)
         self.executor = ExecutionEngine(skills_home)
         self.converter = SchemaConverter()
         self.project_root = project_root or str(Path(skills_home).resolve().parents[1])
@@ -35,6 +35,8 @@ class UMA:
         """
         tools = []
         _open_params = {"type": "object", "properties": {}, "additionalProperties": True}
+        by_name: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
 
         for skill_key, data in self.registry.skills.items():
             meta = data["metadata"]
@@ -58,6 +60,28 @@ class UMA:
             if not meta.get("_env_ready", False):
                 desc += " [UNAVAILABLE: Missing dependencies]"
 
+            # Dedupe by short tool name. Prefer the most specific scope:
+            # user > department > system.
+            if scope.startswith("user:"):
+                scope_priority = 3
+            elif scope.startswith("dept:"):
+                scope_priority = 2
+            else:
+                scope_priority = 1
+
+            current = by_name.get(tool_name)
+            if current is None:
+                by_name[tool_name] = {
+                    "description": desc,
+                    "scope_priority": scope_priority,
+                }
+                order.append(tool_name)
+            elif scope_priority > current["scope_priority"]:
+                current["description"] = desc
+                current["scope_priority"] = scope_priority
+
+        for tool_name in order:
+            desc = by_name[tool_name]["description"]
             if model_type.lower() == "openai":
                 tools.append({
                     "type": "function",
@@ -300,10 +324,10 @@ class SkillRegistry:
     """
     Manages discovery, metadata parsing, and caching of GitHub Skills.
     """
-    def __init__(self, skills_home: str, dept_skills_home: str = None, user_skills_home: str = None):
+    def __init__(self, skills_home: str, dept_skills_home: str = None, personal_skills_home: str = None):
         self.skills_home = Path(skills_home).resolve()
         self.dept_skills_home = Path(dept_skills_home).resolve() if dept_skills_home else None
-        self.user_skills_home = Path(user_skills_home).resolve() if user_skills_home else None
+        self.personal_skills_home = Path(personal_skills_home).resolve() if personal_skills_home else None
         self.skills: Dict[str, Dict[str, Any]] = {}
         self.schema_cache: Dict[str, Dict[str, Any]] = {}
         self.validation_cache: Dict[str, bool] = {}
@@ -313,7 +337,7 @@ class SkillRegistry:
         Scans three-tier skill directories for valid Skill Bundles:
         1. skills_home (system) — available to all users
         2. dept_skills_home/{dept_code}/ (department) — available to department members
-        3. user_skills_home/{user_id}/ (personal) — available to owner only
+        3. personal_skills_home/{user_id}/ (personal) — available to owner only
         D-01/D-13: Auto-regenerates skills_manifest.json after scanning.
         """
         # 1. System skills
@@ -327,8 +351,8 @@ class SkillRegistry:
                     self._scan_directory(dept_dir, scope=f"dept:{dept_dir.name}")
 
         # 3. Personal skills (two-level: user_id/skill_name)
-        if self.user_skills_home and self.user_skills_home.exists():
-            for user_dir in self.user_skills_home.iterdir():
+        if self.personal_skills_home and self.personal_skills_home.exists():
+            for user_dir in self.personal_skills_home.iterdir():
                 if user_dir.is_dir() and user_dir.name != ".gitkeep":
                     self._scan_directory(user_dir, scope=f"user:{user_dir.name}")
 

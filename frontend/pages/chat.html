@@ -9,7 +9,10 @@
   <link rel="stylesheet" href="../assets/css/chat.css" />
   <link rel="stylesheet" href="../assets/css/workflow.css" />
   <!-- Anti-FOUC: apply saved theme before first paint -->
-  <script>(function(){var t=localStorage.getItem('kway_theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
+  <script>(function(){var t=localStorage.getItem('kway_theme');if(t)document.documentElement.setAttribute('data-theme',t);
+    // If ?wf= param present, pre-hide chat body to avoid flash before workflow loads
+    if(location.search.indexOf('wf=')>-1||location.search.indexOf('openWorkflow')>-1){document.write('<style id="wfAntiFlash">.page-chat-body{visibility:hidden;}</style>');}
+  })();</script>
 </head>
 <body>
 <div class="page-chat-root">
@@ -41,6 +44,24 @@
         </svg>
         設計工作流
       </button>
+      <a href="admin.html" class="page-chat-workspace-tag" id="btnAdminPanel" style="text-decoration:none;display:none;" aria-label="管理後台">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4"/>
+        </svg>
+        管理後台
+      </a>
+      <script>
+        // Show admin button only for admin users
+        (function(){
+          try {
+            var u = JSON.parse(sessionStorage.getItem('kway_user') || '{}');
+            if (u.role === 'admin') {
+              var btn = document.getElementById('btnAdminPanel');
+              if (btn) btn.style.display = '';
+            }
+          } catch(_){}
+        })();
+      </script>
     </div>
 
     <div class="page-chat-topbar-right">
@@ -62,6 +83,56 @@
 
   <!-- App body -->
   <div id="chatBody" class="page-chat-body">
+
+    <!-- Primary navigation -->
+    <aside class="page-chat-primary-nav" aria-label="主選單">
+      <div class="page-chat-primary-nav-header">
+        <span class="page-chat-primary-nav-kicker">主選單</span>
+      </div>
+      <nav class="page-chat-primary-nav-menu">
+        <button class="page-chat-primary-nav-btn is-active" type="button" aria-current="page" aria-label="AI Chat">
+          <span class="page-chat-primary-nav-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
+              <path d="M8.5 10h7"/>
+              <path d="M8.5 14h4"/>
+            </svg>
+          </span>
+          <span class="page-chat-primary-nav-label">AI Chat</span>
+        </button>
+        <button class="page-chat-primary-nav-btn" type="button" onclick="showToast('Agent 管理功能即將開放', 'info')" aria-label="Agent 管理">
+          <span class="page-chat-primary-nav-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M16 21v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2"/>
+              <circle cx="9.5" cy="7" r="4"/>
+              <path d="M19 8v6"/>
+              <path d="M16 11h6"/>
+            </svg>
+          </span>
+          <span class="page-chat-primary-nav-label">Agent 管理</span>
+        </button>
+        <button class="page-chat-primary-nav-btn" type="button" onclick="showToast('專案管理功能即將開放', 'info')" aria-label="專案管理">
+          <span class="page-chat-primary-nav-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h4L11 7h7.5A2.5 2.5 0 0 1 21 9.5v8A2.5 2.5 0 0 1 18.5 20h-13A2.5 2.5 0 0 1 3 17.5z"/>
+              <path d="M3 10h18"/>
+            </svg>
+          </span>
+          <span class="page-chat-primary-nav-label">專案管理</span>
+        </button>
+        <button class="page-chat-primary-nav-btn" type="button" onclick="showToast('資源管理功能即將開放', 'info')" aria-label="資源管理">
+          <span class="page-chat-primary-nav-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/>
+              <path d="M12 12 4 7.5"/>
+              <path d="M12 12l8-4.5"/>
+              <path d="M12 21v-9"/>
+            </svg>
+          </span>
+          <span class="page-chat-primary-nav-label">資源管理</span>
+        </button>
+      </nav>
+    </aside>
 
     <!-- Left sidebar: conversation list -->
     <aside class="page-chat-sidebar-left" aria-label="對話記錄">
@@ -157,6 +228,9 @@
             maxlength="4000"
             aria-label="訊息輸入框"
           ></textarea>
+          <!-- Generic attachment chip row (shown when file queued) -->
+          <div class="page-chat-attach-chip-row" id="attachChipRow" style="display:none;"></div>
+
           <div class="page-chat-input-toolbar">
             <div class="page-chat-input-tools">
               <button class="page-chat-tool-btn" id="audioUploadBtn" aria-label="上傳音訊檔案進行語音轉文字" title="上傳音訊（MP3、WAV、M4A、WebM，最大 25MB）" onclick="triggerAudioUpload()">
@@ -168,9 +242,11 @@
                 </svg>
               </button>
               <input type="file" id="audioFileInput" accept=".mp3,.wav,.m4a,.webm,.ogg,.flac,.mp4" style="display:none;" aria-hidden="true" />
-              <button class="page-chat-tool-btn" aria-label="工具">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+              <!-- Generic file attachment -->
+              <button class="page-chat-tool-btn" id="attachBtn" aria-label="附加檔案" title="附加檔案（PDF/DOCX/XLSX/圖片/文字 等）" onclick="triggerGenericUpload()">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
               </button>
+              <input type="file" id="genericFileInput" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md,.rtf,.png,.jpg,.jpeg,.gif,.webp,.mp4,.mov,.json,.html,.htm" style="display:none;" aria-hidden="true" />
             </div>
             <div class="page-chat-input-actions">
               <button class="page-chat-model-select" onclick="cycleModel()" aria-label="切換 AI 模型">
@@ -196,16 +272,18 @@
           <div class="wf-editor-empty" id="wfEditorEmpty">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             <p style="text-align:center;">請從左側選擇一個 Skill 開始編輯<br/>或</p>
-            <button class="wf-editor-btn wf-editor-btn-primary" style="padding:8px 20px;font-size:0.8rem;" onclick="window._wfSkillEditor&&window._wfSkillEditor.createNewSkill()">+ 新增 Skill</button>
+            <button class="wf-editor-btn wf-editor-btn-primary" id="wfBtnCreateSkill" style="padding:8px 20px;font-size:0.8rem;" onclick="window._wfSkillEditor&&window._wfSkillEditor.createNewSkill()">+ 新增 Skill</button>
           </div>
           <div id="wfEditorContent" style="display:none;flex-direction:column;height:100%;">
             <div class="wf-editor-header">
-              <span>📝</span>
-              <span id="wfEditorTitle">—</span>
-              <div class="wf-editor-header-actions">
-                <button class="wf-editor-btn wf-editor-btn-danger" onclick="window._wfSkillEditor&&window._wfSkillEditor.deleteSkill()">刪除</button>
-                <button class="wf-editor-btn wf-editor-btn-secondary" onclick="window._wfSkillEditor&&window._wfSkillEditor.rollback()">還原</button>
-                <button class="wf-editor-btn wf-editor-btn-primary" onclick="window._wfSkillEditor&&window._wfSkillEditor.save()">儲存</button>
+              <div style="display:flex;flex-direction:column;">
+                <span id="wfEditorTitle" style="font-weight:700;">—</span>
+                <span id="wfEditorSkillId" style="font-size:0.6rem;color:var(--text-tertiary,#94A3B8);font-weight:400;margin-top:1px;"></span>
+              </div>
+              <div class="wf-editor-header-actions" id="wfEditorActions">
+                <button class="wf-editor-btn wf-editor-btn-danger" id="wfBtnDelete" onclick="window._wfSkillEditor&&window._wfSkillEditor.deleteSkill()">刪除</button>
+                <button class="wf-editor-btn wf-editor-btn-secondary" id="wfBtnRollback" onclick="window._wfSkillEditor&&window._wfSkillEditor.rollback()">還原</button>
+                <button class="wf-editor-btn wf-editor-btn-primary" id="wfBtnSave" onclick="window._wfSkillEditor&&window._wfSkillEditor.save()">儲存</button>
               </div>
             </div>
             <div class="wf-editor-body" id="wfEditorBody"></div>
@@ -231,6 +309,10 @@
       <!-- Workflow: Canvas Area (shown in wf-mode) -->
       <div class="wf-canvas-area" id="wfCanvasArea">
         <div class="wf-canvas-toolbar">
+          <button title="返回" onclick="window.toggleWorkflowView()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <div class="wf-toolbar-sep"></div>
           <button title="縮小" onclick="window._wfDesigner&&window._wfDesigner.zoom(-0.1)">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
           </button>
@@ -250,6 +332,10 @@
           </button>
           <button title="重置" onclick="window._wfDesigner&&window._wfDesigner.reset()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+          </button>
+          <div class="wf-toolbar-sep"></div>
+          <button title="工作流設定" onclick="window._openWfSettings&&window._openWfSettings()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
           <span class="wf-toolbar-info" id="wfInfoText">0 節點 · 0 連接</span>
         </div>
@@ -355,7 +441,36 @@
 <!-- Workflow: Property Panel (floating) -->
 <div class="wf-prop-panel hidden" id="wfPropPanel">
   <div class="wf-prop-panel-title"><span>屬性</span><button class="wf-prop-panel-close" onclick="closeWfPropPanel()">&times;</button></div>
-  <div class="wf-prop-fields"></div>
+  <div class="wf-prop-tabs">
+    <button class="wf-prop-tab active" data-tab="props" onclick="window._switchPropTab(this,'props')">屬性</button>
+    <button class="wf-prop-tab" data-tab="params" onclick="window._switchPropTab(this,'params')">參數</button>
+    <button class="wf-prop-tab" data-tab="exec" onclick="window._switchPropTab(this,'exec')">執行</button>
+  </div>
+  <div class="wf-prop-tab-body" id="wfPropTabProps"><div class="wf-prop-fields"></div></div>
+  <div class="wf-prop-tab-body" id="wfPropTabParams" style="display:none;"></div>
+  <div class="wf-prop-tab-body" id="wfPropTabExec" style="display:none;"></div>
+</div>
+
+<!-- Workflow Settings Modal -->
+<div class="wf-settings-overlay" id="wfSettingsOverlay">
+  <div class="wf-settings-modal">
+    <div class="wf-settings-header">
+      <span>工作流設定</span>
+      <button class="wf-settings-close" onclick="window._closeWfSettings&&window._closeWfSettings()">&times;</button>
+    </div>
+    <div class="wf-settings-tabs">
+      <button class="wf-settings-tab active" data-stab="basic" onclick="window._switchSettingsTab(this,'basic')">基本</button>
+      <button class="wf-settings-tab" data-stab="variables" onclick="window._switchSettingsTab(this,'variables')">變數</button>
+      <button class="wf-settings-tab" data-stab="trigger" onclick="window._switchSettingsTab(this,'trigger')">觸發</button>
+      <button class="wf-settings-tab" data-stab="execution" onclick="window._switchSettingsTab(this,'execution')">執行</button>
+      <button class="wf-settings-tab" data-stab="security" onclick="window._switchSettingsTab(this,'security')">安全</button>
+    </div>
+    <div class="wf-settings-body" id="wfSettingsBody"></div>
+    <div class="wf-settings-footer">
+      <button class="wf-settings-btn-secondary" onclick="window._closeWfSettings&&window._closeWfSettings()">取消</button>
+      <button class="wf-settings-btn-primary" onclick="window._saveWfSettings&&window._saveWfSettings()">套用</button>
+    </div>
+  </div>
 </div>
 
 <!-- Toast notification -->
@@ -400,6 +515,15 @@
 </style>
 
 <script src="../config.js" onerror="console.warn('config.js 未找到，將使用示範模式')"></script>
+<!-- Workflow Landing Overlay (outside chat-body to avoid layout conflicts) -->
+<div class="wf-landing-overlay" id="wfLandingOverlay">
+  <div class="wf-landing-left" id="wfLandingLeft"></div>
+  <div class="wf-landing-center">
+    <div class="wf-landing-grid" id="wfLandingGrid"></div>
+  </div>
+  <div class="wf-landing-right" id="wfLandingRight"></div>
+</div>
+
 <script src="../assets/js/script.js"></script>
 <script src="../assets/js/chat.js"></script>
 <script src="../assets/js/workflow.js"></script>

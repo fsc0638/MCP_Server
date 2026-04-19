@@ -10,12 +10,168 @@
 .wf-dashboard-wrap { display: none; }
 
 .page-chat-body.wf-mode .page-chat-sidebar-left > *:not(.wf-palette-wrap) { display: none; }
-.page-chat-body.wf-mode .page-chat-main > *:not(.wf-canvas-area) { display: none; }
+.page-chat-body.wf-mode .page-chat-main > *:not(.wf-canvas-area):not(.wf-skill-edit-area) { display: none; }
 .page-chat-body.wf-mode .page-chat-sidebar-right > *:not(.wf-dashboard-wrap) { display: none; }
 
 .page-chat-body.wf-mode .wf-palette-wrap,
 .page-chat-body.wf-mode .wf-canvas-area,
 .page-chat-body.wf-mode .wf-dashboard-wrap { display: flex; flex-direction: column; height: 100%; }
+
+/* ── Workflow Landing Overlay ─────────────────────────────────── */
+/* Fixed overlay below header, covers entire viewport — no layout conflicts */
+.wf-landing-overlay {
+  display: none; position: fixed;
+  top: 52px; left: 0; right: 0; bottom: 0;
+  z-index: 100; background: var(--bg-main, #F8F9FB);
+  flex-direction: row;
+}
+.wf-landing-overlay.open { display: flex; }
+
+.wf-landing-left {
+  width: 200px; flex-shrink: 0; overflow-y: auto;
+  padding: 20px 14px; border-right: 1px solid var(--border-subtle, #E2E8F0);
+  background: var(--bg-surface, #fff);
+}
+.wf-landing-center {
+  flex: 1; overflow-y: auto; padding: 28px 32px;
+}
+.wf-landing-right {
+  width: 260px; flex-shrink: 0; overflow-y: auto;
+  padding: 20px 16px; border-left: 1px solid var(--border-subtle, #E2E8F0);
+  background: var(--bg-surface, #fff);
+}
+.wf-landing-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+/* Left panel */
+.wf-lp-section { margin-bottom: 20px; }
+.wf-lp-title {
+  font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-tertiary, #94A3B8);
+  padding: 0 4px 8px;
+}
+.wf-lp-search {
+  width: 100%; padding: 7px 10px; border: 1px solid var(--border-subtle);
+  border-radius: 8px; font-size: 0.76rem; background: var(--bg-main);
+  outline: none; transition: border-color 0.15s; box-sizing: border-box;
+}
+.wf-lp-search:focus { border-color: var(--kway-blue); }
+.wf-lp-filter { display: flex; flex-direction: column; gap: 2px; }
+.wf-lp-filter-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 8px; cursor: pointer;
+  font-size: 0.76rem; color: var(--text-secondary); transition: background 0.12s;
+}
+.wf-lp-filter-item:hover { background: var(--bg-hover, #f1f5f9); }
+.wf-lp-filter-item.active {
+  background: var(--kway-blue-pale, #e6f6f8);
+  color: var(--kway-blue, #1a9aaa); font-weight: 600;
+}
+.wf-lp-filter-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.wf-lp-filter-count {
+  margin-left: auto; font-size: 0.63rem; color: var(--text-tertiary);
+  background: var(--bg-hover, #f1f5f9); border-radius: 8px; padding: 1px 6px;
+}
+.wf-lp-recent { display: flex; flex-direction: column; gap: 2px; }
+.wf-lp-recent-item {
+  padding: 5px 8px; border-radius: 6px; cursor: pointer;
+  font-size: 0.72rem; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: background 0.12s;
+}
+.wf-lp-recent-item:hover { background: var(--bg-hover); }
+
+/* Right panel */
+.wf-rp-section { margin-bottom: 22px; }
+.wf-rp-title {
+  font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-tertiary);
+  padding: 0 0 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border-subtle);
+}
+.wf-rp-empty { font-size: 0.72rem; color: var(--text-tertiary); padding: 6px 0; }
+.wf-rp-line-cmd {
+  padding: 5px 8px; background: var(--bg-main); border-radius: 6px;
+  font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 4px; font-family: monospace;
+}
+
+/* Cards */
+.wf-landing-card-new {
+  border: 2px dashed var(--border-medium, #CBD5E1);
+  border-radius: 14px; min-height: 118px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: border-color 0.2s, background 0.2s, transform 0.15s;
+  background: var(--bg-surface, #fff);
+}
+.wf-landing-card-new:hover {
+  border-color: var(--kway-blue, #1a9aaa);
+  background: var(--kway-blue-pale, #e6f6f8); transform: translateY(-2px);
+}
+.wf-landing-card-new-inner { text-align: center; color: var(--text-secondary); }
+.wf-landing-card-new-icon {
+  width: 34px; height: 34px; border-radius: 10px;
+  background: var(--kway-blue-light, #b2e4ea); color: var(--kway-blue, #1a9aaa);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 6px; font-size: 1.1rem; font-weight: 700;
+}
+.wf-landing-card-new-label { font-size: 0.78rem; font-weight: 600; }
+.wf-landing-card {
+  background: var(--bg-surface, #fff); border: 1px solid var(--border-subtle, #E2E8F0);
+  border-radius: 14px; overflow: hidden;
+  cursor: pointer; transition: box-shadow 0.2s, border-color 0.2s, transform 0.15s;
+}
+.wf-landing-card:hover {
+  box-shadow: var(--shadow-hover);
+  border-color: var(--border-medium, #CBD5E1); transform: translateY(-2px);
+}
+.wf-landing-card-header {
+  padding: 12px 14px 8px; color: #fff;
+  font-size: 0.82rem; font-weight: 700; line-height: 1.3;
+}
+.wf-landing-card-key {
+  font-size: 0.52rem; font-weight: 400; opacity: 0.7;
+  font-family: monospace; margin-top: 2px; word-break: break-all;
+}
+.wf-landing-card-body { padding: 8px 14px 12px; }
+.wf-landing-card-meta {
+  font-size: 0.66rem; color: var(--text-muted, #64748B);
+  display: flex; align-items: center; gap: 6px;
+}
+.wf-landing-card-meta-dot {
+  width: 3px; height: 3px; border-radius: 50%; background: var(--border-medium, #CBD5E1);
+}
+.wf-landing-card-desc {
+  font-size: 0.62rem; font-weight: 400; opacity: 0.85;
+  margin-top: 3px; line-height: 1.3;
+}
+.wf-landing-card-badges {
+  display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap;
+}
+.wf-landing-card-badge {
+  font-size: 0.55rem; font-weight: 600; padding: 1px 6px; border-radius: 4px;
+}
+.wf-badge-trigger { background: rgba(52,168,83,0.15); color: #34a853; }
+.wf-badge-kw { background: rgba(66,133,244,0.15); color: #4285f4; }
+.wf-badge-var { background: rgba(139,92,246,0.15); color: #8b5cf6; }
+
+/* Right panel log items */
+.wf-rp-log-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 0; font-size: 0.7rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.wf-rp-log-item:last-child { border-bottom: none; }
+.wf-rp-log-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+}
+.wf-rp-log-dot.success { background: var(--color-success, #34a853); }
+.wf-rp-log-dot.failed { background: var(--color-error, #ea4335); }
+.wf-rp-log-name {
+  flex: 1; font-weight: 600; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wf-rp-log-time { font-size: 0.62rem; color: var(--text-tertiary); flex-shrink: 0; }
 
 /* Skill edit area overrides canvas display */
 .page-chat-body.wf-mode .wf-skill-edit-area.visible { display: flex; flex: 1; height: 100%; }
@@ -42,10 +198,32 @@
   color: var(--text-tertiary); letter-spacing: 0.05em;
   padding: 4px 6px; margin-bottom: 4px;
 }
-.wf-palette-scope-title {
-  font-size: 0.7rem; font-weight: 700;
-  color: var(--text-secondary); padding: 6px 6px 4px;
-  border-top: 1px solid var(--border-subtle); margin-top: 4px;
+/* ── Collapsible scope sections (Skill Edit mode) ──────── */
+.wf-palette-scope { margin-bottom: 2px; }
+.wf-palette-scope-header {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 8px; cursor: pointer; user-select: none;
+  font-size: 0.72rem; font-weight: 700; color: var(--text-secondary);
+  border-top: 1px solid var(--border-subtle);
+  transition: background 0.15s;
+}
+.wf-palette-scope-header:first-child { border-top: none; }
+.wf-palette-scope-header:hover { background: var(--bg-hover); }
+.wf-palette-scope-count {
+  font-size: 0.6rem; font-weight: 600; color: var(--text-tertiary);
+  background: var(--bg-hover, #f1f5f9); border-radius: 8px; padding: 1px 6px;
+  margin-left: auto;
+}
+.wf-palette-scope-arrow {
+  transition: transform 0.2s; flex-shrink: 0;
+}
+.wf-palette-scope-header.open .wf-palette-scope-arrow { transform: rotate(180deg); }
+.wf-palette-scope-body {
+  overflow: hidden; transition: max-height 0.25s ease, opacity 0.2s;
+  max-height: 2000px; opacity: 1;
+}
+.wf-palette-scope-body.collapsed {
+  max-height: 0; opacity: 0;
 }
 
 .wf-palette-item {
@@ -175,9 +353,9 @@
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--border-medium, #ccc);
 }
-.wf-block-status.ok { background: #34a853; }
+.wf-block-status.ok { background: var(--color-success); }
 .wf-block-status.running { background: var(--kway-blue); animation: wf-blink 1s infinite; }
-.wf-block-status.error { background: #ea4335; }
+.wf-block-status.error { background: var(--color-error); }
 
 /* Ports — 4 directions */
 .wf-port {
@@ -288,7 +466,7 @@
   margin-bottom: 8px; display: flex; align-items: center; gap: 6px;
 }
 .wf-live-dot {
-  width: 6px; height: 6px; border-radius: 50%; background: #34a853;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--color-success);
   animation: wf-blink 1s infinite;
 }
 .wf-log-list {
@@ -306,9 +484,9 @@
 .wf-log-dot {
   width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
 }
-.wf-log-dot.success { background: #34a853; }
+.wf-log-dot.success { background: var(--color-success); }
 .wf-log-dot.running { background: var(--kway-blue); animation: wf-blink 1s infinite; }
-.wf-log-dot.failed { background: #ea4335; }
+.wf-log-dot.failed { background: var(--color-error); }
 .wf-log-name { font-weight: 600; flex: 1; }
 .wf-log-time { color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 
@@ -414,21 +592,21 @@
 }
 .wf-editor-btn-secondary:hover { background: var(--bg-hover); }
 .wf-editor-btn-danger {
-  background: var(--bg-surface); color: #ea4335; border-color: #ea4335;
+  background: var(--bg-surface); color: var(--color-error); border-color: var(--color-error);
 }
-.wf-editor-btn-danger:hover { background: #ea4335; color: #fff; }
+.wf-editor-btn-danger:hover { background: var(--color-error); color: #fff; }
 
 /* ── Delete Confirmation Modal ────────────────────────────── */
 .wf-delete-overlay {
   position: fixed; inset: 0; z-index: 9999;
-  background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center;
+  background: var(--overlay-bg); display: flex; align-items: center; justify-content: center;
 }
 .wf-delete-modal {
   background: var(--bg-surface, #fff); border-radius: 14px; padding: 28px 32px;
-  width: 420px; max-width: 90vw; box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  width: 420px; max-width: 90vw; box-shadow: var(--shadow-modal);
 }
 .wf-delete-modal h3 {
-  margin: 0 0 4px; font-size: 1rem; color: #ea4335;
+  margin: 0 0 4px; font-size: 1rem; color: var(--color-error);
 }
 .wf-delete-modal .wf-delete-skill-name {
   font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 16px;
@@ -442,7 +620,7 @@
   border-radius: 8px; padding: 8px 10px; font-size: 0.78rem; resize: vertical;
   font-family: inherit; box-sizing: border-box;
 }
-.wf-delete-modal textarea:focus { outline: none; border-color: #ea4335; }
+.wf-delete-modal textarea:focus { outline: none; border-color: var(--color-error); }
 .wf-delete-modal .wf-delete-hint {
   font-size: 0.65rem; color: var(--text-tertiary); margin: 4px 0 16px;
 }
@@ -458,7 +636,7 @@
 }
 .wf-delete-modal .wf-delete-cancel:hover { background: var(--bg-hover); }
 .wf-delete-modal .wf-delete-confirm {
-  background: #ea4335; color: #fff; border-color: #ea4335;
+  background: var(--color-error); color: #fff; border-color: var(--color-error);
 }
 .wf-delete-modal .wf-delete-confirm:hover { opacity: 0.9; }
 .wf-delete-modal .wf-delete-confirm:disabled {
@@ -468,11 +646,11 @@
 /* ── Save Status Modal ────────────────────────────────────── */
 .wf-save-overlay {
   position: fixed; inset: 0; z-index: 9999;
-  background: rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center;
+  background: var(--overlay-bg); display: flex; align-items: center; justify-content: center;
 }
 .wf-save-modal {
   background: var(--bg-surface, #fff); border-radius: 14px; padding: 20px 28px 18px;
-  width: 180px; text-align: center; box-shadow: 0 12px 40px rgba(0,0,0,0.18);
+  width: 180px; text-align: center; box-shadow: var(--shadow-modal);
   animation: wfSaveIn 0.25s ease-out;
 }
 @keyframes wfSaveIn {
@@ -510,7 +688,7 @@
 }
 .wf-save-modal .wf-save-ok:hover { opacity: 0.9; }
 .wf-save-modal .wf-save-error {
-  margin-top: 10px; font-size: 0.72rem; color: #ea4335; font-weight: 600;
+  margin-top: 10px; font-size: 0.72rem; color: var(--color-error); font-weight: 600;
 }
 .wf-save-modal .wf-save-error button {
   margin-top: 8px; padding: 6px 24px; border-radius: 8px;
@@ -571,7 +749,7 @@
   cursor: pointer; color: var(--text-tertiary); background: none; border: none;
   font-size: 0.8rem; padding: 0 4px;
 }
-.wf-editor-file-del:hover { color: #ea4335; }
+.wf-editor-file-del:hover { color: var(--color-error); }
 
 /* Test chat pane */
 .wf-test-header {
@@ -670,14 +848,14 @@
   background: rgba(13,110,253,0.08); padding: 1px 6px; border-radius: 4px;
 }
 .wf-param-card-required {
-  font-size: 0.55rem; font-weight: 700; color: #ea4335;
+  font-size: 0.55rem; font-weight: 700; color: var(--color-error);
   background: rgba(234,67,53,0.08); padding: 1px 5px; border-radius: 3px;
 }
 .wf-param-card-del {
   cursor: pointer; color: var(--text-tertiary); background: none; border: none;
   font-size: 0.85rem; padding: 0 4px; line-height: 1;
 }
-.wf-param-card-del:hover { color: #ea4335; }
+.wf-param-card-del:hover { color: var(--color-error); }
 .wf-param-card-row {
   display: flex; gap: 6px; margin-bottom: 4px;
 }
@@ -711,14 +889,14 @@
 /* ── Confirm Dialog ──────────────────────────────────────────── */
 .wf-confirm-overlay {
   position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  background: rgba(0,0,0,0.3); z-index: 9000;
+  background: var(--overlay-bg); z-index: 9000;
   display: flex; align-items: center; justify-content: center;
   animation: wf-fadeIn 0.15s ease;
 }
 .wf-confirm-box {
   background: var(--bg-surface); border-radius: 16px;
   padding: 28px 32px; min-width: 320px; max-width: 400px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  box-shadow: var(--shadow-modal);
   text-align: center;
 }
 .wf-confirm-icon { font-size: 2rem; margin-bottom: 10px; }
@@ -737,7 +915,7 @@
 }
 .wf-confirm-cancel:hover { background: var(--bg-hover); }
 .wf-confirm-ok {
-  background: #ea4335; color: #fff;
+  background: var(--color-error); color: #fff;
 }
 .wf-confirm-ok:hover { opacity: 0.9; }
 @keyframes wf-fadeIn { from { opacity: 0; } to { opacity: 1; } }
@@ -747,3 +925,306 @@
 @keyframes wf-block-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
 @keyframes wf-flow { to { stroke-dashoffset: -12; } }
 @keyframes wf-slideIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+/* ── Settings Modal ─────────────────────────────────────────── */
+.wf-settings-overlay {
+  display: none; position: fixed; inset: 0; z-index: 9000;
+  background: var(--overlay-bg); align-items: center; justify-content: center;
+}
+.wf-settings-overlay.open { display: flex; }
+.wf-settings-modal {
+  background: var(--bg-surface, #fff); border-radius: 16px;
+  width: 580px; max-width: 90vw; max-height: 85vh;
+  display: flex; flex-direction: column;
+  box-shadow: var(--shadow-modal);
+  animation: wfSaveIn 0.2s ease-out;
+}
+.wf-settings-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px 12px; font-size: 0.92rem; font-weight: 700;
+  color: var(--text-primary); border-bottom: 1px solid var(--border-subtle);
+}
+.wf-settings-close {
+  background: none; border: none; font-size: 1.2rem;
+  color: var(--text-tertiary); cursor: pointer; line-height: 1;
+}
+.wf-settings-close:hover { color: var(--text-primary); }
+.wf-settings-tabs {
+  display: flex; gap: 0; padding: 0 20px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.wf-settings-tab {
+  padding: 10px 16px; background: none; border: none; border-bottom: 2px solid transparent;
+  font-size: 0.76rem; font-weight: 600; color: var(--text-tertiary);
+  cursor: pointer; transition: color 0.15s, border-color 0.15s;
+}
+.wf-settings-tab:hover { color: var(--text-primary); }
+.wf-settings-tab.active {
+  color: var(--kway-blue); border-bottom-color: var(--kway-blue);
+}
+.wf-settings-body {
+  flex: 1; overflow-y: auto; padding: 16px 20px;
+}
+.wf-settings-footer {
+  display: flex; justify-content: flex-end; gap: 8px;
+  padding: 12px 20px; border-top: 1px solid var(--border-subtle);
+}
+.wf-settings-btn-primary {
+  padding: 7px 24px; border-radius: 8px; font-size: 0.76rem; font-weight: 600;
+  background: var(--kway-blue); color: #fff; border: none; cursor: pointer;
+  transition: opacity 0.15s;
+}
+.wf-settings-btn-primary:hover { opacity: 0.9; }
+.wf-settings-btn-secondary {
+  padding: 7px 24px; border-radius: 8px; font-size: 0.76rem; font-weight: 600;
+  background: var(--bg-surface); color: var(--text-secondary); border: 1px solid var(--border-subtle);
+  cursor: pointer; transition: background 0.15s;
+}
+.wf-settings-btn-secondary:hover { background: var(--bg-hover); }
+.wf-settings-field { margin-bottom: 14px; }
+.wf-settings-field > label {
+  display: block; font-size: 0.7rem; font-weight: 600;
+  color: var(--text-secondary); margin-bottom: 4px;
+}
+.wf-settings-field input[type="text"],
+.wf-settings-field input[type="number"],
+.wf-settings-field select,
+.wf-settings-field textarea {
+  width: 100%; padding: 7px 10px;
+  border: 1px solid var(--border-subtle); border-radius: 8px;
+  font-size: 0.76rem; font-family: inherit;
+  background: var(--bg-main); color: var(--text-primary);
+  box-sizing: border-box;
+}
+.wf-settings-field input:focus,
+.wf-settings-field select:focus,
+.wf-settings-field textarea:focus {
+  outline: none; border-color: var(--kway-blue);
+  box-shadow: 0 0 0 2px rgba(13,110,253,0.1);
+}
+.wf-settings-field textarea { min-height: 60px; resize: vertical; }
+.wf-settings-hint {
+  font-size: 0.62rem; color: var(--text-tertiary); margin-top: 3px;
+}
+.wf-settings-toggle-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 0.76rem; font-weight: 500; color: var(--text-primary);
+  cursor: pointer;
+}
+.wf-settings-toggle-label input[type="checkbox"] {
+  width: 16px; height: 16px; accent-color: var(--kway-blue);
+}
+
+/* ── Variable Cards ─────────────────────────────────────────── */
+.wf-var-header {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+}
+.wf-var-title { font-size: 0.76rem; font-weight: 700; color: var(--text-secondary); }
+.wf-var-count {
+  font-size: 0.62rem; color: var(--text-tertiary);
+  background: var(--bg-hover); border-radius: 8px; padding: 2px 8px;
+}
+.wf-var-add-btn {
+  margin-left: auto; padding: 4px 12px; border-radius: 6px;
+  background: var(--kway-blue); color: #fff; border: none;
+  font-size: 0.68rem; font-weight: 600; cursor: pointer;
+}
+.wf-var-add-btn:hover { opacity: 0.85; }
+.wf-var-add-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.wf-var-list { display: flex; flex-direction: column; gap: 8px; }
+.wf-var-card {
+  background: var(--bg-sidebar); border: 1px solid var(--border-subtle);
+  border-radius: 10px; padding: 10px 12px;
+}
+.wf-var-card:hover { border-color: var(--kway-blue); }
+.wf-var-card-row {
+  display: flex; gap: 8px; align-items: flex-end; margin-bottom: 6px;
+}
+.wf-var-card-row:last-child { margin-bottom: 0; }
+.wf-var-card-field { display: flex; flex-direction: column; }
+.wf-var-card-field label {
+  font-size: 0.6rem; font-weight: 600; color: var(--text-tertiary); margin-bottom: 2px;
+}
+.wf-var-card-field input,
+.wf-var-card-field select {
+  padding: 5px 8px; border: 1px solid var(--border-subtle); border-radius: 6px;
+  font-size: 0.72rem; background: var(--bg-surface); color: var(--text-primary);
+  box-sizing: border-box;
+}
+.wf-var-card-field input:focus,
+.wf-var-card-field select:focus {
+  outline: none; border-color: var(--kway-blue);
+}
+.wf-var-card-del {
+  background: none; border: none; color: var(--text-tertiary);
+  font-size: 1rem; cursor: pointer; padding: 0 4px; line-height: 1;
+  align-self: center;
+}
+.wf-var-card-del:hover { color: var(--color-error); }
+.wf-var-card-check {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 0.68rem; color: var(--text-secondary); cursor: pointer;
+}
+.wf-var-card-check input { width: 14px; height: 14px; accent-color: var(--kway-blue); }
+.wf-var-system-section { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.wf-var-system-title {
+  font-size: 0.68rem; font-weight: 700; color: var(--text-tertiary); margin-bottom: 8px;
+}
+.wf-var-system-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.wf-var-system-tag {
+  padding: 3px 10px; border-radius: 6px;
+  background: var(--bg-hover); color: var(--text-secondary);
+  font-size: 0.65rem; font-family: monospace;
+}
+
+/* ── Property Panel Tabs ────────────────────────────────────── */
+.wf-prop-tabs {
+  display: flex; border-bottom: 1px solid var(--border-subtle); margin-bottom: 8px;
+}
+.wf-prop-tab {
+  flex: 1; padding: 7px 0; background: none; border: none;
+  border-bottom: 2px solid transparent;
+  font-size: 0.68rem; font-weight: 600; color: var(--text-tertiary);
+  cursor: pointer; text-align: center; transition: color 0.15s;
+}
+.wf-prop-tab:hover { color: var(--text-primary); }
+.wf-prop-tab.active { color: var(--kway-blue); border-bottom-color: var(--kway-blue); }
+.wf-prop-tab-body { padding: 0 2px; }
+
+/* ── Param Mapping Cards (in property panel) ────────────────── */
+.wf-param-map-card {
+  margin-bottom: 8px; padding: 6px 8px;
+  background: var(--bg-sidebar); border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+}
+.wf-param-map-card:hover { border-color: var(--kway-blue); }
+.wf-param-map-name {
+  font-size: 0.68rem; font-weight: 700; color: var(--text-primary); margin-bottom: 4px;
+}
+.wf-param-map-row {
+  display: flex; gap: 6px; align-items: center;
+}
+.wf-param-map-source {
+  flex: 0 0 auto; padding: 3px 6px;
+  border: 1px solid var(--border-subtle); border-radius: 5px;
+  font-size: 0.65rem; background: var(--bg-surface); color: var(--text-primary);
+}
+.wf-param-map-val {
+  flex: 1; padding: 3px 6px;
+  border: 1px solid var(--border-subtle); border-radius: 5px;
+  font-size: 0.65rem; background: var(--bg-surface); color: var(--text-primary);
+}
+.wf-param-map-auto-hint {
+  font-size: 0.62rem; color: var(--text-tertiary); font-style: italic;
+}
+.wf-param-schema-hint {
+  background: #f0f7ff; border: 1px solid #c3daf9; border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 6px;
+}
+.wf-param-schema-hint code {
+  background: #deeeff; border-radius: 3px; padding: 1px 4px;
+  font-size: 0.68rem; font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+/* ── Workflow Card Delete Button ─────────────────────────────── */
+.wf-landing-card-header { position: relative; }
+
+.wf-card-delete-btn {
+  position: absolute; top: 6px; right: 6px;
+  width: 22px; height: 22px;
+  border: none; border-radius: 50%;
+  background: rgba(0,0,0,0.25);
+  color: #fff; font-size: 0.65rem; line-height: 1;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity 0.15s, background 0.15s;
+  padding: 0;
+}
+.wf-landing-card:hover .wf-card-delete-btn { opacity: 1; }
+.wf-card-delete-btn:hover { background: rgba(220,38,38,0.85) !important; opacity: 1; }
+
+/* ── New Workflow Scope Picker Dialog ─────────────────────────── */
+.wf-scope-overlay {
+  position: fixed; inset: 0; z-index: 9000;
+  background: rgba(0,0,0,0.45); backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+  animation: wfScopeFadeIn 0.18s ease;
+}
+@keyframes wfScopeFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.wf-scope-modal {
+  background: var(--bg-surface, #fff);
+  border-radius: 18px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.18), 0 4px 16px rgba(0,0,0,0.08);
+  padding: 28px 28px 22px;
+  width: 480px; max-width: 92vw;
+  animation: wfScopeSlideUp 0.22s cubic-bezier(0.34,1.56,0.64,1);
+}
+@keyframes wfScopeSlideUp {
+  from { transform: translateY(24px) scale(0.97); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+.wf-scope-modal-title {
+  font-size: 1.05rem; font-weight: 700; color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.wf-scope-modal-sub {
+  font-size: 0.78rem; color: var(--text-tertiary);
+  margin-bottom: 20px;
+}
+.wf-scope-cards {
+  display: flex; gap: 12px; flex-direction: column;
+}
+.wf-scope-card {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 14px 16px;
+  border: 1.5px solid var(--border-subtle, #E2E8F0);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
+  background: var(--bg-main, #F8F9FB);
+  user-select: none;
+}
+.wf-scope-card:not(.disabled):hover {
+  border-color: var(--kway-blue, #4A90D9);
+  background: var(--bg-surface, #fff);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(74,144,217,0.12);
+}
+.wf-scope-card:not(.disabled):active {
+  transform: translateY(0);
+}
+.wf-scope-card.disabled {
+  opacity: 0.45; cursor: not-allowed; filter: grayscale(0.3);
+}
+.wf-scope-card-icon {
+  font-size: 1.6rem; line-height: 1; flex-shrink: 0; margin-top: 2px;
+}
+.wf-scope-card-body { flex: 1; }
+.wf-scope-card-name {
+  font-size: 0.9rem; font-weight: 700; color: var(--text-primary); margin-bottom: 3px;
+}
+.wf-scope-card-path {
+  font-size: 0.7rem; color: var(--text-tertiary);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  margin-bottom: 4px;
+}
+.wf-scope-card-desc {
+  font-size: 0.75rem; color: var(--text-secondary);
+}
+.wf-scope-card-lock {
+  font-size: 0.68rem; color: #e53e3e; background: #fff5f5;
+  border: 1px solid #fed7d7; border-radius: 6px;
+  padding: 2px 7px; margin-top: 4px; display: inline-block;
+}
+.wf-scope-modal-footer {
+  margin-top: 18px; display: flex; justify-content: flex-end;
+}
+.wf-scope-cancel-btn {
+  padding: 7px 18px; border-radius: 8px;
+  border: 1px solid var(--border-subtle); background: transparent;
+  color: var(--text-secondary); font-size: 0.82rem; cursor: pointer;
+  transition: background 0.12s;
+}
+.wf-scope-cancel-btn:hover { background: var(--bg-main, #F8F9FB); }

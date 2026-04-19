@@ -230,11 +230,44 @@ class OpenAIAdapter:
         # Only force tool use when BOTH creation intent AND format are specified
         # BUT: if user requests ≥2 different formats, do NOT force — let LLM plan sequentially
         force_tool_use = has_creation_intent and has_format_specified and not _multi_format
+        _tool_names = {t.get("name", "") for t in tools}
+
+        # Force tool use for audio -> meeting -> todo/notion requests.
+        # This prevents the model from replying with text-only plans when skills are required.
+        _meeting_todo_intent = (
+            bool(user_query)
+            and any(kw in _query_lower for kw in ("錄音", "音檔", "audio", "transcribe", "逐字稿"))
+            and any(kw in _query_lower for kw in ("todo", "to do", "待辦", "notion", "上傳", "寫入", "匯入"))
+        )
+        _meeting_pipeline_tools_ready = (
+            "mcp-transcribe" in _tool_names
+            and "mcp-meeting-analyzer" in _tool_names
+        )
+        force_pipeline_tool_use = _meeting_todo_intent and _meeting_pipeline_tools_ready
+        force_tool_use = force_tool_use or force_pipeline_tool_use
+        _notion_tool_ready = "mcp-notion-crud" in _tool_names
+        _notion_anchor_keywords = ("notion", "todo", "to do", "任務", "待辦", "待辦事項", "清單", "紀錄")
+        _notion_action_keywords = ("查詢", "列出", "刪除", "封存", "更新", "幾筆", "總共")
+        _notion_index_action = ("刪除第" in _query_lower) or ("更新第" in _query_lower)
+        force_notion_tool_use = (
+            bool(user_query)
+            and _notion_tool_ready
+            and (
+                (
+                    any(kw in _query_lower for kw in _notion_anchor_keywords)
+                    and any(kw in _query_lower for kw in _notion_action_keywords)
+                )
+                or _notion_index_action
+            )
+        )
+        force_tool_use = force_tool_use or force_notion_tool_use
 
         logger.info(
             f"[OpenAI Adapter] Tools: {len(tools)} injected "
             f"({[t.get('name') for t in tools]}), "
-            f"force_tool_use={force_tool_use}"
+            f"force_tool_use={force_tool_use}, "
+            f"force_pipeline_tool_use={force_pipeline_tool_use}, "
+            f"force_notion_tool_use={force_notion_tool_use}"
         )
 
         # We will track the latest response id generated in this multi-round loop
@@ -344,21 +377,31 @@ class OpenAIAdapter:
                         raise e  # Fatal or retries exhausted
 
                 if tool_calls_dict:
-                    # ── Serial execution: process only ONE tool call per round ──
-                    # If the LLM emits multiple function_calls in a single response
-                    # (e.g. "produce PDF and DOCX"), execute only the first one now
-                    # and defer the rest to the next iteration. This reduces API
-                    # complexity per round and avoids OpenAI 500 errors.
+                    # ── Serial execution: process all tool calls in current round ──
+                    # If one call fails, subsequent calls in the same round are marked
+                    # as skipped to avoid contradictory state updates.
                     _tc_items = list(tool_calls_dict.items())
                     if len(_tc_items) > 1:
-                        logger.info(f"[OpenAI Adapter] {len(_tc_items)} tool calls in one round — serialising: execute first, defer rest")
-                    _deferred_calls = _tc_items[1:]  # Will be sent as stub results
+                        logger.info(f"[OpenAI Adapter] {len(_tc_items)} tool calls in one round — serialising in current round")
 
                     tool_results = []
-                    for item_id, tc_data in _tc_items[:1]:  # Execute only the first
+                    _blocked_reason = None
+                    for item_id, tc_data in _tc_items:
                         fn_name = tc_data.get("name")
                         fn_args_str = tc_data.get("arguments", "{}")
                         call_id = tc_data.get("call_id") or item_id
+
+                        if _blocked_reason:
+                            tool_results.append({
+                                "type": "function_call_output",
+                                "call_id": call_id,
+                                "output": json.dumps({
+                                    "status": "skipped",
+                                    "reason": _blocked_reason,
+                                    "message": "Skipped due to a prior tool-call error in the same round."
+                                }, ensure_ascii=False)
+                            })
+                            continue
                         
                         import json
                         try:
@@ -375,21 +418,69 @@ class OpenAIAdapter:
                         if _orig_path:
                             import os as _os
                             if _os.path.exists(_orig_path):
+                                _audio_exts = {".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".opus", ".webm"}
+                                _orig_ext = _os.path.splitext(_orig_path)[1].lower()
                                 # Always inject file path for all skills
                                 fn_args.setdefault("_original_file_path", _orig_path)
                                 fn_args.setdefault("_original_filename", _session_mgr.get_metadata(session_id, "last_original_filename") or "")
                                 if _orig_date:
                                     fn_args.setdefault("meeting_date", _orig_date)
+                                # For transcribe: ensure file_path is a real, existing path.
+                                # Some model outputs use placeholders like "<please provide path>".
+                                # Also recover from relative/bare filenames that do not exist
+                                # in current working directory by falling back to the uploaded
+                                # original audio path captured in session metadata.
+                                if fn_name == "mcp-transcribe" and _orig_ext in _audio_exts:
+                                    _raw_fp = fn_args.get("file_path")
+                                    _fp = str(_raw_fp).strip() if _raw_fp is not None else ""
+                                    _fp = _fp.strip("`\"' ")
+                                    _fp_exists = False
+                                    if _fp:
+                                        _fp_exists = _os.path.exists(_fp)
+                                        if not _fp_exists:
+                                            try:
+                                                _fp_exists = _os.path.exists(_os.path.abspath(_fp))
+                                            except Exception:
+                                                _fp_exists = False
+                                    _fp_lower = _fp.lower()
+                                    _placeholder_markers = (
+                                        "path/to",
+                                        "c:/path",
+                                        "file_path",
+                                        "absolute path",
+                                        "your audio",
+                                        "your file",
+                                        "請提供",
+                                    )
+                                    _looks_placeholder = (
+                                        (not _fp)
+                                        or _fp.startswith("<")
+                                        or _fp.endswith(">")
+                                        or ("{" in _fp and "}" in _fp)
+                                        or any(marker in _fp_lower for marker in _placeholder_markers)
+                                    )
+                                    _needs_recovery = (not _fp_exists) and bool(_orig_path)
+                                    if _needs_recovery:
+                                        fn_args["file_path"] = _orig_path
+                                        if _looks_placeholder:
+                                            logger.info(
+                                                f"[Adapter] Replaced invalid transcribe file_path with original audio path: {_orig_path}"
+                                            )
+                                        else:
+                                            logger.info(
+                                                f"[Adapter] Replaced non-existing transcribe file_path '{_fp}' with original audio path: {_orig_path}"
+                                            )
                                 # For meeting-analyzer: inject full transcript text
                                 if fn_name == "mcp-meeting-analyzer":
-                                    try:
-                                        with open(_orig_path, "r", encoding="utf-8") as _f:
-                                            _original_text = _f.read()
-                                        if _original_text and len(_original_text) > len(fn_args.get("transcript", "")):
-                                            fn_args["transcript"] = _original_text
-                                            logger.info(f"[Adapter] Injected original file ({len(_original_text)} chars) into mcp-meeting-analyzer transcript")
-                                    except Exception as _e:
-                                        logger.warning(f"[Adapter] Failed to inject original file: {_e}")
+                                    if _orig_ext not in _audio_exts:
+                                        try:
+                                            with open(_orig_path, "r", encoding="utf-8") as _f:
+                                                _original_text = _f.read()
+                                            if _original_text and len(_original_text) > len(fn_args.get("transcript", "")):
+                                                fn_args["transcript"] = _original_text
+                                                logger.info(f"[Adapter] Injected original file ({len(_original_text)} chars) into mcp-meeting-analyzer transcript")
+                                        except Exception as _e:
+                                            logger.warning(f"[Adapter] Failed to inject original file: {_e}")
 
                         # For meeting-analyzer: fallback to user_query if transcript still empty
                         if fn_name == "mcp-meeting-analyzer" and not fn_args.get("transcript") and user_query:
@@ -484,6 +575,8 @@ class OpenAIAdapter:
                             "output": result_str
                         })
                         tool_calls_made += 1
+                        if isinstance(result, dict) and str(result.get("status", "")).lower() == "error":
+                            _blocked_reason = f"previous_call_error:{fn_name}"
 
                         # ── Phase D1: Token Usage Tracking ─────────────────────
                         try:
@@ -514,15 +607,6 @@ class OpenAIAdapter:
                             )
                         except Exception as _d1e:
                             logger.debug(f"[D1] Token tracking failed: {_d1e}")
-
-                    # ── Deferred tool calls: return placeholder so LLM re-plans ──
-                    for _def_id, _def_tc in _deferred_calls:
-                        _def_call_id = _def_tc.get("call_id") or _def_id
-                        tool_results.append({
-                            "type": "function_call_output",
-                            "call_id": _def_call_id,
-                            "output": json.dumps({"status": "deferred", "message": "此工具呼叫已排入下一輪執行，請先處理目前的結果，再繼續呼叫。"}, ensure_ascii=False)
-                        })
 
                     input_payload = tool_results
                     continue

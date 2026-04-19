@@ -337,3 +337,43 @@ async def approve_tool_call(session_id: str):
 def reject_tool_call(session_id: str):
     task = _get_active_task_for_session(session_id)
     return reject_tool_call_by_task(task["task_id"])
+
+
+# ── Stop / Cancel ──────────────────────────────────────────────────────────
+
+@router.post("/chat/stop/{task_id}")
+def stop_single_task(task_id: str):
+    """Cancel a specific task by id."""
+    task_registry = get_task_registry()
+    task = task_registry.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.get("status") in task_registry.TERMINAL_STATUSES:
+        return {"status": "already_terminal", "task_id": task_id, "final_status": task.get("status")}
+    task_registry.mark_cancelled(task_id, reason="user_stop")
+    logger.info(f"[Stop] task={task_id} session={task.get('session_id')}")
+    return {"status": "cancelled", "task_id": task_id, "session_id": task.get("session_id", "")}
+
+
+@router.post("/chat/stop_all/{session_id}")
+def stop_all_for_session(session_id: str):
+    """Cancel all active tasks for a session — used when user clicks the
+    stop button in the UI to immediately regain control.
+
+    Returns count of cancelled tasks.
+    """
+    task_registry = get_task_registry()
+    active = task_registry.list_active_for_session(session_id)
+    cancelled_ids = []
+    for t in active:
+        tid = t.get("task_id", "")
+        if tid:
+            task_registry.mark_cancelled(tid, reason="user_stop_all")
+            cancelled_ids.append(tid)
+    logger.info(f"[StopAll] session={session_id} cancelled {len(cancelled_ids)} task(s)")
+    return {
+        "status": "success",
+        "session_id": session_id,
+        "cancelled_count": len(cancelled_ids),
+        "cancelled_task_ids": cancelled_ids,
+    }

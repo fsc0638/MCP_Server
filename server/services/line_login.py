@@ -26,12 +26,47 @@ class _StateStore:
     def __init__(self):
         # state -> (nonce, expires_at)
         self._store: Dict[str, Tuple[str, float]] = {}
+        self._disk_path = self._get_disk_path()
+        self._load_from_disk()
+
+    @staticmethod
+    def _get_disk_path():
+        import os
+        from pathlib import Path
+        pr = os.getenv("PROJECT_ROOT", str(Path(__file__).resolve().parents[2]))
+        p = Path(pr) / "workspace" / ".line_state_store.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def _load_from_disk(self):
+        import json
+        if not self._disk_path.exists():
+            return
+        try:
+            data = json.loads(self._disk_path.read_text(encoding="utf-8"))
+            now = time.time()
+            for state, (nonce, exp) in data.items():
+                if exp > now:
+                    self._store[state] = (nonce, exp)
+        except Exception:
+            pass
+
+    def _persist_to_disk(self):
+        import json
+        now = time.time()
+        data = {s: list(v) for s, v in self._store.items() if v[1] > now}
+        try:
+            self._disk_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            pass
 
     def put(self, state: str, nonce: str, ttl_seconds: int = 600) -> None:
         self._store[state] = (nonce, time.time() + ttl_seconds)
+        self._persist_to_disk()
 
     def pop(self, state: str) -> Optional[str]:
         item = self._store.pop(state, None)
+        self._persist_to_disk()
         if not item:
             return None
         nonce, exp = item

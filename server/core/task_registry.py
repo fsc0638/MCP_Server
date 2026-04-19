@@ -17,7 +17,7 @@ class TaskRegistry:
     """Persist and manage task-scoped chat execution state."""
 
     ACTIVE_STATUSES = {"running", "tool_call", "requires_approval", "approved"}
-    TERMINAL_STATUSES = {"completed", "error", "rejected"}
+    TERMINAL_STATUSES = {"completed", "error", "rejected", "cancelled"}
 
     def __init__(self, project_root: str):
         self.project_root = Path(project_root)
@@ -176,6 +176,30 @@ class TaskRegistry:
 
     def mark_rejected(self, task_id: str, message: str = "") -> Optional[Dict[str, Any]]:
         return self.update_task(task_id, status="rejected", error=message or "")
+
+    def mark_cancelled(self, task_id: str, reason: str = "user_cancelled") -> Optional[Dict[str, Any]]:
+        """Mark a task as cancelled by the user. SSE generator polls this via
+        is_cancelled() and breaks out cleanly."""
+        return self.update_task(
+            task_id,
+            status="cancelled",
+            error=reason or "user_cancelled",
+        )
+
+    def is_cancelled(self, task_id: str) -> bool:
+        """Fast check used by streaming generators to know when to stop."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            return bool(task) and task.get("status") == "cancelled"
+
+    def list_active_for_session(self, session_id: str) -> List[Dict[str, Any]]:
+        """Return all non-terminal tasks for a session (used by stop_all)."""
+        with self._lock:
+            return [
+                dict(task) for task in self._tasks.values()
+                if task.get("session_id") == session_id
+                and task.get("status") in self.ACTIVE_STATUSES
+            ]
 
     def list_tasks_for_session(
         self,
