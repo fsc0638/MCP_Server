@@ -61,13 +61,22 @@
   const sendBtn = document.getElementById("sendBtn");
   const modelName = document.getElementById("modelName");
   const chatTitleText = document.getElementById("chatTitleText");
+  const chatRoot = document.querySelector(".page-chat-root");
   const chatBody = document.getElementById("chatBody");
   const primaryNavToggleButtons = [
     document.getElementById("chatPrimaryNavToggle"),
     document.getElementById("chatPrimaryNavInlineToggle"),
   ].filter(Boolean);
+  const columnResizerHandles = Array.from(document.querySelectorAll(".page-chat-column-resizer"));
   const PRIMARY_NAV_COLLAPSED_KEY = "kway_chat_primary_nav_collapsed";
+  const CHAT_DESKTOP_LAYOUT_KEY = "kway_chat_desktop_layout";
+  const DESKTOP_LAYOUT_MEDIA = window.matchMedia("(min-width: 1101px)");
+  const DEFAULT_DESKTOP_LAYOUT = { nav: 96, left: 240, right: 276 };
+  const MIN_DESKTOP_LAYOUT = { nav: 72, left: 200, right: 220, main: 420 };
+  const MAX_DESKTOP_LAYOUT = { nav: 180, left: 420, right: 420 };
   let isPrimaryNavCollapsed = true;
+  let desktopLayoutWidths = { ...DEFAULT_DESKTOP_LAYOUT };
+  let activeColumnResize = null;
   const initialWelcomeMarkup = (() => {
     const staticWelcome = document.getElementById("chatWelcome");
     if (!staticWelcome) return "";
@@ -80,6 +89,175 @@
     const stored = localStorage.getItem(key);
     if (stored === null) return fallbackValue;
     return stored === "1";
+  }
+
+  function clamp(value, minValue, maxValue) {
+    return Math.min(Math.max(value, minValue), maxValue);
+  }
+
+  function sanitizeWidth(value, fallbackValue) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallbackValue;
+    return numeric;
+  }
+
+  function readStoredDesktopLayout() {
+    try {
+      const raw = localStorage.getItem(CHAT_DESKTOP_LAYOUT_KEY);
+      if (!raw) return { ...DEFAULT_DESKTOP_LAYOUT };
+      const parsed = JSON.parse(raw);
+      return {
+        nav: sanitizeWidth(parsed.nav, DEFAULT_DESKTOP_LAYOUT.nav),
+        left: sanitizeWidth(parsed.left, DEFAULT_DESKTOP_LAYOUT.left),
+        right: sanitizeWidth(parsed.right, DEFAULT_DESKTOP_LAYOUT.right),
+      };
+    } catch (_err) {
+      return { ...DEFAULT_DESKTOP_LAYOUT };
+    }
+  }
+
+  function normalizeDesktopLayout(widths) {
+    const next = {
+      nav: clamp(
+        sanitizeWidth(widths && widths.nav, DEFAULT_DESKTOP_LAYOUT.nav),
+        MIN_DESKTOP_LAYOUT.nav,
+        MAX_DESKTOP_LAYOUT.nav
+      ),
+      left: clamp(
+        sanitizeWidth(widths && widths.left, DEFAULT_DESKTOP_LAYOUT.left),
+        MIN_DESKTOP_LAYOUT.left,
+        MAX_DESKTOP_LAYOUT.left
+      ),
+      right: clamp(
+        sanitizeWidth(widths && widths.right, DEFAULT_DESKTOP_LAYOUT.right),
+        MIN_DESKTOP_LAYOUT.right,
+        MAX_DESKTOP_LAYOUT.right
+      ),
+    };
+
+    if (!chatBody) return next;
+
+    const containerWidth = chatBody.getBoundingClientRect().width || 0;
+    if (!DESKTOP_LAYOUT_MEDIA.matches || !containerWidth) return next;
+
+    let overflow =
+      next.nav + next.left + next.right - Math.max(containerWidth - MIN_DESKTOP_LAYOUT.main, 0);
+
+    if (overflow > 0) {
+      const shrinkOrder = [
+        ["right", MIN_DESKTOP_LAYOUT.right],
+        ["left", MIN_DESKTOP_LAYOUT.left],
+        ["nav", MIN_DESKTOP_LAYOUT.nav],
+      ];
+
+      shrinkOrder.forEach(function (entry) {
+        const key = entry[0];
+        const minWidth = entry[1];
+        if (overflow <= 0) return;
+        const available = Math.max(0, next[key] - minWidth);
+        const reduction = Math.min(available, overflow);
+        next[key] -= reduction;
+        overflow -= reduction;
+      });
+    }
+
+    return next;
+  }
+
+  function clearDesktopLayoutStyles() {
+    if (!chatRoot) return;
+    chatRoot.style.removeProperty("--chat-nav-width-expanded");
+    chatRoot.style.removeProperty("--chat-left-width");
+    chatRoot.style.removeProperty("--chat-right-width");
+  }
+
+  function applyDesktopLayout(widths, options) {
+    const opts = options || {};
+    const normalized = normalizeDesktopLayout(widths || desktopLayoutWidths);
+    desktopLayoutWidths = normalized;
+
+    if (!DESKTOP_LAYOUT_MEDIA.matches) {
+      clearDesktopLayoutStyles();
+      return normalized;
+    }
+
+    if (chatRoot) {
+      chatRoot.style.setProperty("--chat-nav-width-expanded", normalized.nav + "px");
+      chatRoot.style.setProperty("--chat-left-width", normalized.left + "px");
+      chatRoot.style.setProperty("--chat-right-width", normalized.right + "px");
+    }
+
+    if (opts.persist !== false) {
+      localStorage.setItem(CHAT_DESKTOP_LAYOUT_KEY, JSON.stringify(normalized));
+    }
+
+    return normalized;
+  }
+
+  function getVisiblePrimaryNavWidth() {
+    return isPrimaryNavCollapsed ? 0 : desktopLayoutWidths.nav;
+  }
+
+  function stopColumnResize() {
+    if (!activeColumnResize) return;
+    activeColumnResize = null;
+    if (chatBody) {
+      chatBody.classList.remove("is-layout-resizing");
+    }
+    window.removeEventListener("pointermove", handleColumnResizeMove);
+    window.removeEventListener("pointerup", stopColumnResize);
+    window.removeEventListener("pointercancel", stopColumnResize);
+    applyDesktopLayout(desktopLayoutWidths);
+  }
+
+  function handleColumnResizeMove(event) {
+    if (!activeColumnResize || !chatBody || !DESKTOP_LAYOUT_MEDIA.matches) return;
+
+    const rect = chatBody.getBoundingClientRect();
+    const pointerOffset = clamp(event.clientX - rect.left, 0, rect.width);
+    const nextLayout = { ...desktopLayoutWidths };
+    const visibleNavWidth = getVisiblePrimaryNavWidth();
+
+    if (activeColumnResize.edge === "nav") {
+      nextLayout.nav = pointerOffset;
+    } else if (activeColumnResize.edge === "left") {
+      nextLayout.left = pointerOffset - visibleNavWidth;
+    } else if (activeColumnResize.edge === "right") {
+      nextLayout.right = rect.width - pointerOffset;
+    }
+
+    applyDesktopLayout(nextLayout, { persist: false });
+  }
+
+  function startColumnResize(event) {
+    if (!DESKTOP_LAYOUT_MEDIA.matches || !chatBody) return;
+
+    const handle = event.currentTarget;
+    const edge = handle && handle.dataset ? handle.dataset.resizeEdge : "";
+    if (!edge) return;
+
+    activeColumnResize = { edge: edge };
+    chatBody.classList.add("is-layout-resizing");
+    if (typeof handle.setPointerCapture === "function") {
+      handle.setPointerCapture(event.pointerId);
+    }
+
+    window.addEventListener("pointermove", handleColumnResizeMove);
+    window.addEventListener("pointerup", stopColumnResize);
+    window.addEventListener("pointercancel", stopColumnResize);
+    event.preventDefault();
+  }
+
+  function handleDesktopLayoutResize() {
+    if (activeColumnResize) {
+      stopColumnResize();
+    }
+
+    if (DESKTOP_LAYOUT_MEDIA.matches) {
+      applyDesktopLayout(desktopLayoutWidths, { persist: false });
+    } else {
+      clearDesktopLayoutStyles();
+    }
   }
 
   function applyPrimaryNavCollapsed(nextCollapsed, options) {
@@ -116,7 +294,19 @@
     });
   });
 
+  columnResizerHandles.forEach(function (handle) {
+    handle.addEventListener("pointerdown", startColumnResize);
+  });
+
   applyPrimaryNavCollapsed(readStoredBoolean(PRIMARY_NAV_COLLAPSED_KEY, true), { persist: false });
+  desktopLayoutWidths = normalizeDesktopLayout(readStoredDesktopLayout());
+  applyDesktopLayout(desktopLayoutWidths, { persist: false });
+  window.addEventListener("resize", handleDesktopLayoutResize);
+  if (typeof DESKTOP_LAYOUT_MEDIA.addEventListener === "function") {
+    DESKTOP_LAYOUT_MEDIA.addEventListener("change", handleDesktopLayoutResize);
+  } else if (typeof DESKTOP_LAYOUT_MEDIA.addListener === "function") {
+    DESKTOP_LAYOUT_MEDIA.addListener(handleDesktopLayoutResize);
+  }
 
   async function hydrateAuthFromServer() {
     try {
