@@ -936,7 +936,19 @@
         if (block && b.config) block.config = b.config;
       });
       // Store workflow-level data for settings (include name for display)
-      this._wfData = { name: data.name || "", description: data.description || "", icon: data.icon || "", tags: data.tags || [], trigger_keywords: data.trigger_keywords || [], variables: data.variables || [], trigger: data.trigger || {}, execution: data.execution || {}, security: data.security || {} };
+      // v2 files use display_name; legacy used name. Accept either so the
+      // settings modal doesn't ask user to re-enter the name.
+      this._wfData = {
+        name: data.display_name || data.name || "",
+        description: data.description || "",
+        icon: data.icon || "",
+        tags: data.tags || [],
+        trigger_keywords: data.trigger_keywords || (data.trigger && data.trigger.patterns) || [],
+        variables: data.variables || [],
+        trigger: data.trigger || {},
+        execution: data.execution || {},
+        security: data.security || {},
+      };
       // Map old IDs to new sequential IDs
       const idMap = new Map();
       let idx = 1;
