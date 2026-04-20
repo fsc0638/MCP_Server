@@ -3155,13 +3155,28 @@
       const rawSettings = localStorage.getItem("kway_settings");
       let language = "繁體中文";
       let detailLevel = "詳細";
+      let hasLocalLanguage = false;
       if (rawSettings) {
         try {
           const settings = JSON.parse(rawSettings);
-          language = settings.language || language;
+          if (typeof settings.language === "string" && settings.language.trim()) {
+            language = settings.language.trim();
+            hasLocalLanguage = true;
+          }
           detailLevel = settings.detail || detailLevel;
         } catch (_err) {
           // ignore malformed settings
+        }
+      }
+      if (!hasLocalLanguage) {
+        try {
+          const sessionUser = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+          const sessionLang = sessionUser?.preferences?.language;
+          if (typeof sessionLang === "string" && sessionLang.trim()) {
+            language = sessionLang.trim();
+          }
+        } catch (_err) {
+          // ignore malformed session user
         }
       }
 

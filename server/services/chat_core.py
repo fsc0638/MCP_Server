@@ -31,6 +31,75 @@ _USER_DOCUMENT_ACTION_ALIASES = {
     "todo": "todo",
     "tasks": "todo",
 }
+_ALLOWED_CHAT_LANGUAGES = {
+    "繁體中文",
+    "简体中文",
+    "English",
+    "日本語",
+    "한국어",
+    "自動偵測",
+}
+_LANGUAGE_CANONICAL_MAP = {
+    "繁體中文": "繁體中文",
+    "繁体中文": "繁體中文",
+    "traditional chinese": "繁體中文",
+    "zh-tw": "繁體中文",
+    "zh-hant": "繁體中文",
+    "简体中文": "简体中文",
+    "simplified chinese": "简体中文",
+    "zh-cn": "简体中文",
+    "zh-hans": "简体中文",
+    "english": "English",
+    "en": "English",
+    "日本語": "日本語",
+    "japanese": "日本語",
+    "ja": "日本語",
+    "한국어": "한국어",
+    "korean": "한국어",
+    "ko": "한국어",
+    "自動偵測": "自動偵測",
+    "自动侦测": "自動偵測",
+    "auto": "自動偵測",
+    "auto-detect": "自動偵測",
+}
+_DEFAULT_CHAT_LANGUAGE = "繁體中文"
+
+
+def _canonicalize_language(value: str | None) -> str | None:
+    if not value:
+        return None
+    token = str(value).strip()
+    if not token:
+        return None
+    if token in _ALLOWED_CHAT_LANGUAGES:
+        return token
+    mapped = _LANGUAGE_CANONICAL_MAP.get(token.lower())
+    if mapped in _ALLOWED_CHAT_LANGUAGES:
+        return mapped
+    return None
+
+
+def _extract_profile_language(user_context: dict | None) -> str | None:
+    if not isinstance(user_context, dict):
+        return None
+    prefs = user_context.get("preferences")
+    if isinstance(prefs, dict):
+        lang = _canonicalize_language(prefs.get("language"))
+        if lang:
+            return lang
+    return _canonicalize_language(user_context.get("language"))
+
+
+def _resolve_response_language(requested_language: str | None, user_context: dict | None) -> tuple[str, str]:
+    requested = _canonicalize_language(requested_language)
+    if requested and requested != "自動偵測":
+        return requested, "request"
+
+    profile = _extract_profile_language(user_context)
+    if profile and profile != "自動偵測":
+        return profile, "profile"
+
+    return _DEFAULT_CHAT_LANGUAGE, "default"
 
 
 def _is_audio_file_path(file_path: str | None) -> bool:
@@ -418,10 +487,23 @@ async def process_chat_native(req: ChatRequest):
         else:
             logger.warning(f"[DocTurn] Fallback to normal chat due to error: {doc_turn_error}")
 
-    logger.info(f"Chat Request: [Model: {req.model}] [Lang: {req.language}] [Detail: {req.detail_level}]")
+    requested_language = req.language
+    profile_language = _extract_profile_language(_user_context)
+    resolved_language, language_source = _resolve_response_language(requested_language, _user_context)
+    req.language = resolved_language
+
+    logger.info(
+        "Chat Request: [Model: %s] [Lang: %s] [Detail: %s] [LangReq: %s] [LangProfile: %s] [LangSource: %s]",
+        req.model,
+        resolved_language,
+        req.detail_level,
+        requested_language,
+        profile_language or "-",
+        language_source,
+    )
     dynamic_prompt = get_universal_system_prompt(
         platform="web",
-        language=req.language or "繁體中文",
+        language=resolved_language,
         detail_level=req.detail_level or "詳細",
     )
     logger.info(f"Generated Dynamic Prompt (Sample): {dynamic_prompt[:100]}... [MID] ...{dynamic_prompt[-100:]}")
@@ -599,12 +681,6 @@ async def process_chat_native(req: ChatRequest):
         skill_knowledge = uma.get_skill_knowledge(req.injected_skill)
         if skill_knowledge:
             user_content += f"\n\n[Skill Knowledge: {req.injected_skill}]\n{skill_knowledge}"
-
-    if req.language and req.language != "自動偵測":
-        user_content += (
-            f"\n\n(System Note: Respond strictly in {req.language}. "
-            "If input is in another language, translate your answer.)"
-        )
 
     if _upload_handoff:
         _file_name = os.path.basename(active_original_file) if active_original_file else "uploaded file"

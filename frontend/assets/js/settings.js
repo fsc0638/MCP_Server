@@ -45,6 +45,20 @@
     }
   }
 
+  function syncProfileLanguageToLocalSettings(language) {
+    const lang = (language || '').trim();
+    if (!lang) return;
+    try {
+      const raw = localStorage.getItem('kway_settings');
+      const settings = raw ? JSON.parse(raw) : {};
+      if (settings.language === lang) return;
+      settings.language = lang;
+      localStorage.setItem('kway_settings', JSON.stringify(settings));
+    } catch (err) {
+      console.warn('[settings] failed to sync profile language to local settings', err);
+    }
+  }
+
   function populateProfile(data) {
     userData = data;
     setAvatar(topbarAvatar, data);
@@ -72,6 +86,7 @@
     const langSel = document.getElementById('settingLanguageSelect');
     if (langSel && data.preferences?.language) {
       langSel.value = data.preferences.language;
+      syncProfileLanguageToLocalSettings(data.preferences.language);
     }
 
     // Update identity verification status
