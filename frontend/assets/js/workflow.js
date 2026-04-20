@@ -609,6 +609,18 @@
         await sleep(300);
       }
 
+      // Helper to clear animation on ANY exit path (error, gate block, success).
+      // Previously only the success path cleared it → blocks stayed spinning
+      // forever after a 422/428/network error. Capture in closure so every
+      // `return` below can call it.
+      const _clearRunningAnim = () => {
+        this.blocks.forEach(b => {
+          b.el.classList.remove("running");
+          b.el.querySelector(".wf-block-status")?.classList.remove("running");
+        });
+        this.connections.forEach(c => c.el.classList.remove("active-flow"));
+      };
+
       // Call backend execution with correct scope/owner.
       // Phase 2 Gate 1 flow:
       //   - 422 Unprocessable → env/skill problem, show hard error toast
@@ -627,6 +639,7 @@
             body: JSON.stringify({ initial_prompt: prompt, model: null, inputs: _userInputs }),
           });
         } catch (e) {
+          _clearRunningAnim();
           if (window.showToast) window.showToast("網路錯誤: " + e.message, "error");
           if (window._wfDashboard) window._wfDashboard.addLog(`「${wfName}」網路錯誤: ${e.message}`, "failed");
           return;
@@ -634,16 +647,18 @@
 
         // Handle Gate 1 soft-block (need user inputs)
         if (resp.status === 428) {
+          _clearRunningAnim();   // pause animation while wizard is up
           const ed = await resp.json().catch(() => ({}));
           const miss = ((ed.detail || {}).missing_inputs) || ed.missing_inputs || [];
           const collected = await _showInputsWizard(wfName, miss);
-          if (!collected) return;  // user cancelled
+          if (!collected) return;  // user cancelled — already cleared
           _userInputs = { ..._userInputs, ...collected };
-          continue;  // retry with inputs filled
+          continue;  // retry with inputs filled (animation will restart below on next pass? keep it simple: leave cleared)
         }
 
         // Handle Gate 0/1 hard-block
         if (resp.status === 422) {
+          _clearRunningAnim();
           const ed = await resp.json().catch(() => ({}));
           const det = ed.detail || {};
           const errs = det.errors || (Array.isArray(det) ? det : []);
@@ -656,6 +671,7 @@
         }
 
         if (!resp.ok) {
+          _clearRunningAnim();
           const txt = await resp.text().catch(() => "");
           if (window.showToast) window.showToast(`執行失敗 (${resp.status}): ${txt.slice(0, 120)}`, "error");
           return;
