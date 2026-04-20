@@ -59,6 +59,43 @@
     }
   }
 
+  async function persistLanguagePreference(language) {
+    const lang = (language || '').trim();
+    if (!lang) return false;
+    try {
+      const resp = await fetch('/api/auth/preferences', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language: lang }),
+      });
+      if (!resp.ok) return false;
+      const data = await resp.json();
+      if (data?.status !== 'success') return false;
+      try {
+        const sessionUser = JSON.parse(sessionStorage.getItem('kway_user') || '{}');
+        sessionUser.preferences = sessionUser.preferences || {};
+        sessionUser.preferences.language = data.preferences?.language || lang;
+        sessionStorage.setItem('kway_user', JSON.stringify(sessionUser));
+      } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function getLocalSettingsLanguage() {
+    try {
+      const raw = localStorage.getItem('kway_settings');
+      if (!raw) return '';
+      const settings = JSON.parse(raw);
+      const lang = (settings?.language || '').trim();
+      return lang;
+    } catch (_) {
+      return '';
+    }
+  }
+
   function populateProfile(data) {
     userData = data;
     setAvatar(topbarAvatar, data);
@@ -85,8 +122,18 @@
     // Language preference
     const langSel = document.getElementById('settingLanguageSelect');
     if (langSel && data.preferences?.language) {
-      langSel.value = data.preferences.language;
-      syncProfileLanguageToLocalSettings(data.preferences.language);
+      const serverLang = (data.preferences.language || '').trim();
+      const localLang = getLocalSettingsLanguage();
+
+      if (localLang && localLang !== serverLang) {
+        // Keep user-local language choice to avoid "value reverts on reopen".
+        langSel.value = localLang;
+        // Best effort: reconcile server preference in background.
+        void persistLanguagePreference(localLang);
+      } else {
+        langSel.value = serverLang;
+        syncProfileLanguageToLocalSettings(serverLang);
+      }
     }
 
     // Update identity verification status
@@ -527,7 +574,15 @@
   /* ── Auto-save on change ──────────────────────────────────── */
   const SETTINGS_KEY = 'kway_settings';
 
-  function saveSettings() {
+  async function saveSettings() {
+    const prevRaw = localStorage.getItem(SETTINGS_KEY);
+    let prevLanguage = '';
+    if (prevRaw) {
+      try {
+        prevLanguage = (JSON.parse(prevRaw)?.language || '').trim();
+      } catch (_) {}
+    }
+
     const settings = {
       model: document.getElementById('settingModelSelect')?.value,
       language: document.getElementById('settingLanguageSelect')?.value,
@@ -535,6 +590,16 @@
       finance: document.getElementById('settingFinanceToggle')?.checked
     };
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+
+    const nextLanguage = (settings.language || '').trim();
+    if (nextLanguage && nextLanguage !== prevLanguage) {
+      const ok = await persistLanguagePreference(nextLanguage);
+      if (!ok) {
+        showToast('語言偏好尚未同步到伺服器，請稍後再試', 'error');
+        return;
+      }
+    }
+
     showToast('設定已儲存', 'success');
   }
 
