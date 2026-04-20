@@ -424,6 +424,7 @@
       </div>
       <div class="page-chat-panel-tabs" role="tablist" aria-label="面板分頁">
         <button class="page-chat-tab-btn is-active" role="tab" aria-selected="true" onclick="switchTab(this,'info')">資訊</button>
+        <button class="page-chat-tab-btn" role="tab" aria-selected="false" onclick="switchTab(this,'docs')">文件</button>
         <button class="page-chat-tab-btn" role="tab" aria-selected="false" onclick="switchTab(this,'tools')">工具</button>
         <button class="page-chat-tab-btn" role="tab" aria-selected="false" onclick="switchTab(this,'history')">記錄</button>
       </div>
@@ -497,25 +498,26 @@
             <div class="page-chat-info-card"><div class="page-chat-info-card-title">競品市場調查</div><div class="page-chat-info-card-desc">5 天前 · 8 則訊息</div></div>
           </section>
         </div>
-
-        <section class="page-chat-info-section page-chat-doc-center-panel" aria-label="我的文件中心">
-          <div class="page-chat-info-section-title">我的文件中心</div>
-          <div class="page-chat-info-card page-chat-doc-center-card">
-            <div class="page-chat-doc-center-toolbar">
-              <div class="page-chat-doc-center-summary">
-                <span>目前可查閱</span>
-                <strong id="userDocumentCount">0</strong>
+        <div id="tab-docs" style="display:none;" role="tabpanel" aria-label="文件">
+          <section class="page-chat-info-section page-chat-doc-center-panel" aria-label="我的文件中心">
+            <div class="page-chat-info-section-title">我的文件中心</div>
+            <div class="page-chat-info-card page-chat-doc-center-card">
+              <div class="page-chat-doc-center-toolbar">
+                <div class="page-chat-doc-center-summary">
+                  <span>目前可查閱</span>
+                  <strong id="userDocumentCount">0</strong>
+                </div>
+                <div class="page-chat-doc-center-actions">
+                  <button class="page-chat-doc-toolbar-btn" type="button" onclick="triggerUserDocumentUpload()">上傳</button>
+                  <button class="page-chat-doc-toolbar-btn page-chat-doc-toolbar-btn--ghost" type="button" onclick="refreshUserDocuments()">刷新</button>
+                </div>
               </div>
-              <div class="page-chat-doc-center-actions">
-                <button class="page-chat-doc-toolbar-btn" type="button" onclick="triggerUserDocumentUpload()">上傳</button>
-                <button class="page-chat-doc-toolbar-btn page-chat-doc-toolbar-btn--ghost" type="button" onclick="refreshUserDocuments()">刷新</button>
-              </div>
+              <input type="file" id="userDocUploadInput" accept=".pdf,.docx,.txt,.md" style="display:none;" aria-hidden="true" />
+              <div class="page-chat-doc-empty" id="userDocumentEmpty">尚未上傳文件</div>
+              <div class="page-chat-doc-list" id="userDocumentList"></div>
             </div>
-            <input type="file" id="userDocUploadInput" accept=".pdf,.docx,.txt,.md" style="display:none;" aria-hidden="true" />
-            <div class="page-chat-doc-empty" id="userDocumentEmpty">尚未上傳文件</div>
-            <div class="page-chat-doc-list" id="userDocumentList"></div>
-          </div>
-        </section>
+          </section>
+        </div>
       </div>
       <!-- Workflow: Dashboard (shown in wf-mode) -->
       <div class="wf-dashboard-wrap" id="wfDashboardWrap"></div>

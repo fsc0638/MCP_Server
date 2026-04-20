@@ -884,7 +884,7 @@
 
   function syncDocumentCenterVisibility(activeTab) {
     document.querySelectorAll(".page-chat-doc-center-panel").forEach(function (el) {
-      el.style.display = activeTab === "info" ? "" : "none";
+      el.style.display = activeTab === "docs" ? "" : "none";
     });
   }
 
@@ -2822,9 +2822,11 @@
   window.switchTab = function (btn, name) {
     document.querySelectorAll(".page-chat-tab-btn").forEach(function (item) {
       item.classList.remove("is-active");
+      item.setAttribute("aria-selected", "false");
     });
     btn.classList.add("is-active");
-    ["info", "tools", "history"].forEach(function (tab) {
+    btn.setAttribute("aria-selected", "true");
+    ["info", "tools", "history", "docs"].forEach(function (tab) {
       const el = document.getElementById("tab-" + tab);
       if (el) el.style.display = tab === name ? "block" : "none";
     });
