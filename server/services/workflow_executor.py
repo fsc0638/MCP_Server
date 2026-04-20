@@ -19,7 +19,20 @@ logger = logging.getLogger("MCP_Server.WorkflowExecutor")
 
 
 class WorkflowExecutor:
-    """Executes a matched workflow: resolves variables, runs blocks via UMA."""
+    """Executes a matched workflow: resolves variables, runs blocks via UMA.
+
+    Phase 4 additions:
+      - Parallel step support (type=parallel, branches run concurrently)
+      - Sub-workflow invocation (type=sub_workflow) with cycle detection
+      - Execution call stack tracks workflow_ids currently running to
+        prevent infinite recursion (MAGELLAN BLOCKS's warning).
+    """
+
+    # Class-level execution stack — tracks in-flight workflow_ids across
+    # the whole call tree, so a sub_workflow that tries to call its own
+    # ancestor gets rejected.
+    _execution_stack: List[str] = []
+    _MAX_STACK_DEPTH = 5  # matches integrated report §4 recommendation
 
     def __init__(self):
         pass
@@ -62,7 +75,37 @@ class WorkflowExecutor:
         run_id = new_run_id()
         started_at = time.time()
 
-        logger.info(f"[WFExec] Start: {workflow_id} run={run_id} ({len(blocks_data)} blocks, {len(variables)} vars)")
+        # Phase 4: cycle detection. Push this workflow onto the class-level
+        # execution stack. If it's already there, we have a cycle → abort.
+        if workflow_id in WorkflowExecutor._execution_stack:
+            cycle = " → ".join(WorkflowExecutor._execution_stack + [workflow_id])
+            logger.error(f"[WFExec] Cycle detected: {cycle}")
+            return {
+                "status": "error",
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "errors": [f"偵測到工作流循環呼叫：{cycle}"],
+                "blocks_executed": 0,
+                "final_output": "",
+                "results": [],
+                "step_results": [],
+            }
+        if len(WorkflowExecutor._execution_stack) >= WorkflowExecutor._MAX_STACK_DEPTH:
+            depth = len(WorkflowExecutor._execution_stack)
+            logger.error(f"[WFExec] Stack depth {depth} exceeds {WorkflowExecutor._MAX_STACK_DEPTH}")
+            return {
+                "status": "error",
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "errors": [f"子工作流巢狀深度 {depth} 超過上限 {WorkflowExecutor._MAX_STACK_DEPTH}"],
+                "blocks_executed": 0,
+                "final_output": "",
+                "results": [],
+                "step_results": [],
+            }
+        WorkflowExecutor._execution_stack.append(workflow_id)
+
+        logger.info(f"[WFExec] Start: {workflow_id} run={run_id} ({len(blocks_data)} blocks, {len(variables)} vars, stack_depth={len(WorkflowExecutor._execution_stack)})")
 
         # ── Step 1: Resolve variables ──
         resolved_vars = self._resolve_variables(variables, user_input, user_context)
@@ -111,7 +154,86 @@ class WorkflowExecutor:
                 results.append({"block_id": bid, "type": block_type, "status": "skipped"})
                 continue
 
-            # Build skill name
+            # ── Phase 4: sub-workflow invocation ──
+            # Block type "sub-workflow" or "sub_workflow" triggers recursive
+            # execute(). Cycle detection done via _execution_stack in nested call.
+            if block_type in ("sub-workflow", "sub_workflow"):
+                sub_id = (block.get("config") or {}).get("sub_workflow_id") or block.get("label")
+                pass_vars_list = (block.get("config") or {}).get("pass_vars") or []
+                if not sub_id:
+                    results.append({
+                        "block_id": bid, "type": block_type, "status": "error",
+                        "error": "缺少 sub_workflow_id",
+                    })
+                    continue
+                try:
+                    sub_flow = _load_workflow_by_id(sub_id)
+                    if not sub_flow:
+                        results.append({
+                            "block_id": bid, "type": block_type, "status": "error",
+                            "error": f"找不到子工作流 '{sub_id}'",
+                        })
+                        continue
+                    # Build pass_vars payload for child workflow
+                    pass_data = {k: resolved_vars.get(k, "") for k in pass_vars_list}
+                    child_input = json.dumps(pass_data, ensure_ascii=False) if pass_data else accumulated_context
+                    child_result = await self.execute(sub_flow, user_input=child_input, user_context=user_context, model_override=model_override)
+                    child_status = child_result.get("status", "error")
+                    child_output = child_result.get("final_output", "")
+                    if child_output:
+                        accumulated_context = child_output[:3000]
+                        final_output = child_output
+                    results.append({
+                        "block_id": bid, "type": block_type, "skill": f"sub:{sub_id}",
+                        "status": "success" if child_status == "success" else "error",
+                        "output_preview": child_output[:300] if child_output else "",
+                        "sub_run_id": child_result.get("run_id"),
+                        "error": "; ".join(child_result.get("errors") or []) if child_status != "success" else "",
+                    })
+                except Exception as sub_err:
+                    logger.error(f"[WFExec] Sub-workflow {sub_id} failed: {sub_err}")
+                    results.append({
+                        "block_id": bid, "type": block_type, "status": "error",
+                        "error": f"子工作流執行例外：{sub_err}",
+                    })
+                continue  # next block
+
+            # ── Phase 4: parallel branches ──
+            # Block type "parallel" has config.branches=[{skill_id, input_map, output_var}]
+            # and config.merge_output_var. All branches run concurrently.
+            if block_type in ("parallel", "parallel-branch"):
+                branches = (block.get("config") or {}).get("branches") or []
+                merge_var = (block.get("config") or {}).get("merge_output_var") or f"block_{bid}_merged"
+                if not branches:
+                    results.append({
+                        "block_id": bid, "type": block_type, "status": "skipped",
+                        "reason": "並行節點未設定 branches",
+                    })
+                    continue
+                try:
+                    branch_results = await self._run_parallel_branches(branches, resolved_vars, accumulated_context, uma, user_input)
+                    # Merge outputs as a list into the named variable
+                    merged = [br.get("output") for br in branch_results]
+                    resolved_vars[merge_var] = json.dumps(merged, ensure_ascii=False)
+                    accumulated_context = resolved_vars[merge_var][:3000]
+                    final_output = resolved_vars[merge_var]
+                    _any_err = any(br.get("status") == "error" for br in branch_results)
+                    results.append({
+                        "block_id": bid, "type": "parallel",
+                        "skill": f"parallel({len(branches)} branches)",
+                        "status": "error" if _any_err else "success",
+                        "output_preview": resolved_vars[merge_var][:300],
+                        "branches": branch_results,
+                    })
+                except Exception as par_err:
+                    logger.error(f"[WFExec] Parallel block {bid} failed: {par_err}")
+                    results.append({
+                        "block_id": bid, "type": "parallel", "status": "error",
+                        "error": f"並行執行例外：{par_err}",
+                    })
+                continue
+
+            # Build skill name (standard sequential skill block)
             skill_name = block_type if block_type.startswith("mcp-") else f"mcp-{block_type}"
 
             # ── Phase 2 Gate 2: per-step safety check ──
@@ -332,7 +454,66 @@ class WorkflowExecutor:
             except Exception as audit_err:
                 logger.debug(f"[WFExec] Audit log failed: {audit_err}")
 
+        # Phase 4: pop this workflow off the execution stack
+        try:
+            if WorkflowExecutor._execution_stack and WorkflowExecutor._execution_stack[-1] == workflow_id:
+                WorkflowExecutor._execution_stack.pop()
+        except Exception:
+            pass
+
         return exec_result
+
+    async def _run_parallel_branches(
+        self,
+        branches: List[dict],
+        resolved_vars: Dict[str, str],
+        accumulated_context: str,
+        uma,
+        user_input: str = "",
+    ) -> List[Dict[str, Any]]:
+        """Run N skill branches concurrently, return list of results.
+
+        Each branch = {skill_id, input_map, output_var}. Results preserve
+        branch order so caller can correlate inputs ↔ outputs.
+        """
+        import asyncio
+
+        async def _run_one(idx: int, branch: dict) -> Dict[str, Any]:
+            skill_id = branch.get("skill_id") or branch.get("skill") or ""
+            if not skill_id.startswith("mcp-"):
+                skill_id = f"mcp-{skill_id}"
+            params = self._resolve_block_params(
+                branch.get("input_map") or {},
+                resolved_vars,
+                accumulated_context,
+                user_input,
+            )
+            try:
+                # uma.execute_tool_call is synchronous; wrap in run_in_executor
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(
+                    None, lambda: uma.execute_tool_call(skill_id, json.dumps(params, ensure_ascii=False))
+                )
+                if isinstance(result, dict) and result.get("status") == "error":
+                    return {"idx": idx, "skill": skill_id, "status": "error",
+                            "error": result.get("message", "skill error"), "output": ""}
+                out_text = ""
+                if isinstance(result, dict):
+                    out_text = result.get("output") or result.get("guide") or result.get("content") or ""
+                else:
+                    out_text = str(result)
+                # Stash per-branch output_var if specified
+                if branch.get("output_var"):
+                    resolved_vars[branch["output_var"]] = out_text
+                return {"idx": idx, "skill": skill_id, "status": "success",
+                        "output": out_text[:2000], "output_var": branch.get("output_var")}
+            except Exception as e:
+                return {"idx": idx, "skill": skill_id, "status": "error",
+                        "error": str(e), "output": ""}
+
+        coros = [_run_one(i, b) for i, b in enumerate(branches)]
+        results = await asyncio.gather(*coros, return_exceptions=False)
+        return results
 
     def _resolve_variables(
         self,
@@ -449,6 +630,28 @@ class WorkflowExecutor:
 
 
 # ── Singleton ──
+def _load_workflow_by_id(workflow_id: str) -> Optional[Dict[str, Any]]:
+    """Find a workflow JSON by workflow_id across all scopes (Phase 4 helper).
+
+    Used by sub_workflow blocks to look up the target workflow. Searches
+    system → department → personal in that order.
+    """
+    import os as _os
+    pr = Path(_os.getenv("PROJECT_ROOT", str(Path(__file__).resolve().parents[2])))
+    base = pr / "workspace" / "workflows"
+    for scope in ("system", "department", "personal"):
+        scope_dir = base / scope
+        if not scope_dir.exists():
+            continue
+        # Look for {workflow_id}.json in any subdirectory
+        for match in scope_dir.rglob(f"{workflow_id}.json"):
+            try:
+                return json.loads(match.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    return None
+
+
 _executor_instance = None
 
 
