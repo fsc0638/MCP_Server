@@ -1335,6 +1335,180 @@
   };
 
   // ══════════════════════════════════════════════════════════
+  // Approvals Center (HitL)
+  // ══════════════════════════════════════════════════════════
+
+  async function renderApprovals() {
+    content.innerHTML = `
+      <h1 class="admin-page-title">審核中心</h1>
+      <p class="admin-page-desc">高風險操作（External Write）一律需人工批准（TTL 10 分鐘）</p>
+
+      <div class="page-chat-panel-tabs" style="margin:0 0 14px; background:transparent; padding:0;">
+        <button class="page-chat-panel-tab" id="apTabPending" onclick="_adminSetApprovalTab('pending')">待審核</button>
+        <button class="page-chat-panel-tab" id="apTabApproved" onclick="_adminSetApprovalTab('approved')">已批准</button>
+        <button class="page-chat-panel-tab" id="apTabRejected" onclick="_adminSetApprovalTab('rejected')">已拒絕</button>
+        <button class="page-chat-panel-tab" id="apTabExpired" onclick="_adminSetApprovalTab('expired')">已過期</button>
+      </div>
+
+      <div class="admin-toolbar">
+        <input class="admin-search" id="adminApprovalSearch" type="text" placeholder="搜尋摘要、Action、資源..." />
+        <button class="admin-btn" onclick="_adminReloadApprovals()">重新整理</button>
+        <div class="admin-toolbar-spacer"></div>
+        <span style="font-size:0.72rem;color:var(--text-tertiary);" id="adminApprovalCount"></span>
+      </div>
+
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead><tr>
+            <th>狀態</th>
+            <th>Action</th>
+            <th>摘要</th>
+            <th>請求者</th>
+            <th>請求時間</th>
+            <th>到期</th>
+            <th>操作</th>
+          </tr></thead>
+          <tbody id="adminApprovalTableBody"></tbody>
+        </table>
+      </div>
+    `;
+
+    window._adminApprovalTab = window._adminApprovalTab || 'pending';
+    _adminApplyApprovalTabUi();
+    await _adminLoadApprovals();
+
+    const q = document.getElementById('adminApprovalSearch');
+    q?.addEventListener('input', () => _adminRenderApprovalsTable());
+  }
+
+  function _adminApplyApprovalTabUi() {
+    const tab = window._adminApprovalTab || 'pending';
+    const map = {
+      pending: 'apTabPending',
+      approved: 'apTabApproved',
+      rejected: 'apTabRejected',
+      expired: 'apTabExpired',
+    };
+    Object.entries(map).forEach(([k, id]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.toggle('active', k === tab);
+    });
+  }
+
+  window._adminSetApprovalTab = async function (tab) {
+    window._adminApprovalTab = tab;
+    _adminApplyApprovalTabUi();
+    await _adminLoadApprovals();
+  };
+
+  window._adminReloadApprovals = async function () {
+    await _adminLoadApprovals();
+  };
+
+  let _allApprovals = [];
+
+  async function _adminLoadApprovals() {
+    const tab = window._adminApprovalTab || 'pending';
+    const body = document.getElementById('adminApprovalTableBody');
+    if (body) body.innerHTML = `<tr><td colspan="7" style="padding:18px;color:var(--text-tertiary);">載入中...</td></tr>`;
+
+    try {
+      const resp = await fetch(`/api/approvals?status=${encodeURIComponent(tab)}&limit=100`);
+      if (!resp.ok) throw new Error('fetch failed');
+      const data = await resp.json();
+      _allApprovals = data.approvals || [];
+    } catch (_) {
+      _allApprovals = [];
+    }
+
+    _adminRenderApprovalsTable();
+  }
+
+  function _fmtTs(ts) {
+    if (!ts) return '';
+    try {
+      // keep it short
+      return ts.replace('T', ' ').slice(0, 16);
+    } catch (_) { return ts; }
+  }
+
+  function _ttlBadge(ap) {
+    if (!ap || !ap.ts_expires) return '';
+    try {
+      const exp = new Date(ap.ts_expires);
+      const now = new Date();
+      const ms = exp - now;
+      const min = Math.floor(ms / 60000);
+      if (ms <= 0) return `<span class="admin-scope-badge system" style="background:#fee2e2;color:#991b1b;">已過期</span>`;
+      if (min <= 2) return `<span class="admin-scope-badge system" style="background:#ffedd5;color:#9a3412;">剩 ${min}m</span>`;
+      return `<span class="admin-scope-badge personal" style="background:#e0f2fe;color:#075985;">剩 ${min}m</span>`;
+    } catch (_) { return ''; }
+  }
+
+  function _statusDot(status) {
+    const s = (status || '').toLowerCase();
+    const color = s === 'pending' ? 'var(--color-warning)' : s === 'approved' ? 'var(--color-success)' : s === 'rejected' ? 'var(--color-error)' : 'var(--text-tertiary)';
+    return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px;"></span>${_esc(status||'')}`;
+  }
+
+  async function _adminApprove(id) {
+    if (!confirm('確認批准？')) return;
+    await fetch(`/api/approvals/${id}/approve`, { method: 'POST' });
+    await _adminLoadApprovals();
+  }
+
+  async function _adminReject(id) {
+    if (!confirm('確認拒絕？')) return;
+    await fetch(`/api/approvals/${id}/reject`, { method: 'POST' });
+    await _adminLoadApprovals();
+  }
+
+  function _adminRenderApprovalsTable() {
+    const body = document.getElementById('adminApprovalTableBody');
+    const count = document.getElementById('adminApprovalCount');
+    if (!body) return;
+
+    const q = (document.getElementById('adminApprovalSearch')?.value || '').toLowerCase().trim();
+    let rows = _allApprovals || [];
+    if (q) {
+      rows = rows.filter(ap => {
+        const hay = [ap.action, ap.request_summary, ap.resource_type, ap.resource_id, ap.requested_by_subject_id].join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    if (count) count.textContent = `共 ${rows.length} 筆`;
+
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="7" style="padding:18px;color:var(--text-tertiary);">目前沒有資料</td></tr>`;
+      return;
+    }
+
+    const tab = (window._adminApprovalTab || 'pending');
+    const isPending = tab === 'pending';
+
+    body.innerHTML = rows.map(ap => {
+      const actions = isPending
+        ? `<div class="admin-table-actions">
+             <button class="admin-table-action" onclick="(${_adminApprove.toString()})('${ap.approval_id}')">批准</button>
+             <button class="admin-table-action danger" onclick="(${_adminReject.toString()})('${ap.approval_id}')">拒絕</button>
+           </div>`
+        : `<span style="font-size:0.72rem;color:var(--text-tertiary);">—</span>`;
+
+      return `<tr>
+        <td>${_statusDot(ap.status)}</td>
+        <td style="font-family:monospace;font-size:0.72rem;">${_esc(ap.action||'')}</td>
+        <td style="max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(ap.request_summary||'')}</td>
+        <td style="font-family:monospace;font-size:0.72rem;">${_esc(ap.requested_by_subject_id||'')}</td>
+        <td>${_fmtTs(ap.ts_requested)}</td>
+        <td>${_fmtTs(ap.ts_expires)} ${_ttlBadge(ap)}</td>
+        <td>${actions}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // ══════════════════════════════════════════════════════════
   // Users Management Page (Phase 5)
   // ══════════════════════════════════════════════════════════
 
