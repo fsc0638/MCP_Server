@@ -6,7 +6,7 @@ import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 from fastapi import APIRouter, Cookie, HTTPException
 from pydantic import BaseModel
@@ -617,6 +617,181 @@ async def execute_workflow(workflow_id: str, req: WorkflowExecuteRequest = None,
     except Exception as e:
         logger.error(f"[Workflow] Execution failed: {e}")
         raise HTTPException(status_code=500, detail=f"Workflow execution failed: {str(e)}")
+
+
+# ── Phase 6: One-shot LLM workflow promotion ───────────────────────────────
+
+class PromoteRequest(BaseModel):
+    run_id: str = ""            # The run_id from Gate 3's promotion_queue.json
+    display_name: str = ""      # User-chosen name for the persisted workflow
+    description: str = ""
+    target_scope: str = "personal"
+    target_owner: str = ""
+
+
+@router.get("/api/workflows/oneshot/pending")
+def list_promotion_candidates(
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """List recent one-shot LLM-generated executions available for promotion.
+
+    Returns only items the current user originated (by created_by).
+    Phase 3 Gate 3 writes these to workspace/workflows/promotion_queue.json
+    when a source='llm_generated' workflow executes successfully.
+    """
+    from server.services.permissions import resolve_caller_context
+    caller_ctx = resolve_caller_context(mcp_session)
+    caller_id = (caller_ctx or {}).get("user_id", "") or (caller_ctx or {}).get("employee_id", "")
+
+    promo_path = _workflows_base() / "promotion_queue.json"
+    if not promo_path.exists():
+        return {"candidates": []}
+
+    try:
+        data = json.loads(promo_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"candidates": []}
+
+    # Filter by caller (safety + relevance)
+    mine = [c for c in data if c.get("user_id") == caller_id or not caller_id]
+    # Newest first
+    mine.sort(key=lambda c: c.get("at", 0), reverse=True)
+    return {"candidates": mine[:20]}
+
+
+@router.post("/api/workflows/promote")
+def promote_oneshot(
+    req: PromoteRequest,
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """Save an LLM one-shot workflow into the user's scope as a persistent
+    template. The one-shot's JSON is stored under workspace/workflows/oneshot/
+    by WorkflowExecutor when source=llm_generated; we copy + relabel here.
+    """
+    from server.services.permissions import (
+        resolve_caller_context, check_scope_write_permission,
+    )
+    caller_ctx = resolve_caller_context(mcp_session)
+
+    # Resolve empty owner from caller context (frontend sends "" for convenience)
+    target_owner = req.target_owner or ""
+    if not target_owner:
+        if req.target_scope == "personal":
+            target_owner = (caller_ctx or {}).get("user_id", "") or (caller_ctx or {}).get("employee_id", "")
+        elif req.target_scope == "department":
+            target_owner = (caller_ctx or {}).get("department_code", "")
+
+    check_scope_write_permission(req.target_scope, target_owner, caller_ctx, resource_kind="工作流")
+
+    if not req.run_id or not req.display_name:
+        raise HTTPException(status_code=400, detail="需要 run_id 與 display_name")
+
+    # The one-shot source file is expected at workspace/workflows/oneshot/{run_id}.json
+    src = _workflows_base() / "oneshot" / f"{req.run_id}.json"
+    if not src.exists():
+        raise HTTPException(status_code=404, detail=f"One-shot 工作流 '{req.run_id}' 不存在")
+
+    try:
+        wf = json.loads(src.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read source: {e}")
+
+    # Relabel for persistence
+    wf["display_name"] = req.display_name
+    wf["description"] = req.description or wf.get("description", "")
+    wf["scope"] = req.target_scope
+    wf["owner"] = target_owner
+    wf["source"] = "llm_generated"  # preserved for analytics
+    meta = wf.get("metadata") or {}
+    meta["promoted_from"] = req.run_id
+    meta["promoted_at"] = datetime.now().isoformat()
+    wf["metadata"] = meta
+
+    # Migrate to full v2 shape + validate
+    try:
+        from server.services.workflow_schema import migrate_legacy, validate_workflow
+        wf = migrate_legacy(wf, mark_as_source="llm_generated", resync_steps=True)
+        ok, errs = validate_workflow(wf)
+        if not ok:
+            raise HTTPException(status_code=422, detail={"errors": errs[:5]})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[Promote] Validation failed: {e}")
+
+    dest_id = wf.get("workflow_id", f"promoted_{req.run_id}")
+    dest_path = _workflows_dir(req.target_scope, target_owner) / f"{dest_id}.json"
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    dest_path.write_text(json.dumps(wf, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Remove from promotion_queue.json
+    try:
+        promo_path = _workflows_base() / "promotion_queue.json"
+        if promo_path.exists():
+            queue = json.loads(promo_path.read_text(encoding="utf-8"))
+            queue = [c for c in queue if c.get("run_id") != req.run_id]
+            promo_path.write_text(json.dumps(queue, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    logger.info(f"[Promote] {req.run_id} → {dest_id} (scope={req.target_scope})")
+    return {
+        "status": "success",
+        "workflow_id": dest_id,
+        "scope": req.target_scope,
+        "path": str(dest_path),
+    }
+
+
+@router.get("/api/workflows/oneshot/accessible-skills")
+def list_accessible_skills(
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """Return the skill whitelist available to the current user for LLM one-shot
+    workflow generation. Only skills the caller can actually execute are listed,
+    so the LLM generator won't propose skills the user can't run at execution time.
+
+    Each entry: { skill_id, display_name, description, parameters, env_ready }.
+    """
+    from server.services.permissions import resolve_caller_context
+    from server.dependencies.uma import get_uma_instance
+    caller_ctx = resolve_caller_context(mcp_session)
+    uma = get_uma_instance()
+
+    out: List[Dict[str, Any]] = []
+    try:
+        registry = uma.skill_registry
+        skills_dict = getattr(registry, "skills", {}) or {}
+    except Exception as e:
+        logger.warning(f"[AccessibleSkills] registry access failed: {e}")
+        skills_dict = {}
+
+    for registry_key, entry in skills_dict.items():
+        try:
+            meta = (entry or {}).get("metadata") or {}
+            skill_id = meta.get("name") or registry_key
+            # Permission gate — reuse registry's access check if present
+            if hasattr(registry, "can_access"):
+                try:
+                    if not registry.can_access(skill_id, caller_ctx):
+                        continue
+                except Exception:
+                    pass
+            out.append({
+                "skill_id": skill_id,
+                "display_name": meta.get("display_name") or skill_id,
+                "description": (meta.get("description") or "")[:400],
+                "parameters": meta.get("parameters") or {},
+                "env_ready": bool(meta.get("_env_ready", True)),
+                "risk_level": meta.get("risk_level", "low"),
+            })
+        except Exception as _e:
+            logger.debug(f"[AccessibleSkills] skip entry: {_e}")
+            continue
+
+    # Stable ordering
+    out.sort(key=lambda x: x.get("skill_id", ""))
+    return {"skills": out, "count": len(out)}
 
 
 # ── Phase 5: 5-question Wizard ──────────────────────────────────────────────

@@ -1074,7 +1074,103 @@
     const row = bubble.closest(".page-chat-msg-row");
     if (row) row.style.display = "";
     bubble.innerHTML = formatText(task.text || "") + (isFinal ? "" : '<span class="page-chat-cursor"></span>');
+    // Phase 6: LLM one-shot promotion footer
+    if (isFinal && task.workflowMatch && task.workflowMatch.source === "llm_generated" && task.workflowMatch.run_id) {
+      _appendPromotionCard(bubble, task.workflowMatch);
+    }
     scrollSessionToBottom(task.sessionId);
+  }
+
+  // ── Phase 6: One-shot → Promote to persisted workflow ─────────────────
+  function _appendPromotionCard(bubble, wfMatch) {
+    // Avoid duplicates
+    if (bubble.querySelector(".page-chat-wf-promote")) return;
+    const card = document.createElement("div");
+    card.className = "page-chat-wf-promote";
+    card.style.cssText = "margin-top:10px;padding:10px 12px;border:1px dashed #c7b9ff;background:#f8f5ff;border-radius:8px;font-size:13px;color:#333;";
+    const name = (wfMatch.name || wfMatch.id || "一次性工作流").replace(/</g, "&lt;");
+    card.innerHTML =
+      '<div style="margin-bottom:6px;">💾 <strong>這個臨時工作流很好用嗎？</strong></div>' +
+      '<div style="color:#666;margin-bottom:8px;">名稱：' + name + '</div>' +
+      '<button type="button" class="page-chat-wf-promote-btn" style="padding:5px 12px;background:#6c5ce7;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;">儲存為我的工作流</button> ' +
+      '<button type="button" class="page-chat-wf-promote-dismiss" style="padding:5px 10px;background:transparent;color:#888;border:none;cursor:pointer;font-size:12px;">略過</button>';
+    const saveBtn = card.querySelector(".page-chat-wf-promote-btn");
+    const dismissBtn = card.querySelector(".page-chat-wf-promote-dismiss");
+    saveBtn.addEventListener("click", () => _openPromoteModal(wfMatch, card));
+    dismissBtn.addEventListener("click", () => card.remove());
+    bubble.appendChild(card);
+  }
+
+  function _openPromoteModal(wfMatch, cardEl) {
+    // Remove existing modal if any
+    const existing = document.getElementById("wf-promote-modal");
+    if (existing) existing.remove();
+
+    const mask = document.createElement("div");
+    mask.id = "wf-promote-modal";
+    mask.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center;";
+    mask.innerHTML =
+      '<div style="background:#fff;width:420px;max-width:92vw;border-radius:10px;padding:20px 22px;box-shadow:0 20px 60px rgba(0,0,0,.25);">' +
+      '<h3 style="margin:0 0 12px;font-size:16px;">儲存工作流</h3>' +
+      '<div style="font-size:13px;color:#888;margin-bottom:12px;">這會把剛剛一次性生成的流程永久儲存</div>' +
+      '<label style="display:block;margin-bottom:8px;font-size:13px;">名稱 <span style="color:#e74c3c;">*</span></label>' +
+      '<input type="text" id="wf-promote-name" placeholder="例：每日新聞摘要" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;margin-bottom:12px;" />' +
+      '<label style="display:block;margin-bottom:8px;font-size:13px;">描述</label>' +
+      '<textarea id="wf-promote-desc" placeholder="選填" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;margin-bottom:12px;min-height:60px;"></textarea>' +
+      '<label style="display:block;margin-bottom:8px;font-size:13px;">儲存位置</label>' +
+      '<select id="wf-promote-scope" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;box-sizing:border-box;margin-bottom:16px;">' +
+        '<option value="personal">👤 個人工作流</option>' +
+        '<option value="department">🏢 部門工作流</option>' +
+        '<option value="system">🌐 系統工作流（需 admin）</option>' +
+      '</select>' +
+      '<div style="text-align:right;">' +
+      '<button type="button" id="wf-promote-cancel" style="padding:6px 14px;margin-right:8px;background:transparent;color:#666;border:1px solid #ddd;border-radius:4px;cursor:pointer;">取消</button>' +
+      '<button type="button" id="wf-promote-confirm" style="padding:6px 14px;background:#6c5ce7;color:#fff;border:none;border-radius:4px;cursor:pointer;">儲存</button>' +
+      '</div>' +
+      '</div>';
+    document.body.appendChild(mask);
+
+    const nameInput = mask.querySelector("#wf-promote-name");
+    nameInput.value = wfMatch.name || "";
+    nameInput.focus();
+
+    mask.querySelector("#wf-promote-cancel").addEventListener("click", () => mask.remove());
+    mask.addEventListener("click", (e) => { if (e.target === mask) mask.remove(); });
+    mask.querySelector("#wf-promote-confirm").addEventListener("click", async () => {
+      const displayName = nameInput.value.trim();
+      if (!displayName) { nameInput.focus(); showToast("請填寫名稱", "error"); return; }
+      const desc = mask.querySelector("#wf-promote-desc").value.trim();
+      const scope = mask.querySelector("#wf-promote-scope").value;
+      const confirmBtn = mask.querySelector("#wf-promote-confirm");
+      confirmBtn.disabled = true; confirmBtn.textContent = "儲存中...";
+      try {
+        const res = await fetch("/api/workflows/promote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            run_id: wfMatch.run_id,
+            display_name: displayName,
+            description: desc,
+            target_scope: scope,
+            target_owner: "", // server resolves from caller context
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = (data && data.detail) ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : "儲存失敗";
+          showToast("❌ " + msg, "error");
+          confirmBtn.disabled = false; confirmBtn.textContent = "儲存";
+          return;
+        }
+        showToast("✅ 已儲存為工作流「" + displayName + "」", "success");
+        mask.remove();
+        if (cardEl) cardEl.remove();
+      } catch (err) {
+        showToast("❌ 網路錯誤：" + (err && err.message ? err.message : err), "error");
+        confirmBtn.disabled = false; confirmBtn.textContent = "儲存";
+      }
+    });
   }
 
   function autoResize(el) {
@@ -1462,6 +1558,10 @@
             task.completed = true;
             task.assistantMessagePersisted = true;
             task.text = parsed.content || task.text;
+            // Phase 6: LLM one-shot promotion card
+            if (parsed.workflow_match && parsed.workflow_match.source === "llm_generated" && parsed.workflow_match.run_id) {
+              task.workflowMatch = parsed.workflow_match;
+            }
             removeTyping(task.sessionId);
             showTaskBubble(task, true);
             return task.text;

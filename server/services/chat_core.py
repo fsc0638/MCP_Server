@@ -249,6 +249,9 @@ async def process_chat_native(req: ChatRequest):
                             final_text = wf_result.get("final_output", "")
                             if not final_text:
                                 final_text = f"工作流 {_match_info['name']} 執行完成（{wf_result.get('blocks_executed', 0)} 個節點）"
+                            # Phase 6: enrich match_info with source + run_id for promotion card
+                            _match_info["source"] = wf_match["workflow"].get("source", "")
+                            _match_info["run_id"] = wf_result.get("run_id", "")
                             session_mgr.append_message(session_id, "assistant", final_text)
                             task_registry.mark_completed(task_id, final_text=final_text, assistant_message_persisted=True)
                             yield {"data": json.dumps({"status": "success", "content": final_text,

@@ -436,11 +436,23 @@ def gate_3_log_run(
     except Exception:
         pass
 
-    # ── Promotion signal for LLM one-shot (Phase 6 will consume) ──
+    # ── Phase 6: Promotion signal + snapshot for LLM one-shot ──
     if workflow.get("source") == "llm_generated" and result.get("status") == "success":
         try:
+            # 1. Snapshot the full workflow JSON so promote endpoint can read it
+            oneshot_dir = project_root / "workspace" / "workflows" / "oneshot"
+            oneshot_dir.mkdir(parents=True, exist_ok=True)
+            snap_path = oneshot_dir / f"{run_id}.json"
+            # Take a copy — strip runtime-only fields that shouldn't persist
+            snap = {k: v for k, v in workflow.items() if k not in ("_runtime",)}
+            snap_path.write_text(json.dumps(snap, ensure_ascii=False, indent=2), encoding="utf-8")
+            # Keep last 50 oneshot snapshots per user (simple global cap)
+            all_snaps = sorted(oneshot_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for old in all_snaps[100:]:
+                old.unlink()
+
+            # 2. Promotion queue entry (index for UI)
             promo_path = project_root / "workspace" / "workflows" / "promotion_queue.json"
-            promo_path.parent.mkdir(parents=True, exist_ok=True)
             promo_data = []
             if promo_path.exists():
                 try:
@@ -450,11 +462,13 @@ def gate_3_log_run(
             promo_data.append({
                 "run_id": run_id,
                 "workflow_id": wf_id,
+                "display_name": workflow.get("display_name") or wf_id,
                 "user_id": workflow.get("metadata", {}).get("created_by"),
                 "original_prompt": workflow.get("metadata", {}).get("original_prompt", ""),
+                "final_output_preview": (result.get("final_output") or "")[:200],
+                "steps": [s.get("skill_id") for s in (workflow.get("steps") or []) if s.get("skill_id")],
                 "at": time.time(),
             })
-            # Keep last 100 promotion candidates
             promo_data = promo_data[-100:]
             promo_path.write_text(json.dumps(promo_data, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as e:
