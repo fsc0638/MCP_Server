@@ -29,6 +29,7 @@
     dashboard: renderDashboard,
     skills: renderSkills,
     workflows: renderWorkflows,
+    approvals: renderApprovals,
     schedules: renderSchedules,
     tokens: renderTokens,
     users: renderUsers,
@@ -1822,7 +1823,7 @@
 
     let html = "";
     // Search pages
-    const pageMap = { dashboard:"Dashboard", skills:"Skills 管理", workflows:"Workflows", schedules:"排程監控", tokens:"Token 用量", users:"使用者", settings:"系統設定" };
+    const pageMap = { dashboard:"Dashboard", skills:"Skills 管理", workflows:"Workflows", approvals:"審核中心", schedules:"排程監控", tokens:"Token 用量", users:"使用者", settings:"系統設定" };
     Object.entries(pageMap).forEach(([key, label]) => {
       if (label.toLowerCase().includes(q) || key.includes(q)) {
         html += `<div class="admin-cmdk-item" onclick="location.hash='#/${key}';document.getElementById('adminCmdKOverlay')?.remove();">📄 ${label}</div>`;

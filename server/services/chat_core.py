@@ -23,7 +23,9 @@ _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", 
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
 
-def _is_audio_file_path(file_path: str | None) -> bool:
+from typing import Optional
+
+def _is_audio_file_path(file_path: Optional[str]) -> bool:
     if not file_path:
         return False
     try:
@@ -32,7 +34,7 @@ def _is_audio_file_path(file_path: str | None) -> bool:
         return False
 
 
-def _detect_media_type_label(file_path: str | None) -> str:
+def _detect_media_type_label(file_path: Optional[str]) -> str:
     if not file_path:
         return "file"
     try:
@@ -48,7 +50,7 @@ def _detect_media_type_label(file_path: str | None) -> str:
     return "file"
 
 
-def _extract_file_path_from_text(text: str) -> str | None:
+def _extract_file_path_from_text(text: str) -> Optional[str]:
     if not text:
         return None
     patterns = [
@@ -68,7 +70,7 @@ def _extract_file_path_from_text(text: str) -> str | None:
     return None
 
 
-def _register_original_file_context(session_mgr, session_id: str, file_path: str | None) -> str | None:
+def _register_original_file_context(session_mgr, session_id: str, file_path: Optional[str]) -> Optional[str]:
     if not file_path:
         return None
     try:
@@ -86,7 +88,7 @@ def _register_original_file_context(session_mgr, session_id: str, file_path: str
         return None
 
 
-def _needs_meeting_todo_pipeline(user_text: str, file_path: str | None = None) -> bool:
+def _needs_meeting_todo_pipeline(user_text: str, file_path: Optional[str] = None) -> bool:
     text = (user_text or "").lower()
     has_audio_signal = _is_audio_file_path(file_path) or any(
         kw in text for kw in ("錄音", "音檔", "audio", "transcribe", "逐字稿")

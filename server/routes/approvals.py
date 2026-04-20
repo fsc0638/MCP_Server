@@ -16,9 +16,57 @@ def _role(ctx) -> str:
 
 
 @router.get("/api/approvals")
-def list_approvals(status: str = "pending"):
-    # Minimal v1: list not implemented yet (avoid overexposure); UI will fetch individual items.
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+def list_approvals(status: str = "pending", limit: int = 50, mcp_session: str = Cookie(default="")):
+    """List approvals.
+
+    Security:
+    - Only admin/manager can list globally.
+    - Requester can list their own approvals via requester_only.
+    """
+    from server.services.db import connect, init_db
+
+    ctx = resolve_caller_context(mcp_session)
+    if not ctx:
+        raise HTTPException(status_code=403, detail="Not signed in")
+
+    role = (ctx.get("role") or "guest").lower()
+    caller_id = ctx.get("user_id") or ""
+
+    conn = connect()
+    init_db(conn)
+
+    limit = max(1, min(int(limit or 50), 200))
+
+    if role in {"admin", "manager"}:
+        rows = conn.execute(
+            """
+            SELECT approval_id, ts_requested, ts_expires, ts_resolved, correlation_id,
+                   requested_by_subject_id, action, resource_type, resource_id, status, request_summary,
+                   resolved_by_subject_id, resolution_note
+            FROM approvals
+            WHERE status=?
+            ORDER BY ts_requested DESC
+            LIMIT ?
+            """,
+            (status, limit),
+        ).fetchall()
+    else:
+        # requester-only
+        rows = conn.execute(
+            """
+            SELECT approval_id, ts_requested, ts_expires, ts_resolved, correlation_id,
+                   requested_by_subject_id, action, resource_type, resource_id, status, request_summary,
+                   resolved_by_subject_id, resolution_note
+            FROM approvals
+            WHERE status=? AND requested_by_subject_id=?
+            ORDER BY ts_requested DESC
+            LIMIT ?
+            """,
+            (status, caller_id, limit),
+        ).fetchall()
+
+    conn.close()
+    return {"status": "success", "total": len(rows), "approvals": [dict(r) for r in rows]}
 
 
 @router.get("/api/approvals/{approval_id}")
