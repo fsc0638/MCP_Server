@@ -596,14 +596,59 @@
         await sleep(300);
       }
 
-      // Call backend execution with correct scope/owner
+      // Call backend execution with correct scope/owner.
+      // Phase 2 Gate 1 flow:
+      //   - 422 Unprocessable → env/skill problem, show hard error toast
+      //   - 428 Precondition Required → missing_inputs, pop wizard + retry
       const _eq = new URLSearchParams({ scope, owner });
-      try {
-        const resp = await fetch(`/api/workflows/${encodeURIComponent(wfId)}/execute?${_eq}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ initial_prompt: prompt, model: null }),
-        });
+      let _userInputs = {};
+      let _attempt = 0;
+      while (true) {
+        _attempt += 1;
+        if (_attempt > 2) break;  // one retry after wizard fills inputs
+        let resp;
+        try {
+          resp = await fetch(`/api/workflows/${encodeURIComponent(wfId)}/execute?${_eq}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ initial_prompt: prompt, model: null, inputs: _userInputs }),
+          });
+        } catch (e) {
+          if (window.showToast) window.showToast("網路錯誤: " + e.message, "error");
+          if (window._wfDashboard) window._wfDashboard.addLog(`「${wfName}」網路錯誤: ${e.message}`, "failed");
+          return;
+        }
+
+        // Handle Gate 1 soft-block (need user inputs)
+        if (resp.status === 428) {
+          const ed = await resp.json().catch(() => ({}));
+          const miss = ((ed.detail || {}).missing_inputs) || ed.missing_inputs || [];
+          const collected = await _showInputsWizard(wfName, miss);
+          if (!collected) return;  // user cancelled
+          _userInputs = { ..._userInputs, ...collected };
+          continue;  // retry with inputs filled
+        }
+
+        // Handle Gate 0/1 hard-block
+        if (resp.status === 422) {
+          const ed = await resp.json().catch(() => ({}));
+          const det = ed.detail || {};
+          const errs = det.errors || (Array.isArray(det) ? det : []);
+          const msg = errs.length
+            ? errs.slice(0, 5).join("; ")
+            : (typeof det === "string" ? det : "工作流檢查未通過");
+          if (window.showToast) window.showToast("⛔ " + msg, "error");
+          if (window._wfDashboard) window._wfDashboard.addLog(`「${wfName}」檢查未通過：${msg}`, "failed");
+          return;
+        }
+
+        if (!resp.ok) {
+          const txt = await resp.text().catch(() => "");
+          if (window.showToast) window.showToast(`執行失敗 (${resp.status}): ${txt.slice(0, 120)}`, "error");
+          return;
+        }
+
+        // ── Success path ──
         const data = await resp.json();
 
         // Update block statuses from results
@@ -650,9 +695,7 @@
         if (data.final_output && data.final_output.trim()) {
           _showWfRunResult(wfName, data);
         }
-      } catch (e) {
-        if (window.showToast) window.showToast("執行失敗: " + e.message, "error");
-        if (window._wfDashboard) window._wfDashboard.addLog(`「${wfName}」執行失敗: ${e.message}`, "failed");
+        break;  // success — exit the retry loop
       }
 
       // Clean up animations
@@ -1628,6 +1671,81 @@
   }
 
   // ── Workflow Run Result Panel ──
+  // ── Phase 2 Gate 1: Missing-inputs wizard ──
+  // Server returned 428 Precondition Required with a list of required global_inputs.
+  // Pop a modal to collect them, resolve with the filled object (or null if cancelled).
+  function _showInputsWizard(wfName, missingInputs) {
+    return new Promise(resolve => {
+      document.getElementById("wfInputsWizardOverlay")?.remove();
+      const overlay = document.createElement("div");
+      overlay.id = "wfInputsWizardOverlay";
+      overlay.style.cssText = "position:fixed;inset:0;z-index:8500;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;";
+
+      const rows = (missingInputs || []).map(inp => {
+        const desc = inp.description ? `<div style="font-size:0.7rem;color:#64748b;margin-top:3px;">${_escHtml(inp.description)}</div>` : "";
+        const isMultiline = (inp.type || "").toLowerCase() === "text" || (inp.description || "").length > 60;
+        const field = isMultiline
+          ? `<textarea rows="3" id="wfWizInp_${_escHtml(inp.name)}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;resize:vertical;"></textarea>`
+          : `<input type="text" id="wfWizInp_${_escHtml(inp.name)}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;" />`;
+        const required = inp.required === false ? "" : '<span style="color:#dc2626;">*</span>';
+        return `<div style="margin-bottom:12px;">
+          <label style="display:block;font-size:0.78rem;font-weight:600;color:#1e293b;margin-bottom:4px;">
+            <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">${_escHtml(inp.name)}</code>
+            ${required}
+          </label>
+          ${field}
+          ${desc}
+        </div>`;
+      }).join("");
+
+      overlay.innerHTML = `
+        <div style="background:#fff;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,0.25);padding:22px 24px 18px;width:500px;max-width:92vw;max-height:85vh;overflow-y:auto;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <span style="font-size:1.1rem;">📝</span>
+            <div style="font-size:1rem;font-weight:700;">執行「${_escHtml(wfName)}」需要以下輸入</div>
+          </div>
+          <div style="font-size:0.78rem;color:#64748b;margin-bottom:16px;">填寫後按「確認」開始執行</div>
+          ${rows || '<div style="color:#94a3b8;">(沒有待輸入欄位)</div>'}
+          <footer style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;">
+            <button id="wfWizCancel" style="padding:8px 18px;border-radius:8px;background:transparent;color:#64748b;border:1px solid #e2e8f0;cursor:pointer;">取消</button>
+            <button id="wfWizSubmit" style="padding:8px 18px;border-radius:8px;background:#0D6EFD;color:#fff;border:none;font-weight:600;cursor:pointer;">確認並執行</button>
+          </footer>
+        </div>`;
+      document.body.appendChild(overlay);
+
+      const _cleanup = () => overlay.remove();
+      overlay.addEventListener("click", e => { if (e.target === overlay) { _cleanup(); resolve(null); } });
+      overlay.querySelector("#wfWizCancel").onclick = () => { _cleanup(); resolve(null); };
+      overlay.querySelector("#wfWizSubmit").onclick = () => {
+        const collected = {};
+        let hasMissing = false;
+        (missingInputs || []).forEach(inp => {
+          const el = document.getElementById("wfWizInp_" + inp.name);
+          const v = (el?.value || "").trim();
+          if (!v && inp.required !== false) {
+            hasMissing = true;
+            if (el) el.style.borderColor = "#dc2626";
+          } else {
+            collected[inp.name] = v;
+            if (el) el.style.borderColor = "#cbd5e1";
+          }
+        });
+        if (hasMissing) {
+          if (window.showToast) window.showToast("請填寫所有必填欄位", "error");
+          return;
+        }
+        _cleanup();
+        resolve(collected);
+      };
+
+      // Auto-focus the first input
+      setTimeout(() => {
+        const firstInput = overlay.querySelector("input, textarea");
+        if (firstInput) firstInput.focus();
+      }, 50);
+    });
+  }
+
   function _showWfRunResult(wfName, data) {
     document.getElementById("wfRunResultOverlay")?.remove();
     const overlay = document.createElement("div");

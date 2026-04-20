@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -42,14 +43,26 @@ class WorkflowExecutor:
         Returns:
             { status, workflow_id, results: [...], final_output, executed_at }
         """
-        workflow_id = workflow.get("id", "unknown")
-        variables = workflow.get("variables", [])
+        # Phase 1 v2 fields preferred; fall back to legacy for compat
+        workflow_id = workflow.get("workflow_id") or workflow.get("id", "unknown")
+        raw_vars = workflow.get("variables", [])
+        # v2 variables is dict {definitions, global_inputs, env_requirements};
+        # the resolver still takes a list of definitions, so normalize here.
+        if isinstance(raw_vars, dict):
+            variables = raw_vars.get("definitions") or []
+        else:
+            variables = raw_vars or []
         blocks_data = workflow.get("blocks", [])
         connections = workflow.get("connections", [])
         execution = workflow.get("execution", {})
         security = workflow.get("security", {})
 
-        logger.info(f"[WFExec] Start: {workflow_id} ({len(blocks_data)} blocks, {len(variables)} vars)")
+        # Phase 2 Gate 3 bookkeeping
+        from server.services.workflow_gates import new_run_id
+        run_id = new_run_id()
+        started_at = time.time()
+
+        logger.info(f"[WFExec] Start: {workflow_id} run={run_id} ({len(blocks_data)} blocks, {len(variables)} vars)")
 
         # ── Step 1: Resolve variables ──
         resolved_vars = self._resolve_variables(variables, user_input, user_context)
@@ -100,6 +113,40 @@ class WorkflowExecutor:
 
             # Build skill name
             skill_name = block_type if block_type.startswith("mcp-") else f"mcp-{block_type}"
+
+            # ── Phase 2 Gate 2: per-step safety check ──
+            # Build a pseudo-step matching gate_2's expected shape
+            _step_for_gate = {
+                "step_id": f"block_{bid}",
+                "type": "sequential",
+                "skill_id": skill_name,
+                "input_map": (block.get("config") or {}).get("params", {}),
+                "on_fail": block.get("config", {}).get("on_error") or "abort",
+            }
+            try:
+                from server.services.workflow_gates import gate_2_before_step
+                g2_ok, g2_reason = gate_2_before_step(_step_for_gate, resolved_vars, uma)
+            except Exception as _gate2_err:
+                logger.warning(f"[WFExec Gate2] Internal error for block {bid}: {_gate2_err}")
+                g2_ok, g2_reason = True, ""  # fail-open
+
+            if not g2_ok:
+                _on_fail = _step_for_gate["on_fail"]
+                logger.warning(f"[WFExec Gate2] Block {bid} ({skill_name}) blocked: {g2_reason} (on_fail={_on_fail})")
+                if _on_fail in ("abort", "retry_once"):
+                    # abort = stop workflow; retry_once doesn't help when env is missing
+                    results.append({
+                        "block_id": bid, "type": block_type, "skill": skill_name,
+                        "status": "error", "error": g2_reason, "gate": 2,
+                    })
+                    break
+                else:
+                    # continue / skip
+                    results.append({
+                        "block_id": bid, "type": block_type, "skill": skill_name,
+                        "status": "skipped", "reason": f"gate2: {g2_reason}",
+                    })
+                    continue
 
             # Per-block config
             block_config = block.get("config", {})
@@ -203,24 +250,79 @@ class WorkflowExecutor:
                     break
                 # "skip" continues to next block
 
+        # Determine overall status based on step results
+        _any_error = any(r.get("status") == "error" for r in results)
+        _any_ok = any(r.get("status") == "success" for r in results)
+        if _any_error and _any_ok:
+            overall_status = "partial"
+        elif _any_error:
+            overall_status = "error"
+        else:
+            overall_status = "success"
+
+        ended_at = time.time()
         exec_result = {
-            "status": "success",
+            "status": overall_status,
             "workflow_id": workflow_id,
-            "workflow_name": workflow.get("name", workflow_id),
+            "workflow_name": workflow.get("display_name") or workflow.get("name", workflow_id),
+            "run_id": run_id,                      # Phase 2 Gate 3
             "blocks_executed": len(results),
             "results": results,
+            "step_results": results,               # alias for Gate 3
             "final_output": final_output[:2000],
             "executed_at": datetime.now().isoformat(),
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "duration_ms": int((ended_at - started_at) * 1000),
+            "total_tokens": total_tokens_used,
+            "errors": [r.get("error") for r in results if r.get("error")],
         }
 
-        # Audit log (non-blocking — failures should not affect execution result)
+        # ── Phase 2 Gate 3: write run log ──
+        try:
+            from server.services.workflow_gates import gate_3_log_run
+            gate_3_log_run(workflow, run_id, exec_result)
+        except Exception as g3_err:
+            logger.warning(f"[WFExec Gate3] Log write failed: {g3_err}")
+
+        # ── on_error workflow routing (if main failed and handler defined) ──
+        if overall_status == "error":
+            _on_err_block = workflow.get("on_error") or {}
+            _on_err_wf_id = _on_err_block.get("workflow_id")
+            if _on_err_wf_id:
+                try:
+                    logger.info(f"[WFExec] Triggering on_error workflow: {_on_err_wf_id}")
+                    # Look up error workflow file and execute with pass_vars
+                    pr = Path(os.getenv("PROJECT_ROOT", str(Path(__file__).resolve().parents[2])))
+                    err_wf_path = None
+                    for scope_dir in ("system", "department", "personal"):
+                        for p in (pr / "workspace" / "workflows" / scope_dir).rglob(f"{_on_err_wf_id}.json") if (pr / "workspace" / "workflows" / scope_dir).exists() else []:
+                            err_wf_path = p
+                            break
+                        if err_wf_path:
+                            break
+                    if err_wf_path:
+                        err_flow = json.loads(err_wf_path.read_text(encoding="utf-8"))
+                        # Build pass_vars from current execution state
+                        pass_vars = {}
+                        for var_name in (_on_err_block.get("pass_vars") or []):
+                            pass_vars[var_name] = resolved_vars.get(var_name, "")
+                        pass_vars["_error_message"] = "; ".join(exec_result["errors"][:3])
+                        pass_vars["_failed_workflow_id"] = workflow_id
+                        pass_vars["_failed_run_id"] = run_id
+                        # Note: this creates a SECOND execution — its own Gate 3 log
+                        await self.execute(err_flow, user_input=json.dumps(pass_vars, ensure_ascii=False), user_context=user_context)
+                except Exception as on_err:
+                    logger.warning(f"[WFExec] on_error routing failed: {on_err}")
+
+        # Audit log (legacy — non-blocking)
         if security.get("audit_log", True) is not False:
             try:
                 from server.services.workflow_audit import log_workflow_execution
                 uc = user_context or {}
                 log_workflow_execution(
                     workflow_id=workflow_id,
-                    workflow_name=workflow.get("name", workflow_id),
+                    workflow_name=workflow.get("display_name") or workflow.get("name", workflow_id),
                     session_id=uc.get("session_id", ""),
                     result=exec_result,
                     trigger="api",

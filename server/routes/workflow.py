@@ -277,7 +277,7 @@ def save_workflow(
     # - resync_steps=True: always rebuild steps[] from current blocks so canvas
     #   edits stay in sync with the executable list
     try:
-        from server.services.workflow_schema import migrate_legacy, validate_workflow
+        from server.services.workflow_schema import migrate_legacy
         data = migrate_legacy(
             data,
             mark_as_source=existing_data.get("source") or "user_defined",
@@ -288,14 +288,30 @@ def save_workflow(
         data["description"] = req.description or data.get("description", "")
         data["scope"] = req.scope
         data["owner"] = req.owner
-
-        # Best-effort validation — log warnings but don't block save (Phase 2
-        # will turn this into a hard Gate 0 rejection)
-        ok, errs = validate_workflow(data)
-        if not ok:
-            logger.warning(f"[WF Save] v2 validation issues for {workflow_id}: {errs[:3]}")
     except Exception as _mig_err:
         logger.warning(f"[WF Save] Schema upgrade failed (non-fatal): {_mig_err}")
+
+    # ── Phase 2 Gate 0: static validation (hard block) ──
+    # Draft workflows (steps=[]) are exempt from skill_id checks but still
+    # must pass schema validation. Any error blocks the save with HTTP 422.
+    try:
+        from server.services.workflow_gates import gate_0_validate
+        from main import get_uma
+        _uma = get_uma()
+        ok0, errs0 = gate_0_validate(data, _uma)
+        if not ok0:
+            logger.warning(f"[WF Gate0] Rejected save of {workflow_id}: {errs0[:3]}")
+            raise HTTPException(status_code=422, detail={
+                "gate": 0,
+                "errors": errs0,
+                "message": "工作流無法儲存：檢查規則未通過",
+            })
+    except HTTPException:
+        raise
+    except Exception as _g0_err:
+        # Never block save on Gate-0 internal errors (fail-open for safety);
+        # user can retry or contact admin.
+        logger.error(f"[WF Gate0] Internal error for {workflow_id}: {_g0_err}")
 
     # ── Phase 1.5: Align filename with internal workflow_id (slug) ──
     # If the URL path differs from the v2 slug, rename the file so the two
@@ -495,11 +511,22 @@ def get_recent_logs_api(limit: int = 100):
 class WorkflowExecuteRequest(BaseModel):
     model: Optional[str] = None  # User-specified model override for entire flow
     initial_prompt: Optional[str] = ""  # User's intent for this execution
+    inputs: Dict[str, Any] = {}  # global_inputs supplied by user / wizard
 
 
 @router.post("/api/workflows/{workflow_id}/execute")
 async def execute_workflow(workflow_id: str, req: WorkflowExecuteRequest = None, scope: str = "personal", owner: str = "default"):
-    """Execute a workflow using the WorkflowExecutor."""
+    """Execute a workflow using the WorkflowExecutor.
+
+    Phase 2 Gate 1 (pre-execution check):
+      - Environment variables must be satisfied → HTTP 422 (hard block)
+      - All referenced skills must be env_ready → HTTP 422
+      - Required global_inputs must be provided → HTTP 428 (wizard prompt)
+      - Sub-workflow references must resolve → HTTP 422
+
+    428 Precondition Required is used specifically for the "need user input"
+    case so the frontend can distinguish "cannot run" from "need more info".
+    """
     if req is None:
         req = WorkflowExecuteRequest()
 
@@ -527,6 +554,36 @@ async def execute_workflow(workflow_id: str, req: WorkflowExecuteRequest = None,
         flow = json.loads(path.read_text(encoding="utf-8"))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load workflow: {e}")
+
+    # ── Phase 2 Gate 1: pre-execution check ──
+    try:
+        from server.services.workflow_gates import gate_1_pre_execute
+        from main import get_uma
+        _uma = get_uma()
+        ok1, info1 = gate_1_pre_execute(flow, user_inputs=req.inputs or {}, uma=_uma)
+        if not ok1:
+            if info1.get("errors"):
+                # Hard block — server-side issue user can't fix directly
+                logger.warning(f"[WF Gate1] {workflow_id} rejected: {info1['errors'][:3]}")
+                raise HTTPException(status_code=422, detail={
+                    "gate": 1,
+                    "errors": info1["errors"],
+                    "missing_inputs": info1.get("missing_inputs", []),
+                    "message": "工作流尚無法執行，請先排除以下問題",
+                })
+            if info1.get("missing_inputs"):
+                # Soft block — UI should show a wizard to collect
+                logger.info(f"[WF Gate1] {workflow_id} needs inputs: {[i['name'] for i in info1['missing_inputs']]}")
+                raise HTTPException(status_code=428, detail={
+                    "gate": 1,
+                    "missing_inputs": info1["missing_inputs"],
+                    "message": "工作流需要以下輸入才能執行",
+                })
+    except HTTPException:
+        raise
+    except Exception as _g1_err:
+        logger.error(f"[WF Gate1] Internal error: {_g1_err}")
+        # Fail-open: let executor attempt the run; Gate 2 still protects each step
 
     try:
         from server.services.workflow_executor import get_workflow_executor
