@@ -784,15 +784,23 @@
 
         if (!resp.ok) throw new Error(`API save failed (${resp.status})`);
 
-        // If the workflow was renamed (ID changed), delete the old temp file
-        if (targetFlowId !== oldFlowId) {
+        // ── Pick up backend's final slug (Phase 1.5: filename = workflow_id) ──
+        // Backend may rename the file from legacy Chinese to v2 slug.
+        let serverResp = {};
+        try { serverResp = await resp.clone().json(); } catch (_) {}
+        const serverFinalId = serverResp.id || targetFlowId;
+
+        // If the workflow was renamed — delete the OLD legacy file so we
+        // don't end up with two copies. (Same logic covers both "display name
+        // rename" and "backend slug-rename" cases.)
+        if (serverFinalId !== oldFlowId) {
           try {
             await fetch(
               `/api/workflows/${encodeURIComponent(oldFlowId)}?scope=${encodeURIComponent(scope)}&owner=${encodeURIComponent(owner)}`,
               { method: "DELETE" }
             );
           } catch (_) { /* ignore delete errors */ }
-          this._currentWfId = targetFlowId;   // update in-memory ID
+          this._currentWfId = serverFinalId;  // update in-memory ID
         }
 
         if (window.showToast) window.showToast(`「${data.name}」已儲存`, "success");

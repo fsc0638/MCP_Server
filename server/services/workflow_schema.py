@@ -180,79 +180,120 @@ def is_legacy(data: Dict[str, Any]) -> bool:
     return False
 
 
-def migrate_legacy(data: Dict[str, Any]) -> Dict[str, Any]:
+def migrate_legacy(
+    data: Dict[str, Any],
+    *,
+    mark_as_source: str = "legacy",
+    resync_steps: bool = False,
+) -> Dict[str, Any]:
     """Convert an old-format workflow JSON to v2 in place.
 
-    Old format typically has:
-        id, name, blocks, connections, trigger, execution, ...
-    New format adds:
-        workflow_id, display_name, version, source="legacy", steps (derived),
-        metadata block.
+    Args:
+        mark_as_source:
+            - "legacy" (default) — startup migration of pre-existing files
+            - "user_defined"     — called from save_workflow when user saved via UI
+            - "llm_generated"    — called from one-shot promotion flow
+            - "template"         — called from wizard flow
+        resync_steps:
+            If True, rebuild steps[] from blocks+connections every time (so
+            canvas edits stay in sync with the executable steps list).
+            If False, only derive steps when missing (original behavior,
+            safe for startup sweep).
 
-    Canvas `blocks` + `connections` are preserved so visual editor keeps
-    working; a synthesized `steps[]` is also added for the new executor.
+    Old format had: id, name, blocks, connections, trigger, execution, ...
+    V2 shape: workflow_id, display_name, version, steps (derived), metadata,
+    with per-section defaults filled in.
     """
     if not isinstance(data, dict):
         return data
 
-    # Shallow copy so we don't mutate caller's dict if they care
-    out = dict(data)
+    out = dict(data)  # shallow copy
 
-    # 1. version
+    # ── 1. version ──
     if not out.get("version") or not re.match(r"^\d+\.\d+$", str(out.get("version", ""))):
         out["version"] = "1.0"
 
-    # 2. workflow_id — derive from old 'id' field, sanitized
+    # ── 2. workflow_id ──
+    # Derive from legacy 'id' / 'name', sanitized. Preserve existing if set.
     if not out.get("workflow_id"):
         legacy_id = str(out.get("id") or "").strip()
         slug = _slugify(legacy_id or out.get("name") or "legacy_workflow")
         out["workflow_id"] = slug or "legacy_workflow"
 
-    # 3. display_name — preserve old 'name'
+    # ── 3. display_name ──
     if not out.get("display_name"):
         out["display_name"] = out.get("name") or out["workflow_id"]
 
-    # 4. source
-    if not out.get("source"):
-        out["source"] = "legacy"
+    # ── 4. source ──
+    # Only set if not already a v2-valid value. Caller controls the label.
+    _existing_src = out.get("source")
+    if _existing_src not in ("user_defined", "llm_generated", "template", "legacy"):
+        out["source"] = mark_as_source
 
-    # 5. metadata
+    # ── 5. metadata block (consolidates created_at / updated_at / created_by) ──
     meta = out.get("metadata") or {}
     now = datetime.now().isoformat()
     meta.setdefault("created_at", out.get("created_at") or now)
     meta.setdefault("updated_at", out.get("updated_at") or now)
     meta.setdefault("run_count", 0)
+    # Move root-level created_by into metadata where it belongs per schema
+    if out.get("created_by") and not meta.get("created_by"):
+        meta["created_by"] = out["created_by"]
     out["metadata"] = meta
 
-    # 6. Derive steps[] from legacy blocks+connections if steps missing.
-    # Always ensure steps is a list (empty for drafts with no skill blocks).
-    if not isinstance(out.get("steps"), list):
+    # ── 6. Derive / resync steps[] from blocks+connections ──
+    # Always ensure it's a list (empty for drafts). If resync_steps=True or
+    # steps is missing, rebuild from canvas blocks+connections.
+    if resync_steps or not isinstance(out.get("steps"), list):
         if out.get("blocks"):
             out["steps"] = _steps_from_blocks(out.get("blocks") or [], out.get("connections") or [])
         else:
-            out["steps"] = []
+            out["steps"] = out.get("steps") if isinstance(out.get("steps"), list) else []
 
-    # 7. constraints default
+    # ── 7. constraints ──
     if not out.get("constraints"):
         out["constraints"] = {"max_steps": 10, "timeout_seconds": 300, "skill_whitelist": None}
 
-    # 7b. Normalize legacy execution.on_error values. The old UI used "stop"
-    # but the schema enum is [retry, skip, abort]. Map common variants:
-    _exec = out.get("execution")
-    if isinstance(_exec, dict):
-        _oe = str(_exec.get("on_error", "")).lower()
-        _map = {"stop": "abort", "cancel": "abort", "halt": "abort",
-                "ignore": "skip", "retry": "retry", "skip": "skip", "abort": "abort"}
-        if _oe and _oe not in ("retry", "skip", "abort"):
-            _exec["on_error"] = _map.get(_oe, "abort")
+    # ── 7b. Fill in v2 default shapes for the three side-block dicts ──
+    # so frontend UIs never have to deal with undefined properties.
+    trig = out.get("trigger") if isinstance(out.get("trigger"), dict) else {}
+    trig.setdefault("enabled", False)
+    trig.setdefault("mode", "confirm")
+    trig.setdefault("priority", 10)
+    trig.setdefault("patterns", [])
+    trig.setdefault("schedule", "")
+    # Move legacy root-level trigger_keywords → trigger.patterns
+    if out.get("trigger_keywords"):
+        _existing_patterns = set(trig.get("patterns") or [])
+        for p in out["trigger_keywords"]:
+            if p and p not in _existing_patterns:
+                trig.setdefault("patterns", []).append(p)
+                _existing_patterns.add(p)
+    out["trigger"] = trig
 
-    # 8. Normalize variables block to v2 shape + auto-register refs.
-    # Legacy format: variables is a LIST of {name, type, source, default_value}
-    # v2 format: variables is a DICT with {global_inputs, env_requirements, definitions}
-    # Convert list → dict by moving the whole list into `definitions`.
+    exec_block = out.get("execution") if isinstance(out.get("execution"), dict) else {}
+    exec_block.setdefault("default_model", "")
+    exec_block.setdefault("timeout", 120)
+    exec_block.setdefault("on_error", "retry")
+    exec_block.setdefault("max_retries", 3)
+    # Normalize legacy on_error values
+    _oe = str(exec_block.get("on_error", "")).lower()
+    if _oe and _oe not in ("retry", "skip", "abort"):
+        exec_block["on_error"] = {
+            "stop": "abort", "cancel": "abort", "halt": "abort", "ignore": "skip"
+        }.get(_oe, "retry")
+    out["execution"] = exec_block
+
+    sec = out.get("security") if isinstance(out.get("security"), dict) else {}
+    sec.setdefault("require_auth", True)
+    sec.setdefault("allowed_roles", [])
+    sec.setdefault("rate_limit", 0)
+    sec.setdefault("audit_log", True)
+    out["security"] = sec
+
+    # ── 8. Variables block: legacy list → v2 dict with auto-register ──
     raw_vars = out.get("variables")
     if isinstance(raw_vars, list):
-        # Legacy array format — move to definitions
         vars_block = {
             "global_inputs": [],
             "env_requirements": [],
@@ -272,13 +313,23 @@ def migrate_legacy(data: Dict[str, Any]) -> Dict[str, Any]:
     for ref in used_names:
         if ref.startswith("_") or ref.startswith("GLOBAL."):
             continue
-        # Only add to global_inputs if not already a named definition
         if ref not in globals_set and ref not in definition_names:
             globals_set.add(ref)
     vars_block["global_inputs"] = sorted(globals_set)
     vars_block.setdefault("env_requirements", [])
     vars_block.setdefault("definitions", [])
     out["variables"] = vars_block
+
+    # ── 9. Cleanup: remove legacy root-level fields now consolidated elsewhere ──
+    # Only drop fields that are *pure duplicates* — never drop anything the
+    # canvas UI still reads (blocks, connections, scope, owner).
+    for legacy_field in ("id", "name", "trigger_keywords", "created_by"):
+        out.pop(legacy_field, None)
+    # Root-level timestamps are now in metadata
+    out.pop("created_at", None)
+    # Keep root `updated_at` for backward compat with any UI still reading it,
+    # but sync it with metadata
+    out["updated_at"] = meta["updated_at"]
 
     return out
 

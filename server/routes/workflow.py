@@ -224,13 +224,18 @@ def save_workflow(
     caller_ctx = resolve_caller_context(mcp_session)
     check_scope_write_permission(req.scope, req.owner, caller_ctx, resource_kind="工作流")
 
+    # The URL workflow_id is what the client uses to locate the file.
+    # May be a legacy Chinese name (existing files) or a v2 slug (new writes).
+    # We honor it as the filename for this save but the internal workflow_id
+    # field inside the JSON is ALWAYS a v2 slug (derived by migrate_legacy).
     path = _workflows_dir(req.scope, req.owner) / f"{workflow_id}.json"
-    # Quota only applies to NEW workflow creation (not updates of existing)
-    if not path.exists():
+    is_new = not path.exists()
+
+    if is_new:
         enforce_guest_workflow_quota(caller_ctx, creating_new=True)
 
     data = {
-        "id": workflow_id,
+        "id": workflow_id,  # Retained temporarily for migrate_legacy to derive slug
         "name": req.name,
         "description": req.description,
         "icon": req.icon,
@@ -248,58 +253,103 @@ def save_workflow(
         "updated_at": datetime.now().isoformat(),
     }
 
-    # Phase 1.5: Upgrade incoming data to v2 format before persistence.
-    # This lets both the legacy block-editor UI (sends old format) and any
-    # future v2-native callers (wizard / LLM generator) share the same store.
+    # Preserve pre-existing metadata (created_at, run_count, promoted_from, etc.)
+    existing_data = {}
+    if not is_new:
+        try:
+            existing_data = json.loads(path.read_text(encoding="utf-8"))
+            if existing_data.get("metadata"):
+                data.setdefault("metadata", {}).update(existing_data["metadata"])
+            # Carry across scope/owner if file moved
+            if existing_data.get("source"):
+                data["source"] = existing_data["source"]
+        except Exception:
+            pass
+
+    # Track creator (goes into metadata via migrate_legacy)
+    _uid = (caller_ctx or {}).get("user_id", "")
+    if _uid and not existing_data.get("metadata", {}).get("created_by"):
+        data["created_by"] = _uid
+
+    # Phase 1.1-1.7: Upgrade incoming data to v2 format before persistence.
+    # - mark_as_source=user_defined (NOT legacy): this is a UI save, not the
+    #   startup migration sweep
+    # - resync_steps=True: always rebuild steps[] from current blocks so canvas
+    #   edits stay in sync with the executable list
     try:
-        from server.services.workflow_schema import is_legacy, migrate_legacy
-        if is_legacy(data):
-            data = migrate_legacy(data)
-            # Preserve fields the editor UI updated (name/desc may have changed)
-            data["display_name"] = req.name or data.get("display_name", workflow_id)
-            data["description"] = req.description or data.get("description", "")
-            data["scope"] = req.scope
-            data["owner"] = req.owner
+        from server.services.workflow_schema import migrate_legacy, validate_workflow
+        data = migrate_legacy(
+            data,
+            mark_as_source=existing_data.get("source") or "user_defined",
+            resync_steps=True,
+        )
+        # Preserve fields the editor UI just updated (overriding any stale values)
+        data["display_name"] = req.name or data.get("display_name", workflow_id)
+        data["description"] = req.description or data.get("description", "")
+        data["scope"] = req.scope
+        data["owner"] = req.owner
+
+        # Best-effort validation — log warnings but don't block save (Phase 2
+        # will turn this into a hard Gate 0 rejection)
+        ok, errs = validate_workflow(data)
+        if not ok:
+            logger.warning(f"[WF Save] v2 validation issues for {workflow_id}: {errs[:3]}")
     except Exception as _mig_err:
         logger.warning(f"[WF Save] Schema upgrade failed (non-fatal): {_mig_err}")
 
-    # Track the creator for dept-scope quota counting
-    _uid = (caller_ctx or {}).get("user_id", "")
-    if _uid:
-        data["created_by"] = _uid
-    if path.exists():
-        try:
-            old = json.loads(path.read_text(encoding="utf-8"))
-            data["created_at"] = old.get("created_at", data["updated_at"])
-            # Preserve original creator if already set
-            if old.get("created_by"):
-                data["created_by"] = old["created_by"]
-        except Exception:
-            data["created_at"] = data["updated_at"]
-    else:
-        data["created_at"] = data["updated_at"]
+    # ── Phase 1.5: Align filename with internal workflow_id (slug) ──
+    # If the URL path differs from the v2 slug, rename the file so the two
+    # stay in sync (enables sub-workflow lookup by workflow_id).
+    # This runs ONLY when:
+    #   - migration produced a different slug than the URL path, AND
+    #   - the new filename is safe (ASCII slug, no filesystem issues)
+    final_slug = data.get("workflow_id", workflow_id)
+    final_path = path
+    renamed = False
+    if final_slug and final_slug != workflow_id:
+        # Guard: only switch if slug looks safe (pure slug pattern)
+        import re as _re
+        if _re.match(r"^[a-z][a-z0-9_]{2,63}$", final_slug):
+            final_path = _workflows_dir(req.scope, req.owner) / f"{final_slug}.json"
+            renamed = True
 
-    # Save version snapshot before overwrite (for version management)
-    if path.exists():
+    # Version snapshot before overwrite (use the FINAL path's version dir)
+    if not is_new:
         try:
-            ver_dir = _workflows_base() / "versions" / workflow_id
+            ver_dir = _workflows_base() / "versions" / final_slug
             ver_dir.mkdir(parents=True, exist_ok=True)
             ver_name = datetime.now().strftime("v%Y%m%d_%H%M%S")
-            ver_data = json.loads(path.read_text(encoding="utf-8"))
-            ver_data["saved_at"] = datetime.now().isoformat()
             (ver_dir / f"{ver_name}.json").write_text(
-                json.dumps(ver_data, ensure_ascii=False, indent=2), encoding="utf-8"
+                json.dumps(existing_data, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-            # Keep only last 20 versions
             ver_files = sorted(ver_dir.glob("*.json"), reverse=True)
             for old_ver in ver_files[20:]:
                 old_ver.unlink()
         except Exception as ver_err:
             logger.debug(f"[Workflow] Version snapshot failed: {ver_err}")
 
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info(f"[Workflow] Saved: {workflow_id} (scope={req.scope}, {len(req.blocks)} blocks)")
-    return {"status": "success", "id": workflow_id, "scope": req.scope, "updated_at": data["updated_at"]}
+    final_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Delete old file if we renamed
+    if renamed and path.exists() and path != final_path:
+        try:
+            path.unlink()
+            logger.info(f"[Workflow] Renamed: {workflow_id}.json → {final_slug}.json")
+        except Exception as rm_err:
+            logger.warning(f"[Workflow] Failed to remove old file {path}: {rm_err}")
+
+    logger.info(
+        f"[Workflow] Saved: {final_slug} "
+        f"(scope={req.scope}, {len(req.blocks)} blocks → {len(data.get('steps') or [])} steps, "
+        f"source={data.get('source')})"
+    )
+    return {
+        "status": "success",
+        "id": final_slug,
+        "scope": req.scope,
+        "updated_at": data["updated_at"],
+        "renamed": renamed,
+    }
 
 
 @router.delete("/api/workflows/{workflow_id}")
