@@ -844,16 +844,19 @@
         const serverFinalId = serverResp.id || targetFlowId;
 
         // If the workflow was renamed — delete the OLD legacy file so we
-        // don't end up with two copies. (Same logic covers both "display name
-        // rename" and "backend slug-rename" cases.)
+        // don't end up with two copies. Skip if this is a fresh draft
+        // (the temp ID never actually got persisted, so DELETE would 404).
         if (serverFinalId !== oldFlowId) {
-          try {
-            await fetch(
-              `/api/workflows/${encodeURIComponent(oldFlowId)}?scope=${encodeURIComponent(scope)}&owner=${encodeURIComponent(owner)}`,
-              { method: "DELETE" }
-            );
-          } catch (_) { /* ignore delete errors */ }
+          if (!this._isNewDraft) {
+            try {
+              await fetch(
+                `/api/workflows/${encodeURIComponent(oldFlowId)}?scope=${encodeURIComponent(scope)}&owner=${encodeURIComponent(owner)}`,
+                { method: "DELETE" }
+              );
+            } catch (_) { /* ignore delete errors */ }
+          }
           this._currentWfId = serverFinalId;  // update in-memory ID
+          this._isNewDraft = false;           // no longer a draft after first save
         }
 
         if (window.showToast) window.showToast(`「${data.name}」已儲存`, "success");
