@@ -330,6 +330,71 @@ class WorkflowExecutor:
                         json.dumps(block_params, ensure_ascii=False),
                     )
 
+                    # ── External Write / HitL interception (Phase 2 security) ──
+                    # If a skill self-reports it requires approval (e.g. risk_level=high),
+                    # pause the workflow and create an approval request (TTL 10 min).
+                    if isinstance(result, dict) and result.get("status") == "requires_approval":
+                        from server.services.permissions import resolve_caller_context
+                        from server.services.policy import authorize
+                        from server.services.approvals_service import create_approval
+                        from server.services.audit_logger import log_event
+
+                        # Resolve caller identity from user_context (workflow passes it through)
+                        caller_ctx = user_context or {}
+                        subject_id = caller_ctx.get("user_id") or caller_ctx.get("employee_id") or "guest"
+
+                        # Authorize the request (always requires approval for high-risk)
+                        dec = authorize(
+                            subject_ctx=caller_ctx,
+                            action="skill.requires_approval",
+                            resource_type="skill",
+                            resource_id=skill_name,
+                            context={"workflow_id": workflow_id, "block_id": bid},
+                        )
+
+                        approval_id = create_approval(
+                            correlation_id=run_id,
+                            requested_by_subject_id=subject_id,
+                            action=skill_name,
+                            resource_type="workflow_block",
+                            resource_id=f"{workflow_id}:{bid}",
+                            request_summary=f"工作流 {workflow_id} 需要批准高風險技能：{skill_name}",
+                            payload={
+                                "workflow_id": workflow_id,
+                                "run_id": run_id,
+                                "block_id": bid,
+                                "skill_name": skill_name,
+                                "pending_args": result.get("pending_args") or block_params,
+                            },
+                            ttl_seconds=600,
+                        )
+
+                        log_event(
+                            correlation_id=run_id,
+                            subject_id=subject_id,
+                            action="approval.request",
+                            resource_type="approval",
+                            resource_id=approval_id,
+                            decision="allow",
+                            reason_code=dec.reason_code,
+                            reason=dec.reason,
+                            input_obj={"skill": skill_name, "block_id": bid},
+                        )
+
+                        results.append({
+                            "block_id": bid,
+                            "type": block_type,
+                            "skill": skill_name,
+                            "status": "requires_approval",
+                            "approval_id": approval_id,
+                            "risk_description": result.get("risk_description", ""),
+                        })
+
+                        # Stop execution (pending)
+                        success = False
+                        last_error = "requires_approval"
+                        break
+
                     # ── Detect skill-level errors ──
                     # Skills may return {"status": "error", "message": "..."}
                     # even though the subprocess itself exited cleanly.
@@ -392,9 +457,12 @@ class WorkflowExecutor:
                 # "skip" continues to next block
 
         # Determine overall status based on step results
+        _any_req = any(r.get("status") == "requires_approval" for r in results)
         _any_error = any(r.get("status") == "error" for r in results)
         _any_ok = any(r.get("status") == "success" for r in results)
-        if _any_error and _any_ok:
+        if _any_req:
+            overall_status = "requires_approval"
+        elif _any_error and _any_ok:
             overall_status = "partial"
         elif _any_error:
             overall_status = "error"

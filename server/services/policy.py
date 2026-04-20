@@ -25,6 +25,8 @@ HIGH_RISK_ACTIONS = {
     "line.user_push",
     "line.group_push",
     "email.send",
+    # Also treat high-risk skills that self-report requires_approval
+    "skill.requires_approval",
 }
 
 
