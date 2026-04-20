@@ -177,6 +177,7 @@ def gate_1_pre_execute(
     # OS env vars declared in the skill's SKILL.md frontmatter. We check
     # those here so users don't discover TAVILY_API_KEY missing only
     # after 3 retries inside the executor.
+    param_errors: List[str] = []
     if uma and hasattr(uma, "registry"):
         for step in workflow.get("steps") or []:
             skill_id = _step_skill_id(step)
@@ -195,13 +196,41 @@ def gate_1_pre_execute(
                 else:
                     info["errors"].append(f"技能 '{skill_id}' 環境未就緒")
             # OS env vars from SKILL.md
-            for env_name in (meta.get("env_requirements") or []):
-                if not os.environ.get(env_name):
+            declared_envs = list(meta.get("env_requirements") or [])
+            for env_name in declared_envs:
+                present = bool(os.environ.get(env_name))
+                logger.info(f"[Gate1] skill={skill_id} env_check {env_name}={'✓' if present else '✗'}")
+                if not present:
                     missing_envs.add(env_name)
+
+            # 1.2b — Validate per-step input_map covers the skill's required params.
+            # Empty input_map + required input_schema fields is the common UX fail:
+            # user drops a block, never configures params → executor falls back to
+            # {"input": ...} and the skill dies with "Missing query" / similar.
+            required_params = _skill_required_param_names(meta)
+            input_map = step.get("input_map") or {}
+            provided = set(input_map.keys())
+            for rp in required_params:
+                if rp in provided:
+                    continue
+                # Accept a value supplied via user_inputs under the same name
+                if rp in user_inputs and user_inputs[rp] not in (None, ""):
+                    continue
+                step_label = step.get("label") or step.get("step_id") or skill_id
+                param_errors.append(
+                    f"步驟「{step_label}」({skill_id}) 缺少必填參數：{rp}。請在區塊設定中填寫此參數的來源。"
+                )
 
     # Emit env var errors (deduped)
     for env_name in sorted(missing_envs):
         info["errors"].append(f"環境變數 {env_name} 未設定（請聯絡管理員）")
+    # Emit per-step param errors (deduped, preserve order)
+    seen_param: set = set()
+    for msg in param_errors:
+        if msg in seen_param:
+            continue
+        seen_param.add(msg)
+        info["errors"].append(msg)
 
     # 1.3 Required global_inputs provided by caller
     required_inputs = _collect_required_inputs(variables)
@@ -243,6 +272,31 @@ def _step_skill_id(step: Dict[str, Any]) -> Optional[str]:
         return step.get("skill_id")
     # parallel/sub_workflow handled elsewhere
     return None
+
+
+def _skill_required_param_names(meta: Dict[str, Any]) -> List[str]:
+    """Pull the list of required parameter names a skill expects.
+
+    Reads both the v2 `input_schema` shape (each entry has `required: true`) and
+    the legacy `parameters.required` JSON-Schema array. Callers only need to
+    know WHICH names are mandatory — they don't care about types or defaults.
+    """
+    names: List[str] = []
+    # v2 shape: input_schema: {name: {type, required, description}}
+    inp = meta.get("input_schema")
+    if isinstance(inp, dict):
+        for k, v in inp.items():
+            if isinstance(v, dict) and v.get("required") is True:
+                names.append(k)
+    # Legacy JSON-Schema shape: parameters: {type, properties, required: [...]}
+    params = meta.get("parameters") or {}
+    if isinstance(params, dict):
+        req = params.get("required")
+        if isinstance(req, list):
+            for k in req:
+                if k and k not in names:
+                    names.append(k)
+    return names
 
 
 def _collect_required_inputs(variables: Dict[str, Any]) -> List[Dict[str, Any]]:

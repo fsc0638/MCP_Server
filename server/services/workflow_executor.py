@@ -284,9 +284,23 @@ class WorkflowExecutor:
                 user_input,
             )
 
-            # If no explicit params, use accumulated context as input
+            # If no explicit params, fall back to accumulated context. Try to
+            # map it to whatever primary string field the skill actually expects
+            # (e.g. "query" for mcp-web-search, "text" for analyzers) instead
+            # of blindly sending {"input": ...} and watching the skill die
+            # with "Missing query". Order of preference:
+            #   1. Skill's input_schema — pick first required field
+            #   2. Skill's input_schema — pick first string field with name in
+            #      a well-known alias list (query/text/prompt/content)
+            #   3. Skill's parameters.required[0]
+            #   4. Literal "input" (last-resort legacy behavior)
             if not block_params:
-                block_params = {"input": accumulated_context}
+                fallback_key = self._infer_primary_param_name(uma, skill_name) or "input"
+                block_params = {fallback_key: accumulated_context}
+                if fallback_key != "input":
+                    logger.info(f"[WFExec] Block {bid} ({skill_name}): no params configured, bound accumulated_context → {fallback_key}")
+                else:
+                    logger.warning(f"[WFExec] Block {bid} ({skill_name}): no params configured, falling back to 'input' (may fail if skill expects different key)")
 
             logger.info(f"[WFExec] Block {bid} ({skill_name}): params={list(block_params.keys())}, model={block_model}")
 
@@ -597,6 +611,46 @@ class WorkflowExecutor:
                 resolved[name] = default
 
         return resolved
+
+    def _infer_primary_param_name(self, uma, skill_name: str) -> Optional[str]:
+        """Best-guess the most likely primary string parameter name for a skill.
+
+        Used ONLY when a workflow block was saved without any params configured
+        — we still want to run the skill with the accumulated context, but
+        mapping it to the right parameter name (e.g. `query`, `text`) is far
+        more useful than blindly sending `input` and watching the skill fail.
+        Returns None when no reasonable guess exists; caller falls back to
+        `input` and logs a warning.
+        """
+        try:
+            skill = uma.registry.get_skill(skill_name) if uma and hasattr(uma, "registry") else None
+        except Exception:
+            skill = None
+        if not skill:
+            return None
+        meta = skill.get("metadata") or {}
+        # Pass 1 — input_schema: first required string field
+        inp = meta.get("input_schema")
+        if isinstance(inp, dict):
+            # required first
+            for k, v in inp.items():
+                if isinstance(v, dict) and v.get("required") is True and v.get("type", "string") == "string":
+                    return k
+            # then well-known names
+            for alias in ("query", "text", "prompt", "content", "message", "input"):
+                if alias in inp and isinstance(inp[alias], dict) and inp[alias].get("type", "string") == "string":
+                    return alias
+            # fallback — first string-typed field
+            for k, v in inp.items():
+                if isinstance(v, dict) and v.get("type", "string") == "string":
+                    return k
+        # Pass 2 — legacy JSON-Schema parameters.required[0]
+        params = meta.get("parameters") or {}
+        if isinstance(params, dict):
+            req = params.get("required") or []
+            if isinstance(req, list) and req:
+                return req[0]
+        return None
 
     def _resolve_block_params(
         self,
