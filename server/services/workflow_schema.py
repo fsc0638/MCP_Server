@@ -224,21 +224,47 @@ def migrate_legacy(data: Dict[str, Any]) -> Dict[str, Any]:
     meta.setdefault("run_count", 0)
     out["metadata"] = meta
 
-    # 6. Derive steps[] from legacy blocks+connections if steps missing
-    if not out.get("steps") and out.get("blocks"):
-        out["steps"] = _steps_from_blocks(out.get("blocks") or [], out.get("connections") or [])
+    # 6. Derive steps[] from legacy blocks+connections if steps missing.
+    # Always ensure steps is a list (empty for drafts with no skill blocks).
+    if not isinstance(out.get("steps"), list):
+        if out.get("blocks"):
+            out["steps"] = _steps_from_blocks(out.get("blocks") or [], out.get("connections") or [])
+        else:
+            out["steps"] = []
 
     # 7. constraints default
     if not out.get("constraints"):
         out["constraints"] = {"max_steps": 10, "timeout_seconds": 300, "skill_whitelist": None}
 
-    # 8. Auto-register any ${xxx} refs used in steps as global_inputs.
-    # Old workflows didn't formally declare variables; without this, the
-    # migrated workflow would fail Gate 0 validation. Users can always
-    # trim the list later via the settings UI.
-    vars_block = out.get("variables") or {}
+    # 7b. Normalize legacy execution.on_error values. The old UI used "stop"
+    # but the schema enum is [retry, skip, abort]. Map common variants:
+    _exec = out.get("execution")
+    if isinstance(_exec, dict):
+        _oe = str(_exec.get("on_error", "")).lower()
+        _map = {"stop": "abort", "cancel": "abort", "halt": "abort",
+                "ignore": "skip", "retry": "retry", "skip": "skip", "abort": "abort"}
+        if _oe and _oe not in ("retry", "skip", "abort"):
+            _exec["on_error"] = _map.get(_oe, "abort")
+
+    # 8. Normalize variables block to v2 shape + auto-register refs.
+    # Legacy format: variables is a LIST of {name, type, source, default_value}
+    # v2 format: variables is a DICT with {global_inputs, env_requirements, definitions}
+    # Convert list → dict by moving the whole list into `definitions`.
+    raw_vars = out.get("variables")
+    if isinstance(raw_vars, list):
+        # Legacy array format — move to definitions
+        vars_block = {
+            "global_inputs": [],
+            "env_requirements": [],
+            "definitions": [v for v in raw_vars if isinstance(v, dict)],
+        }
+    elif isinstance(raw_vars, dict):
+        vars_block = raw_vars
+    else:
+        vars_block = {}
+
     globals_set = set(vars_block.get("global_inputs") or [])
-    definitions = {d.get("name") for d in (vars_block.get("definitions") or []) if isinstance(d, dict)}
+    definition_names = {d.get("name") for d in (vars_block.get("definitions") or []) if isinstance(d, dict)}
     used_names = set()
     for step in (out.get("steps") or []):
         for pv in (step.get("input_map") or {}).values():
@@ -246,7 +272,8 @@ def migrate_legacy(data: Dict[str, Any]) -> Dict[str, Any]:
     for ref in used_names:
         if ref.startswith("_") or ref.startswith("GLOBAL."):
             continue
-        if ref not in globals_set and ref not in definitions:
+        # Only add to global_inputs if not already a named definition
+        if ref not in globals_set and ref not in definition_names:
             globals_set.add(ref)
     vars_block["global_inputs"] = sorted(globals_set)
     vars_block.setdefault("env_requirements", [])

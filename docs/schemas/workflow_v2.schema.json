@@ -4,7 +4,7 @@
   "title": "AgentK Workflow v2",
   "description": "Integrated spec from Claude+OpenClaw+MAGELLAN BLOCKS analysis reports. Source of truth for creating, validating, and executing workflows.",
   "type": "object",
-  "required": ["workflow_id", "display_name", "version", "steps"],
+  "required": ["workflow_id", "display_name", "version"],
   "additionalProperties": true,
   "properties": {
     "version": {
@@ -110,9 +110,9 @@
 
     "steps": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "items": { "$ref": "#/definitions/step" },
-      "description": "Ordered list of steps. Topological order enforced by Gate 0."
+      "description": "Ordered list of steps. Topological order enforced by Gate 0. Empty array allowed for work-in-progress drafts; execution requires >=1 step (enforced at Gate 1)."
     },
 
     "on_error": {
