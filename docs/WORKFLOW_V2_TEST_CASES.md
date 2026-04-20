@@ -100,8 +100,14 @@
 ## Test Case 2.6 — Gate 3 寫入 run log
 **步驟**：成功執行一個 workflow。
 **檢核**：
-- [ ] `workspace/workflows/runs/{workflow_id}/{run_id}.json` 存在
-- [ ] 內容有 `run_id`, `status`, `started_at`, `finished_at`, `steps`
+- [ ] `workspace/workflows/logs/{workflow_id}/{run_id}.json` 存在
+      （⚠️ 是 `logs/`，不是 `runs/` — 先前文件 typo）
+- [ ] 內容有 `run_id`, `workflow_id`, `status`, `started_at`, `ended_at`,
+      `duration_ms`, `blocks_executed`, `final_output`, `errors[]`,
+      `step_results[]`
+- [ ] 失敗執行也有寫入，`status="error"`、`errors[]` 有訊息
+- [ ] 同資料夾下還有一個 `{workflow_id}.jsonl`（WorkflowAudit 另一套
+      append-only log），兩套並存不衝突
 
 ---
 
