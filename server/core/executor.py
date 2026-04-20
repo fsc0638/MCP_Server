@@ -25,6 +25,16 @@ class ExecutionEngine:
         
         return abs_path
 
+    @staticmethod
+    def _sanitize_path_with_base(base_dir: Path, target_path: str) -> Path:
+        """
+        Resolve `target_path` under `base_dir` and ensure it cannot escape.
+        """
+        abs_path = (base_dir / target_path).resolve()
+        if not str(abs_path).startswith(str(base_dir)):
+            raise PermissionError(f"Security Violation: Path '{target_path}' is outside of {base_dir}")
+        return abs_path
+
     def read_resource(self, skill_name: str, resource_name: str) -> Dict[str, Any]:
         """
         Reads a file from the References/ directory.
@@ -68,7 +78,15 @@ class ExecutionEngine:
             shutil.rmtree(temp_path)
             temp_path.mkdir()
 
-    def run_script(self, skill_name: str, script_relative_path: str, args: Dict[str, Any], env_vars: Optional[Dict[str, str]] = None, timeout: int = 30):
+    def run_script(
+        self,
+        skill_name: str,
+        script_relative_path: str,
+        args: Dict[str, Any],
+        env_vars: Optional[Dict[str, str]] = None,
+        timeout: int = 30,
+        skills_home_override: Optional[str] = None,
+    ):
         """
         Executes a script within a skill bundle.
         D-04: Supports three parameter passing channels:
@@ -81,12 +99,14 @@ class ExecutionEngine:
 
         # 1. Sanitize the skill directory and script path (case-insensitive for cross-platform)
         try:
-            skill_dir = self.sanitize_path(skill_name)
-            script_path = self.sanitize_path(Path(skill_name) / "scripts" / script_relative_path)
+            active_skills_home = Path(skills_home_override).resolve() if skills_home_override else self.skills_home
+
+            skill_dir = self._sanitize_path_with_base(active_skills_home, skill_name)
+            script_path = self._sanitize_path_with_base(active_skills_home, str(Path(skill_name) / "scripts" / script_relative_path))
 
             if not script_path.exists():
                 # Fallback: try capitalized "Scripts/" for Windows-created skills on Linux
-                script_path = self.sanitize_path(Path(skill_name) / "Scripts" / script_relative_path)
+                script_path = self._sanitize_path_with_base(active_skills_home, str(Path(skill_name) / "Scripts" / script_relative_path))
 
             if not script_path.exists():
                 return {"status": "error", "message": f"Script not found: {script_relative_path}"}
@@ -97,11 +117,11 @@ class ExecutionEngine:
                 current_env.update(env_vars)
             
             # Inject standardized project variables
-            current_env["SKILLS_HOME"] = str(self.skills_home)
+            current_env["SKILLS_HOME"] = str(active_skills_home)
             current_env["CURRENT_SKILL_DIR"] = str(skill_dir)
             
             # --- Monorepo PYTHONPATH Injection ---
-            shared_path = str(self.skills_home.parent)
+            shared_path = str(active_skills_home.parent)
             existing_pythonpath = current_env.get("PYTHONPATH", "")
             if existing_pythonpath:
                 current_env["PYTHONPATH"] = f"{shared_path}{os.pathsep}{existing_pythonpath}"
@@ -125,7 +145,7 @@ class ExecutionEngine:
             # Channel 3: Temp JSON file (for scripts that prefer file I/O)
             temp_param_file = tempfile.NamedTemporaryFile(
                 mode="w", suffix=".json", prefix="skill_params_",
-                dir=str(self.skills_home.parent / "temp" if (self.skills_home.parent / "temp").exists() else tempfile.gettempdir()),
+                dir=str(active_skills_home.parent / "temp" if (active_skills_home.parent / "temp").exists() else tempfile.gettempdir()),
                 delete=False, encoding="utf-8"
             )
             temp_param_file.write(args_json)

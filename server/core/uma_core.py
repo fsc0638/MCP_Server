@@ -138,6 +138,16 @@ class UMA:
         except Exception:
             return result
 
+    def _resolve_skill_runtime_paths(self, skill_name: str) -> tuple[Optional[Dict[str, Any]], Path]:
+        """
+        Resolve the concrete skill directory for execution/knowledge loading.
+        Priority: registry path (supports system/dept/personal) -> legacy system path fallback.
+        """
+        skill_data = self.registry.get_skill(skill_name)
+        if skill_data and skill_data.get("path"):
+            return skill_data, Path(skill_data["path"]).resolve()
+        return skill_data, (self.executor.skills_home / skill_name).resolve()
+
 
     def _detect_execution_mode(self, skill_name: str) -> str:
         """
@@ -146,7 +156,7 @@ class UMA:
         - 'code':       scripts/ has .py files (but no main.py) → reference guide + python-executor
         - 'semantic':   no scripts/ or empty → LLM processes directly with language capabilities
         """
-        skill_dir = self.executor.skills_home / skill_name
+        _, skill_dir = self._resolve_skill_runtime_paths(skill_name)
         scripts_dir = skill_dir / "scripts"
 
         for candidate in [scripts_dir, skill_dir / "Scripts"]:
@@ -166,7 +176,7 @@ class UMA:
         Text files (.md, .txt) are injected as full content.
         Binary files (.docx, .xlsx, .pdf) are listed as available system templates.
         """
-        skill_dir = self.executor.skills_home / skill_name
+        _, skill_dir = self._resolve_skill_runtime_paths(skill_name)
         refs_dir = None
         for candidate in ["references", "assets"]:
             d = skill_dir / candidate
@@ -219,8 +229,10 @@ class UMA:
         except:
             arg_dict = {"raw": arguments}
 
+        # Resolve concrete skill location across scopes (system/dept/personal)
+        skill_data, skill_dir = self._resolve_skill_runtime_paths(skill_name)
+
         # Phase 3: Risk-level gate
-        skill_data = self.registry.get_skill(skill_name)
         if skill_data:
             meta = skill_data.get("metadata", {})
             if meta.get("risk_level", "").lower() == "high":
@@ -235,7 +247,6 @@ class UMA:
                 }
 
         mode = self._detect_execution_mode(skill_name)
-        skill_dir = self.executor.skills_home / skill_name
 
         # === Executable: run script directly ===
         if mode == "executable":
@@ -274,6 +285,7 @@ class UMA:
                 skill_name, "main.py", arg_dict,
                 env_vars=env_vars,
                 timeout=skill_timeout,
+                skills_home_override=str(skill_dir.parent),
             )
             return self._normalize_executable_result(raw_result)
 

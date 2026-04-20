@@ -1202,15 +1202,22 @@ def _process_line_message(
                             import asyncio
                             from server.services.workflow_executor import get_workflow_executor
                             _wf_exec = get_workflow_executor()
-                            _wf_uc = None
-                            try:
-                                _wf_uc_p = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
-                                if _wf_uc_p.exists():
-                                    _wf_uc = json.loads(_wf_uc_p.read_text(encoding="utf-8"))
-                            except Exception:
-                                pass
+                            from server.services.identity_context import resolve_identity_context
+                            _persist_bind = not (
+                                session_id.startswith("line_group_")
+                                or session_id.startswith("line_room_")
+                            )
+                            _resolved_uid, _wf_uc = resolve_identity_context(
+                                session_id=session_id,
+                                explicit_user_id=(user_id or ""),
+                                session_mgr=_session_mgr,
+                                persist_binding=_persist_bind,
+                                allow_session_binding=True,
+                            )
                             _wf_uc = _wf_uc or {}
                             _wf_uc["session_id"] = session_id
+                            if _resolved_uid:
+                                _wf_uc.setdefault("user_id", _resolved_uid)
                             _wf_result = asyncio.get_event_loop().run_until_complete(
                                 _wf_exec.execute(
                                     workflow=_pending_wf["workflow"],
@@ -1277,11 +1284,27 @@ def _process_line_message(
                             import asyncio
                             from server.services.workflow_executor import get_workflow_executor
                             _wf_exec = get_workflow_executor()
+                            from server.services.identity_context import resolve_identity_context
+                            _persist_bind = not (
+                                session_id.startswith("line_group_")
+                                or session_id.startswith("line_room_")
+                            )
+                            _resolved_uid, _wf_uc_exec = resolve_identity_context(
+                                session_id=session_id,
+                                explicit_user_id=(user_id or ""),
+                                session_mgr=_session_mgr,
+                                persist_binding=_persist_bind,
+                                allow_session_binding=True,
+                            )
+                            _wf_uc_exec = _wf_uc_exec or {}
+                            _wf_uc_exec["session_id"] = session_id
+                            if _resolved_uid:
+                                _wf_uc_exec.setdefault("user_id", _resolved_uid)
                             _wf_result = asyncio.get_event_loop().run_until_complete(
                                 _wf_exec.execute(
                                     workflow=_target_wf,
                                     user_input=_wf_name_query,
-                                    user_context={"session_id": session_id},
+                                    user_context=_wf_uc_exec,
                                 )
                             )
                             _wf_reply = _wf_result.get("final_output", "")
@@ -1524,13 +1547,22 @@ def _process_line_message(
                     from server.services.workflow_matcher import get_workflow_matcher
                     _wf_matcher = get_workflow_matcher()
                     # Load user context for scope filtering
-                    _wf_user_ctx = None
-                    try:
-                        _wf_uc_path = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
-                        if _wf_uc_path.exists():
-                            _wf_user_ctx = json.loads(_wf_uc_path.read_text(encoding="utf-8"))
-                    except Exception:
-                        pass
+                    from server.services.identity_context import resolve_identity_context
+                    _persist_bind = not (
+                        session_id.startswith("line_group_")
+                        or session_id.startswith("line_room_")
+                    )
+                    _wf_uid, _wf_user_ctx = resolve_identity_context(
+                        session_id=session_id,
+                        explicit_user_id=(user_id or ""),
+                        session_mgr=_session_mgr,
+                        persist_binding=_persist_bind,
+                        allow_session_binding=True,
+                    )
+                    _wf_user_ctx = _wf_user_ctx or {}
+                    _wf_user_ctx["session_id"] = session_id
+                    if _wf_uid:
+                        _wf_user_ctx.setdefault("user_id", _wf_uid)
                     _wf_match = _wf_matcher.match(user_input, user_context=_wf_user_ctx)
                     if _wf_match:
                         _wf_mode = _wf_match["workflow"].get("trigger_mode", "auto")
@@ -1542,6 +1574,8 @@ def _process_line_message(
                             _wf_exec = get_workflow_executor()
                             _wf_user_ctx_exec = _wf_user_ctx or {}
                             _wf_user_ctx_exec["session_id"] = session_id
+                            if _wf_uid:
+                                _wf_user_ctx_exec.setdefault("user_id", _wf_uid)
                             _wf_result = asyncio.get_event_loop().run_until_complete(
                                 _wf_exec.execute(
                                     workflow=_wf_match["workflow"],
@@ -1651,9 +1685,20 @@ def _process_line_message(
             adapter = OpenAIAdapter(uma=uma, model=_routed_model)
             # Inject user_context for three-tier skill filtering
             try:
-                _uc_path = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
-                if _uc_path.exists():
-                    adapter.user_context = json.loads(_uc_path.read_text(encoding="utf-8"))
+                from server.services.identity_context import resolve_identity_context
+                _persist_bind = not (
+                    session_id.startswith("line_group_")
+                    or session_id.startswith("line_room_")
+                )
+                _, _adapter_ctx = resolve_identity_context(
+                    session_id=session_id,
+                    explicit_user_id=(user_id or ""),
+                    session_mgr=_session_mgr,
+                    persist_binding=_persist_bind,
+                    allow_session_binding=True,
+                )
+                if _adapter_ctx:
+                    adapter.user_context = _adapter_ctx
             except Exception:
                 pass
             # Tier-aware max_output_tokens:

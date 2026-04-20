@@ -199,17 +199,28 @@ async def process_chat_native(req: ChatRequest):
 
     uma = get_uma()
 
-    # Load user context for three-tier skill filtering
-    _user_context = None
-    _sid = req.session_id or "default"
+    from server.services.runtime import get_universal_system_prompt
+
+    session_mgr = get_session_manager()
+    session_id = req.session_id or "default"
     try:
-        import json as _json
-        from pathlib import Path as _P
-        _uc_path = _P(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{_sid}.json"
-        if _uc_path.exists():
-            _user_context = _json.loads(_uc_path.read_text(encoding="utf-8"))
+        from server.services.id_utils import validate_session_id
+
+        session_id = validate_session_id(session_id)
     except Exception:
-        pass
+        session_id = "default"
+
+    from server.services.identity_context import resolve_identity_context
+
+    resolved_user_id, _user_context = resolve_identity_context(
+        session_id=session_id,
+        explicit_user_id=(req.user_id or "").strip(),
+        session_mgr=session_mgr,
+        persist_binding=True,
+        allow_session_binding=True,
+    )
+    if resolved_user_id:
+        req.user_id = resolved_user_id
 
     adapter = create_adapter(
         provider=provider,
@@ -224,17 +235,6 @@ async def process_chat_native(req: ChatRequest):
             status_code=503,
             detail=f"{provider.capitalize()} adapter is not available",
         )
-
-    from server.services.runtime import get_universal_system_prompt
-
-    session_mgr = get_session_manager()
-    session_id = req.session_id or "default"
-    try:
-        from server.services.id_utils import validate_session_id
-
-        session_id = validate_session_id(session_id)
-    except Exception:
-        session_id = "default"
 
     selected_user_doc_path = ""
     selected_user_doc: dict = {}
