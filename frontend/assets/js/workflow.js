@@ -159,11 +159,32 @@
       `;
 
       // Block mousedown → start drag
+      // IMPORTANT: Use closest() so we still skip when the click lands on a
+      // child element of a port (e.g. pseudo-element / hover scale artifact).
+      // Previously `e.target.classList.contains("wf-port")` missed these
+      // cases — some skill blocks couldn't be dragged because the mousedown
+      // target resolved to an empty wrapper rather than the port itself.
+      // Also: opening the property panel is now deferred to mouseup so that
+      // fetch-triggered DOM updates can't interfere with drag-state setup.
       el.addEventListener("mousedown", e => {
-        if (e.target.classList.contains("wf-port")) return;
+        if (e.target.closest(".wf-port")) return;
+        // Avoid interfering with text selection in input fields (prop panel overlay)
+        if (e.target.closest("input, textarea, select, button")) return;
         e.stopPropagation();
+        // Track whether this mousedown turned into a drag or a simple click
+        this.dragging = {
+          id,
+          ox: e.clientX, oy: e.clientY,
+          sx: parseInt(el.style.left), sy: parseInt(el.style.top),
+          moved: false,
+        };
+      });
+
+      // Click (no drag movement) → select + open property panel
+      el.addEventListener("click", e => {
+        if (e.target.closest(".wf-port")) return;
+        if (e.target.closest("input, textarea, select, button")) return;
         this.select(id);
-        this.dragging = { id, ox: e.clientX, oy: e.clientY, sx: parseInt(el.style.left), sy: parseInt(el.style.top) };
       });
 
       // Port mousedown → start connection
@@ -224,6 +245,9 @@
         const d = this.dragging;
         const dx = (e.clientX - d.ox) / this.scale;
         const dy = (e.clientY - d.oy) / this.scale;
+        // Only treat as drag once mouse moved >2px — avoids tiny jitter on click
+        if (!d.moved && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) d.moved = true;
+        if (!d.moved) return;
         const b = this.blocks.get(d.id);
         if (!b) return;
         b.x = snap(d.sx + dx);
@@ -3019,8 +3043,32 @@
 
   const SYSTEM_VARS = ["{{current_date}}", "{{current_time}}", "{{user_name}}", "{{user_dept}}", "{{session_id}}", "{{workflow_name}}"];
 
+  // ── Variables schema compatibility helpers ──
+  // Phase 1 migration changed wf.variables from legacy array to v2 dict
+  // {global_inputs, env_requirements, definitions}. These helpers let old UI
+  // code keep working with either shape without scattered if-else.
+  function _getVariableList(wd) {
+    if (!wd) return [];
+    const v = wd.variables;
+    if (Array.isArray(v)) return v;
+    if (v && Array.isArray(v.definitions)) return v.definitions;
+    return [];
+  }
+  function _ensureVariableContainer(wd) {
+    if (!wd) return [];
+    if (Array.isArray(wd.variables)) {
+      wd.variables = { global_inputs: [], env_requirements: [], definitions: wd.variables };
+    } else if (!wd.variables || typeof wd.variables !== "object") {
+      wd.variables = { global_inputs: [], env_requirements: [], definitions: [] };
+    }
+    if (!Array.isArray(wd.variables.definitions)) wd.variables.definitions = [];
+    if (!Array.isArray(wd.variables.global_inputs)) wd.variables.global_inputs = [];
+    if (!Array.isArray(wd.variables.env_requirements)) wd.variables.env_requirements = [];
+    return wd.variables.definitions;
+  }
+
   function _renderVariablesTab(body, wd) {
-    const vars = wd.variables || [];
+    const vars = _getVariableList(wd);
     let html = `
       <div class="wf-var-header">
         <span class="wf-var-title">自訂變數</span>
@@ -3072,23 +3120,26 @@
     const fd = window._wfDesigner;
     if (!fd) return;
     if (!fd._wfData) fd._wfData = {};
-    if (!fd._wfData.variables) fd._wfData.variables = [];
-    if (fd._wfData.variables.length >= 20) { if (window.showToast) window.showToast("最多 20 個變數", "error"); return; }
-    fd._wfData.variables.push({ name: "var_" + (fd._wfData.variables.length + 1), type: "string", source: "user_input", default_value: "", description: "", required: false });
+    const defs = _ensureVariableContainer(fd._wfData);
+    if (defs.length >= 20) { if (window.showToast) window.showToast("最多 20 個變數", "error"); return; }
+    defs.push({ name: "var_" + (defs.length + 1), type: "string", source: "user_input", default_value: "", description: "", required: false });
     _renderVariablesTab(document.getElementById("wfSettingsBody"), fd._wfData);
   };
 
   window._removeWfVar = function (idx) {
     const fd = window._wfDesigner;
-    if (!fd || !fd._wfData?.variables) return;
-    fd._wfData.variables.splice(idx, 1);
+    if (!fd || !fd._wfData) return;
+    const defs = _ensureVariableContainer(fd._wfData);
+    defs.splice(idx, 1);
     _renderVariablesTab(document.getElementById("wfSettingsBody"), fd._wfData);
   };
 
   window._updateWfVar = function (idx, field, value) {
     const fd = window._wfDesigner;
-    if (!fd || !fd._wfData?.variables?.[idx]) return;
-    fd._wfData.variables[idx][field] = value;
+    if (!fd || !fd._wfData) return;
+    const defs = _ensureVariableContainer(fd._wfData);
+    if (!defs[idx]) return;
+    defs[idx][field] = value;
   };
 
   // ── Save Settings ────────────────────────────────────────────
@@ -3214,7 +3265,7 @@
   function _renderBlockParams(block, container, fd, skillName, schema) {
     const cfg    = block.config || {};
     const params = cfg.params || {};
-    const wfVars = fd._wfData?.variables || [];
+    const wfVars = _getVariableList(fd._wfData);
     const varOpts = wfVars.map(v => `<option value="{{${v.name}}}">${v.name}</option>`).join("");
 
     // Determine which param names to display:

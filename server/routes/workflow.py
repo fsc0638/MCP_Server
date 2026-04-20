@@ -39,7 +39,10 @@ class WorkflowSaveRequest(BaseModel):
     icon: str = ""
     tags: list = []
     trigger_keywords: list = []
-    variables: list = []
+    # variables accepts BOTH the legacy list format and the v2 dict format
+    # (migrate_legacy normalizes to dict before persisting). Union is used
+    # because Pydantic v1 rejects dict body when type is declared as list.
+    variables: Any = []
     blocks: list = []
     connections: list = []
     trigger: dict = {}
