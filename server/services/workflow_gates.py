@@ -165,12 +165,18 @@ def gate_1_pre_execute(
     user_inputs = user_inputs or {}
     variables = workflow.get("variables") or {}
 
-    # 1.1 Environment variables
+    # 1.1 Collect all required env vars (workflow-level + per-skill),
+    # deduped so the user sees each missing var once.
+    missing_envs: set = set()
     for env_name in (variables.get("env_requirements") or []):
         if not os.environ.get(env_name):
-            info["errors"].append(f"環境變數 {env_name} 未設定（請聯絡管理員）")
+            missing_envs.add(env_name)
 
-    # 1.2 Skill env_ready
+    # 1.2 Skill-level checks: _env_ready + skill's own env_requirements
+    # The registry's _env_ready only checks Python packages + files, NOT
+    # OS env vars declared in the skill's SKILL.md frontmatter. We check
+    # those here so users don't discover TAVILY_API_KEY missing only
+    # after 3 retries inside the executor.
     if uma and hasattr(uma, "registry"):
         for step in workflow.get("steps") or []:
             skill_id = _step_skill_id(step)
@@ -181,12 +187,21 @@ def gate_1_pre_execute(
                 info["errors"].append(f"技能 '{skill_id}' 已不存在")
                 continue
             meta = skill.get("metadata") or {}
+            # Python deps / file deps
             if not meta.get("_env_ready", False):
                 missing = meta.get("_missing_deps") or []
                 if missing:
                     info["errors"].append(f"技能 '{skill_id}' 環境未就緒（缺少：{', '.join(missing)}）")
                 else:
                     info["errors"].append(f"技能 '{skill_id}' 環境未就緒")
+            # OS env vars from SKILL.md
+            for env_name in (meta.get("env_requirements") or []):
+                if not os.environ.get(env_name):
+                    missing_envs.add(env_name)
+
+    # Emit env var errors (deduped)
+    for env_name in sorted(missing_envs):
+        info["errors"].append(f"環境變數 {env_name} 未設定（請聯絡管理員）")
 
     # 1.3 Required global_inputs provided by caller
     required_inputs = _collect_required_inputs(variables)

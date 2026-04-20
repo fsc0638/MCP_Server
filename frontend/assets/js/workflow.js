@@ -698,14 +698,24 @@
         }
 
         if (window.showToast) {
-          const msg = errors > 0
-            ? `執行完成：${success} 成功 / ${errors} 失敗`
-            : `✓ 執行完成：${data.blocks_executed} 個節點`;
-          window.showToast(msg, errors > 0 ? "warning" : "success");
+          if (errors > 0) {
+            // Surface the FIRST error message so user knows WHY it failed,
+            // not just a useless "1 失敗" count.
+            const firstErr = (data.results || []).find(r => r.status === "error");
+            const detail = firstErr?.error || firstErr?.reason || "";
+            const short = detail.length > 120 ? detail.slice(0, 120) + "…" : detail;
+            const msg = short
+              ? `❌ ${firstErr.skill || "步驟"}失敗：${short}`
+              : `執行完成：${success} 成功 / ${errors} 失敗`;
+            window.showToast(msg, "error");
+          } else {
+            window.showToast(`✓ 執行完成：${data.blocks_executed} 個節點`, "success");
+          }
         }
 
-        // Show final output in a result panel if there's meaningful output
-        if (data.final_output && data.final_output.trim()) {
+        // Always show result panel if there was ANY output or error,
+        // so user can inspect per-block details
+        if ((data.final_output && data.final_output.trim()) || errors > 0) {
           _showWfRunResult(wfName, data);
         }
         break;  // success — exit the retry loop
@@ -3264,6 +3274,11 @@
     if (!fd || !fd._wfData) return;
     const defs = _ensureVariableContainer(fd._wfData);
     if (!defs[idx]) return;
+    // Trim whitespace for string fields — leading/trailing spaces in variable
+    // names cause subtle bugs (e.g. ' searchQuery' != 'searchQuery').
+    if (typeof value === "string" && (field === "name" || field === "default_value" || field === "description")) {
+      value = value.trim();
+    }
     defs[idx][field] = value;
   };
 
