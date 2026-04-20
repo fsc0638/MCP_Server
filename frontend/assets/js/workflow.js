@@ -1921,49 +1921,13 @@
     const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
     owner = owner || _u.employee_id || _u.id || "";
 
-    const _chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let _r = ""; for (let i = 0; i < 20; i++) _r += _chars.charAt(Math.floor(Math.random() * _chars.length));
-    const wfKey = "WorkflowK_" + _r, wfId = "wf-" + Date.now();
-
-    // Call backend to provision the workflow. Unlike before, we DO check the
-    // response — quota/permission errors must prevent the user from entering
-    // the canvas (otherwise they'd create and "save" a workflow that never
-    // actually persists, causing the confusing "disappears on refresh" bug).
-    let createdOk = false;
-    try {
-      const resp = await fetch(`/api/workflows/${wfId}`, {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        credentials: "include",
-        body: JSON.stringify({ name: "新工作流", blocks: [], connections: [], scope, owner, context: { workflow_key: wfKey } }),
-      });
-      if (resp.ok) {
-        createdOk = true;
-      } else {
-        const data = await resp.json().catch(() => ({}));
-        const detail = data.detail || `伺服器回應 ${resp.status}`;
-        if (resp.status === 429) {
-          // Quota exceeded — show the detailed Chinese message from backend
-          if (window.showToast) window.showToast("⚠️ " + detail, "error");
-          else alert(detail);
-          return;  // don't enter canvas
-        }
-        if (resp.status === 403) {
-          if (window.showToast) window.showToast("❌ 權限不足：" + detail, "error");
-          else alert(detail);
-          return;
-        }
-        // Other errors — still block to avoid silent data loss
-        if (window.showToast) window.showToast("建立工作流失敗：" + detail, "error");
-        else alert("建立工作流失敗：" + detail);
-        return;
-      }
-    } catch (netErr) {
-      if (window.showToast) window.showToast("網路錯誤，無法建立工作流：" + netErr.message, "error");
-      return;
-    }
-    if (!createdOk) return;
-    _enterWorkflowCanvas(wfId, scope, owner);
+    // Client-side only: no backend stub is created. The workflow is
+    // materialized on disk only when the user explicitly saves (Phase 2
+    // Gate 0 enforces display_name + at least one skill block).
+    // This prevents orphan files from being left behind when users open
+    // the canvas and then abandon without saving.
+    const wfId = "wf-" + Date.now();
+    _enterWorkflowCanvas(wfId, scope, owner, { isNewDraft: true });
   };
 
   // ── Read-only banner shown when entering a workflow without edit rights ──
@@ -2090,7 +2054,16 @@
       window._wfDesigner._currentScope = scope;
       window._wfDesigner._currentOwner = owner;
       window._wfDesigner.readOnly = readOnly;
-      await window._wfDesigner.load(wfId, scope, owner);
+      window._wfDesigner._isNewDraft = !!opts.isNewDraft;
+
+      if (opts.isNewDraft) {
+        // No backend stub exists yet — initialize an empty in-memory designer
+        window._wfDesigner._wfData = { name: "", description: "", icon: "", tags: [], variables: { global_inputs: [], env_requirements: [], definitions: [] }, trigger: {}, execution: {}, security: {} };
+        window._wfDesigner._savedSnapshot = null;  // any edit becomes dirty
+      } else {
+        await window._wfDesigner.load(wfId, scope, owner);
+      }
+
       // If new workflow (no blocks), initialize _wfData so settings modal shows blank name
       if (window._wfDesigner.blocks.size === 0) {
         if (!window._wfDesigner._wfData) window._wfDesigner._wfData = {};

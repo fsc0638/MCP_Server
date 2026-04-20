@@ -54,15 +54,16 @@ def _extract_var_refs(value: Any) -> List[str]:
 def gate_0_validate(workflow: Dict[str, Any], uma) -> Tuple[bool, List[str]]:
     """Static structural validation before persistence.
 
-    Checks:
-      - Schema compliance (via workflow_schema.validate_workflow)
+    Strict mode: rejects workflows that can't possibly execute:
+      - Zero skill blocks (only control nodes or empty canvas)
+      - Missing display_name / using the default placeholder
+      - Any schema-level format issue
+
+    Deeper checks:
       - All referenced skill_id exist in UMA registry
       - Parallel branches have merge_output_var set
       - Step_id uniqueness (already done by validate_workflow)
       - Sub-workflow references (soft check — may not exist yet)
-
-    NOTE: Drafts (steps=[]) are exempt from skill_id checks since the user
-    is mid-design. Structural schema validation still applies.
 
     Returns: (ok, errors). errors is a list of human-readable messages.
     """
@@ -78,11 +79,24 @@ def gate_0_validate(workflow: Dict[str, Any], uma) -> Tuple[bool, List[str]]:
         errors.append(f"Schema 驗證失敗：{e}")
         return False, errors
 
+    # ── Strict content requirements (drafts are NOT saved) ──
     steps = workflow.get("steps") or []
+    blocks = workflow.get("blocks") or []
+    skill_block_count = sum(
+        1 for b in blocks
+        if isinstance(b, dict) and b.get("type") not in ("start", "end", "branch")
+    )
+    display_name = (workflow.get("display_name") or "").strip()
 
-    # Draft (no steps) — only schema validation applies
-    if not steps:
-        return len(errors) == 0, errors
+    if not display_name or display_name in ("新工作流", "Untitled Flow"):
+        errors.append("請先為工作流命名（不能使用預設名稱「新工作流」），再儲存")
+
+    if len(steps) == 0 and skill_block_count == 0:
+        errors.append("工作流至少需要一個技能節點 — 請從左側 Palette 拖入節點後再儲存")
+
+    # Show the most actionable errors first if basic requirements fail
+    if errors:
+        return False, errors
 
     # Check each step's skill exists + parallel branches merge
     for step in steps:
