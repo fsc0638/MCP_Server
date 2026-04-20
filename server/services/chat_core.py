@@ -216,8 +216,21 @@ async def process_chat_native(req: ChatRequest):
             wf_match = wf_matcher.match(req.user_input, user_context=_user_context)
             if wf_match:
                 wf_mode = wf_match["workflow"].get("trigger_mode", "auto")
+                wf_conf = wf_match.get("confidence", wf_match.get("score", 0))
+                wf_reason = wf_match.get("match_reason", "")
+                wf_rejected = wf_match.get("rejected_candidates", [])
                 logger.info(f"[WF-First] Matched: {wf_match['workflow_id']} "
-                            f"(score={wf_match['score']:.2f}, method={wf_match['method']}, mode={wf_mode})")
+                            f"(conf={wf_conf:.2f}, method={wf_match['method']}, mode={wf_mode}, reason={wf_reason})")
+
+                # Phase 3: build explainable match_info for frontend/debug
+                _match_info = {
+                    "id": wf_match["workflow_id"],
+                    "name": wf_match["workflow"].get("display_name") or wf_match["workflow"].get("name", ""),
+                    "method": wf_match["method"],
+                    "confidence": round(wf_conf, 3),
+                    "match_reason": wf_reason,
+                    "rejected_candidates": wf_rejected[:3],  # top 3 only
+                }
 
                 if wf_mode == "auto":
                     # Auto-execute: run workflow and return result as SSE
@@ -235,13 +248,11 @@ async def process_chat_native(req: ChatRequest):
                             )
                             final_text = wf_result.get("final_output", "")
                             if not final_text:
-                                final_text = f"工作流 {wf_match['workflow'].get('name', '')} 執行完成（{wf_result.get('blocks_executed', 0)} 個節點）"
+                                final_text = f"工作流 {_match_info['name']} 執行完成（{wf_result.get('blocks_executed', 0)} 個節點）"
                             session_mgr.append_message(session_id, "assistant", final_text)
                             task_registry.mark_completed(task_id, final_text=final_text, assistant_message_persisted=True)
                             yield {"data": json.dumps({"status": "success", "content": final_text,
-                                                       "workflow_match": {"id": wf_match["workflow_id"],
-                                                                         "method": wf_match["method"],
-                                                                         "score": wf_match["score"]},
+                                                       "workflow_match": _match_info,
                                                        "task_id": task_id, "session_id": session_id,
                                                        "turn_id": turn_id}, ensure_ascii=False)}
                         except Exception as e:
@@ -254,9 +265,26 @@ async def process_chat_native(req: ChatRequest):
                     return EventSourceResponse(_wf_event_generator(), media_type="text/event-stream")
 
                 elif wf_mode == "confirm":
-                    # Confirm mode: tell user a workflow was matched, ask for confirmation
-                    wf_name = wf_match["workflow"].get("name", wf_match["workflow_id"])
-                    confirm_msg = f"找到匹配的工作流「{wf_name}」（匹配方式：{wf_match['method']}，分數：{wf_match['score']:.2f}）。\n\n是否要執行此工作流？請回覆「確認」或繼續提問。"
+                    # Confirm mode: explainable message with match details + step preview
+                    wf_name = _match_info["name"] or wf_match["workflow_id"]
+                    # Build step preview from v2 steps[] or legacy blocks[]
+                    _steps = wf_match["workflow"].get("steps") or []
+                    if _steps:
+                        _step_names = [s.get("skill_id", s.get("step_id", "?")) for s in _steps[:5]]
+                    else:
+                        _step_names = [
+                            b.get("type", "?") for b in (wf_match["workflow"].get("blocks") or [])
+                            if b.get("type") not in ("start", "end", "branch")
+                        ][:5]
+                    _steps_preview = " → ".join(_step_names) if _step_names else "(流程未設定)"
+
+                    confirm_msg = (
+                        f"🎯 找到匹配的工作流「**{wf_name}**」\n\n"
+                        f"• 匹配方式：{wf_match['method']}（信心分數 {wf_conf:.2f}）\n"
+                        f"• 原因：{wf_reason or '相似度達門檻'}\n"
+                        f"• 流程預覽：{_steps_preview}\n\n"
+                        f"是否要執行？請回覆「確認」或繼續提問。"
+                    )
                     # Store pending workflow in session metadata
                     session_mgr.set_metadata(session_id, "pending_workflow", {
                         "workflow_id": wf_match["workflow_id"],

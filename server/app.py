@@ -39,6 +39,20 @@ frontend_dir = PROJECT_ROOT / "frontend"
 app.mount("/ui", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
 
+# ── Favicon ──────────────────────────────────────────────────────────────
+# Browsers automatically hit /favicon.ico on every page load. Without a
+# handler the server returns 404 for each one, polluting logs. Serve the
+# KWAY brand logo instead so tab icons look proper.
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        str(frontend_dir / "assets" / "images" / "kw_logo.png"),
+        media_type="image/png",
+    )
+
+
 # ── Phase B2 + D2: Scheduled Jobs ─────────────────────────────────────────────
 
 def _scheduled_profile_update():

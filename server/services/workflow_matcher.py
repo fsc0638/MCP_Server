@@ -144,40 +144,150 @@ class WorkflowMatcher:
 
         input_lower = user_input.strip().lower()
 
+        # Collect scores for ALL candidates so we can report rejected ones
+        # (per the integrated report §4.4 "explain why not matched").
+        all_scores: list = []
+
         # ── Phase 1: Keyword match (0 token cost) ──
         keyword_matches = []
         for wf in candidates:
-            for kw in wf["trigger_keywords"]:
+            hit_keyword = None
+            for kw in (wf.get("trigger_keywords") or []):
                 kw_lower = kw.strip().lower()
                 if not kw_lower:
                     continue
                 if kw_lower in input_lower or input_lower in kw_lower:
-                    keyword_matches.append({
-                        "workflow_id": wf["id"],
-                        "workflow": wf,
-                        "score": _KEYWORD_BOOST,
-                        "method": "keyword",
-                        "matched_keyword": kw,
-                    })
-                    break  # One match per workflow is enough
+                    hit_keyword = kw
+                    break
+            if hit_keyword:
+                entry = {
+                    "workflow_id": wf["id"],
+                    "workflow": wf,
+                    "confidence": _KEYWORD_BOOST,
+                    "score": _KEYWORD_BOOST,  # backward compat
+                    "method": "keyword",
+                    "matched_keyword": hit_keyword,
+                    "match_reason": f"命中關鍵字「{hit_keyword}」",
+                }
+                keyword_matches.append(entry)
+                all_scores.append(entry)
 
         if keyword_matches:
-            # Sort by priority (lower = higher priority)
             keyword_matches.sort(key=lambda m: m["workflow"]["trigger_priority"])
             best = keyword_matches[0]
-            logger.info(f"[WFMatcher] Keyword match: '{best['matched_keyword']}' → {best['workflow_id']} (score={best['score']})")
+            logger.info(
+                f"[WFMatcher] Keyword match: '{best['matched_keyword']}' → "
+                f"{best['workflow_id']} (confidence={best['confidence']:.2f})"
+            )
+            # Build rejected_candidates list (other keyword matches with lower priority)
+            rejected = [
+                {
+                    "id": m["workflow_id"],
+                    "confidence": m["confidence"],
+                    "reason": f"優先級較低 (priority={m['workflow']['trigger_priority']})",
+                }
+                for m in keyword_matches[1:]
+            ]
+            best["rejected_candidates"] = rejected
             return best
 
         # ── Phase 2: FAISS semantic match (0 LLM token cost) ──
         try:
-            semantic_match = self._semantic_match(input_lower, candidates)
-            if semantic_match:
-                logger.info(f"[WFMatcher] Semantic match: {semantic_match['workflow_id']} (score={semantic_match['score']:.3f})")
-                return semantic_match
+            semantic_result = self._semantic_match_with_scores(input_lower, candidates)
+            if semantic_result:
+                best = semantic_result[0]
+                # Build rejected list from 2nd..N
+                rejected = []
+                for item in semantic_result[1:]:
+                    why = (
+                        f"相似度 {item['confidence']:.2f} 低於門檻 {_SEMANTIC_THRESHOLD}"
+                        if item['confidence'] < _SEMANTIC_THRESHOLD
+                        else f"未達最高分"
+                    )
+                    rejected.append({
+                        "id": item["workflow_id"],
+                        "confidence": item["confidence"],
+                        "reason": why,
+                    })
+                best["rejected_candidates"] = rejected
+                if best["confidence"] >= _SEMANTIC_THRESHOLD:
+                    logger.info(
+                        f"[WFMatcher] Semantic match: {best['workflow_id']} "
+                        f"(confidence={best['confidence']:.3f}, rejected={len(rejected)})"
+                    )
+                    return best
+                else:
+                    # Even the best candidate isn't confident enough — fall through to None
+                    logger.info(
+                        f"[WFMatcher] Best semantic candidate {best['workflow_id']} "
+                        f"confidence={best['confidence']:.3f} < threshold {_SEMANTIC_THRESHOLD}, not matched"
+                    )
         except Exception as e:
             logger.warning(f"[WFMatcher] Semantic match failed: {e}")
 
         return None
+
+    def _semantic_match_with_scores(self, user_input: str, candidates: List[dict]) -> List[Dict[str, Any]]:
+        """Return all candidates sorted by semantic similarity (descending).
+
+        The highest-scored one exceeding _SEMANTIC_THRESHOLD is the match;
+        the rest are potential rejected_candidates for explainability.
+        """
+        try:
+            if self._embedding_fn is None:
+                from langchain_huggingface import HuggingFaceEmbeddings
+                self._embedding_fn = HuggingFaceEmbeddings(
+                    model_name="paraphrase-multilingual-MiniLM-L12-v2"
+                )
+        except ImportError:
+            return []
+
+        import numpy as np
+
+        texts = []
+        for wf in candidates:
+            desc = wf.get("description", "") or wf.get("name", "")
+            kws = " ".join(wf.get("trigger_keywords", []))
+            texts.append(f"{desc} {kws}".strip())
+
+        if not texts:
+            return []
+
+        query_embedding = np.array(self._embedding_fn.embed_query(user_input))
+        doc_embeddings = np.array(self._embedding_fn.embed_documents(texts))
+
+        norms_q = np.linalg.norm(query_embedding)
+        norms_d = np.linalg.norm(doc_embeddings, axis=1)
+        if norms_q == 0:
+            return []
+
+        sims = np.dot(doc_embeddings, query_embedding) / (norms_d * norms_q + 1e-10)
+        order = np.argsort(-sims)  # descending
+
+        out: List[Dict[str, Any]] = []
+        for i in order[:5]:  # top-5 only
+            wf = candidates[int(i)]
+            conf = float(sims[int(i)])
+            # Build a human reason: what tokens matched the description?
+            desc = (wf.get("description") or "").lower()
+            hits = [t for t in user_input.split() if t in desc and len(t) >= 2]
+            reason_bits = []
+            if hits:
+                reason_bits.append(f"描述含「{'、'.join(hits[:3])}」")
+            kws = wf.get("trigger_keywords") or []
+            kw_hits = [k for k in kws if k.lower() in user_input.lower() or user_input.lower() in k.lower()]
+            if kw_hits:
+                reason_bits.append(f"觸發詞「{'、'.join(kw_hits[:2])}」部分命中")
+            reason = "、".join(reason_bits) if reason_bits else f"語義相似度 {conf:.2f}"
+            out.append({
+                "workflow_id": wf["id"],
+                "workflow": wf,
+                "confidence": conf,
+                "score": conf,
+                "method": "semantic",
+                "match_reason": reason,
+            })
+        return out
 
     def _semantic_match(self, user_input: str, candidates: List[dict]) -> Optional[Dict[str, Any]]:
         """Use sentence embeddings for semantic similarity matching."""
