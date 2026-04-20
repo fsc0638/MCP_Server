@@ -882,6 +882,302 @@
     return diffDays + " 天後到期";
   }
 
+  function formatAudioClock(seconds) {
+    const sec = Math.max(0, Math.floor(Number(seconds || 0)));
+    const hours = Math.floor(sec / 3600);
+    const minutes = Math.floor((sec % 3600) / 60);
+    const remain = sec % 60;
+    if (hours > 0) {
+      return String(hours) + ":" + String(minutes).padStart(2, "0") + ":" + String(remain).padStart(2, "0");
+    }
+    return String(minutes).padStart(2, "0") + ":" + String(remain).padStart(2, "0");
+  }
+
+  function formatDocumentTimestamp(value) {
+    if (!value) return "";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "";
+    try {
+      return parsed.toLocaleString("zh-TW", { hour12: false });
+    } catch (_err) {
+      return parsed.toISOString().replace("T", " ").slice(0, 19);
+    }
+  }
+
+  function buildAudioMetaPill(label, value) {
+    if (!value) return null;
+    const pill = document.createElement("div");
+    pill.className = "page-chat-audio-preview-pill";
+
+    const labelEl = document.createElement("span");
+    labelEl.className = "page-chat-audio-preview-pill-label";
+    labelEl.textContent = label;
+
+    const valueEl = document.createElement("strong");
+    valueEl.className = "page-chat-audio-preview-pill-value";
+    valueEl.textContent = value;
+
+    pill.appendChild(labelEl);
+    pill.appendChild(valueEl);
+    return pill;
+  }
+
+  function createAudioPreviewPanel(options) {
+    const panel = document.createElement("section");
+    panel.className = "page-chat-audio-preview";
+    panel.tabIndex = 0;
+
+    const src = String(options.audioSrc || "");
+    const meta = options.audioMeta || {};
+
+    const summary = document.createElement("div");
+    summary.className = "page-chat-audio-preview-summary";
+    [
+      buildAudioMetaPill("格式", ((meta.extension || "").replace(".", "").toUpperCase()) || "AUDIO"),
+      buildAudioMetaPill("大小", meta.size ? formatFileSize(meta.size) : ""),
+      buildAudioMetaPill("MIME", meta.mimeType || ""),
+      buildAudioMetaPill("建立時間", formatDocumentTimestamp(meta.createdAt)),
+    ].forEach(function (pill) {
+      if (pill) summary.appendChild(pill);
+    });
+
+    const waveform = document.createElement("div");
+    waveform.className = "page-chat-audio-preview-waveform";
+    waveform.setAttribute("aria-hidden", "true");
+    for (let i = 0; i < 36; i += 1) {
+      const bar = document.createElement("span");
+      bar.className = "page-chat-audio-preview-wave-bar";
+      bar.style.animationDelay = String((i % 9) * 0.08) + "s";
+      bar.style.height = String(18 + ((i * 7) % 42)) + "px";
+      waveform.appendChild(bar);
+    }
+
+    const audio = document.createElement("audio");
+    audio.className = "page-chat-audio-preview-native";
+    audio.preload = "metadata";
+    audio.src = src;
+    audio.setAttribute("playsinline", "playsinline");
+
+    const controlCard = document.createElement("div");
+    controlCard.className = "page-chat-audio-preview-controls";
+
+    const timelineHead = document.createElement("div");
+    timelineHead.className = "page-chat-audio-preview-timeline-head";
+    const currentTimeEl = document.createElement("span");
+    currentTimeEl.textContent = "00:00";
+    const durationEl = document.createElement("span");
+    durationEl.textContent = "--:--";
+    timelineHead.appendChild(currentTimeEl);
+    timelineHead.appendChild(durationEl);
+
+    const timelineRange = document.createElement("input");
+    timelineRange.className = "page-chat-audio-preview-timeline";
+    timelineRange.type = "range";
+    timelineRange.min = "0";
+    timelineRange.max = "1000";
+    timelineRange.value = "0";
+    timelineRange.disabled = true;
+    timelineRange.setAttribute("aria-label", "音訊播放進度");
+
+    const row = document.createElement("div");
+    row.className = "page-chat-audio-preview-control-row";
+
+    const transport = document.createElement("div");
+    transport.className = "page-chat-audio-preview-transport";
+
+    const backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.className = "page-chat-audio-preview-btn";
+    backBtn.textContent = "⟲ 10 秒";
+
+    const playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = "page-chat-audio-preview-btn is-primary";
+    playBtn.textContent = "播放";
+
+    const forwardBtn = document.createElement("button");
+    forwardBtn.type = "button";
+    forwardBtn.className = "page-chat-audio-preview-btn";
+    forwardBtn.textContent = "10 秒 ⟳";
+
+    transport.appendChild(backBtn);
+    transport.appendChild(playBtn);
+    transport.appendChild(forwardBtn);
+
+    const settings = document.createElement("div");
+    settings.className = "page-chat-audio-preview-settings";
+
+    const speedWrap = document.createElement("label");
+    speedWrap.className = "page-chat-audio-preview-field";
+    speedWrap.textContent = "速度";
+
+    const speedSelect = document.createElement("select");
+    speedSelect.className = "page-chat-audio-preview-select";
+    [0.75, 1, 1.25, 1.5, 2].forEach(function (rate) {
+      const opt = document.createElement("option");
+      opt.value = String(rate);
+      opt.textContent = String(rate) + "x";
+      if (rate === 1) opt.selected = true;
+      speedSelect.appendChild(opt);
+    });
+    speedWrap.appendChild(speedSelect);
+
+    const volumeWrap = document.createElement("label");
+    volumeWrap.className = "page-chat-audio-preview-field";
+    volumeWrap.textContent = "音量";
+
+    const volumeRange = document.createElement("input");
+    volumeRange.className = "page-chat-audio-preview-volume";
+    volumeRange.type = "range";
+    volumeRange.min = "0";
+    volumeRange.max = "100";
+    volumeRange.step = "1";
+    volumeRange.value = "100";
+    volumeRange.setAttribute("aria-label", "音量");
+    volumeWrap.appendChild(volumeRange);
+
+    settings.appendChild(speedWrap);
+    settings.appendChild(volumeWrap);
+
+    row.appendChild(transport);
+    row.appendChild(settings);
+
+    const hint = document.createElement("div");
+    hint.className = "page-chat-audio-preview-hint";
+    hint.textContent = "支援快捷鍵：空白鍵播放/暫停，← / → 快退或快進 10 秒。";
+
+    const error = document.createElement("div");
+    error.className = "page-chat-audio-preview-error";
+    error.style.display = "none";
+
+    controlCard.appendChild(timelineHead);
+    controlCard.appendChild(timelineRange);
+    controlCard.appendChild(row);
+    controlCard.appendChild(hint);
+    controlCard.appendChild(error);
+
+    panel.appendChild(summary);
+    panel.appendChild(waveform);
+    panel.appendChild(controlCard);
+    panel.appendChild(audio);
+
+    if (!src) {
+      error.style.display = "";
+      error.textContent = "音訊來源遺失，請改用「下載原檔」後再試。";
+      return panel;
+    }
+
+    let isSeeking = false;
+
+    function syncPlayButton() {
+      playBtn.textContent = audio.paused ? (audio.ended ? "重播" : "播放") : "暫停";
+    }
+
+    function syncTimeline(fromSeekInput) {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      const current = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+      currentTimeEl.textContent = formatAudioClock(current);
+      durationEl.textContent = duration > 0 ? formatAudioClock(duration) : "--:--";
+      timelineRange.disabled = duration <= 0;
+      if (!isSeeking || fromSeekInput) {
+        timelineRange.value = duration > 0 ? String(Math.round((current / duration) * 1000)) : "0";
+      }
+      syncPlayButton();
+    }
+
+    function seekBy(seconds) {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      if (!duration) return;
+      const next = Math.min(Math.max(0, audio.currentTime + seconds), duration);
+      audio.currentTime = next;
+      syncTimeline(true);
+    }
+
+    playBtn.addEventListener("click", function () {
+      if (audio.paused) {
+        if (audio.ended) audio.currentTime = 0;
+        audio.play().catch(function () {
+          error.style.display = "";
+          error.textContent = "播放失敗，請確認瀏覽器已允許音訊播放。";
+        });
+      } else {
+        audio.pause();
+      }
+      syncPlayButton();
+    });
+
+    backBtn.addEventListener("click", function () {
+      seekBy(-10);
+    });
+
+    forwardBtn.addEventListener("click", function () {
+      seekBy(10);
+    });
+
+    timelineRange.addEventListener("input", function () {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      if (!duration) return;
+      isSeeking = true;
+      const ratio = Number(timelineRange.value) / 1000;
+      currentTimeEl.textContent = formatAudioClock(duration * ratio);
+    });
+
+    timelineRange.addEventListener("change", function () {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      if (!duration) return;
+      const ratio = Number(timelineRange.value) / 1000;
+      audio.currentTime = duration * ratio;
+      isSeeking = false;
+      syncTimeline(true);
+    });
+
+    timelineRange.addEventListener("pointerup", function () {
+      isSeeking = false;
+    });
+
+    speedSelect.addEventListener("change", function () {
+      const rate = Number(speedSelect.value);
+      audio.playbackRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+    });
+
+    volumeRange.addEventListener("input", function () {
+      const level = Number(volumeRange.value);
+      audio.volume = Number.isFinite(level) ? Math.min(Math.max(level / 100, 0), 1) : 1;
+    });
+
+    panel.addEventListener("keydown", function (event) {
+      if (event.target && (event.target.tagName === "INPUT" || event.target.tagName === "SELECT")) return;
+      if (event.code === "Space") {
+        event.preventDefault();
+        playBtn.click();
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        seekBy(-10);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        seekBy(10);
+      }
+    });
+
+    audio.addEventListener("loadedmetadata", function () {
+      error.style.display = "none";
+      syncTimeline(false);
+    });
+    audio.addEventListener("timeupdate", function () {
+      syncTimeline(false);
+    });
+    audio.addEventListener("play", syncPlayButton);
+    audio.addEventListener("pause", syncPlayButton);
+    audio.addEventListener("ended", syncPlayButton);
+    audio.addEventListener("error", function () {
+      error.style.display = "";
+      error.textContent = "無法載入這個音訊檔，請改用「下載原檔」檢查檔案。";
+    });
+
+    syncTimeline(false);
+    return panel;
+  }
+
   function syncDocumentCenterVisibility(activeTab) {
     document.querySelectorAll(".page-chat-doc-center-panel").forEach(function (el) {
       el.style.display = activeTab === "docs" ? "" : "none";
@@ -974,6 +1270,8 @@
       loading.className = "page-chat-doc-modal-loading";
       loading.textContent = options.loadingText || "正在讀取文件...";
       body.appendChild(loading);
+    } else if (options.mode === "audio") {
+      body.appendChild(createAudioPreviewPanel(options));
     } else if (options.mode === "iframe") {
       const iframe = document.createElement("iframe");
       iframe.className = "page-chat-doc-modal-frame";
@@ -1016,7 +1314,17 @@
     const body = document.getElementById("userDocModalBody");
     const expandBtn = document.getElementById("userDocModalExpandBtn");
     const fullscreenBtn = document.getElementById("userDocModalFullscreenBtn");
-    if (body) body.innerHTML = "";
+    if (body) {
+      body.querySelectorAll("audio").forEach(function (node) {
+        try {
+          node.pause();
+          node.currentTime = 0;
+        } catch (_err) {
+          // ignore pause errors
+        }
+      });
+      body.innerHTML = "";
+    }
     if (expandBtn) expandBtn.onclick = null;
     if (fullscreenBtn) fullscreenBtn.style.display = "none";
     exitUserDocumentModalFullscreen();
@@ -1120,10 +1428,21 @@
       const textBtn = document.createElement("button");
       textBtn.type = "button";
       textBtn.className = "page-chat-doc-action-btn";
-      textBtn.textContent = "文字";
-      textBtn.addEventListener("click", function () {
-        openUserDocumentText(doc.doc_id, doc.display_name || doc.original_filename || "文件");
-      });
+      if (doc.preview_type === "audio-inline") {
+        textBtn.textContent = "原檔";
+        textBtn.addEventListener("click", function () {
+          window.open(
+            "/api/user-documents/" + encodeURIComponent(doc.doc_id) + "/file?disposition=inline",
+            "_blank",
+            "noopener"
+          );
+        });
+      } else {
+        textBtn.textContent = "文字";
+        textBtn.addEventListener("click", function () {
+          openUserDocumentText(doc.doc_id, doc.display_name || doc.original_filename || "文件");
+        });
+      }
 
       const renameBtn = document.createElement("button");
       renameBtn.type = "button";
@@ -1194,7 +1513,25 @@
       }
 
       const displayName = (data.document && (data.document.display_name || data.document.original_filename)) || "文件";
-      if (data.preview_type === "pdf-inline" || data.preview_type === "html-inline" || data.preview_type === "audio-inline") {
+      if (data.preview_type === "audio-inline") {
+        openUserDocumentModal({
+          title: displayName,
+          subtitle: "服務內音訊預覽",
+          mode: "audio",
+          audioSrc: data.inline_url || "",
+          audioMeta: {
+            extension: data.document && data.document.extension,
+            mimeType: data.document && data.document.mime_type,
+            size: data.document && data.document.size,
+            createdAt: data.document && data.document.created_at,
+          },
+          linkHref: data.viewer_url || data.download_url || data.inline_url,
+          linkLabel: data.viewer_url ? "完整預覽頁" : "下載原檔",
+        });
+        return;
+      }
+
+      if (data.preview_type === "pdf-inline" || data.preview_type === "html-inline") {
         const htmlPreviewLink = data.viewer_url || data.download_url;
         const pdfPreviewLink = data.preview_type === "html-inline" ? (data.pdf_viewer_url || data.pdf_inline_url) : null;
         openUserDocumentModal({
@@ -1202,9 +1539,9 @@
           subtitle:
             data.preview_type === "pdf-inline"
               ? "服務內 PDF 預覽"
-              : (data.preview_type === "audio-inline" ? "服務內音訊預覽" : "服務內 DOCX HTML 預覽"),
+              : "服務內 DOCX HTML 預覽",
           mode: "iframe",
-          src: data.preview_type === "audio-inline" ? (data.viewer_url || data.inline_url) : (data.inline_url || data.viewer_url),
+          src: data.inline_url || data.viewer_url,
           linkHref: pdfPreviewLink || htmlPreviewLink,
           linkLabel: pdfPreviewLink ? "PDF 預覽" : "完整預覽",
           onExpand: data.preview_type === "html-inline" && htmlPreviewLink

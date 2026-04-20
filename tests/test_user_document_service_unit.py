@@ -83,3 +83,21 @@ def test_user_document_service_expires_and_cleans_up(tmp_path: Path):
 
     summary = service.cleanup_expired_documents()
     assert summary["removed_documents"] == 1
+
+
+def test_user_document_service_build_preview_payload_for_audio(tmp_path: Path):
+    service = UserDocumentService(root_dir=tmp_path)
+
+    created = service.create_document(
+        user_key="tester",
+        raw_user_id="tester",
+        filename="recording.webm",
+        content=b"fake-audio-content",
+    )
+
+    payload = service.build_preview_payload("tester", created["doc_id"])
+
+    assert payload["status"] == "success"
+    assert payload["preview_type"] == "audio-inline"
+    assert payload["truncated"] is False
+    assert payload["document"]["doc_id"] == created["doc_id"]

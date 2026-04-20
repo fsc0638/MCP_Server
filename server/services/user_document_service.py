@@ -391,6 +391,13 @@ class UserDocumentService:
                 "preview_type": "html-inline",
                 "truncated": False,
             }
+        if preview_type == "audio-inline":
+            return {
+                "status": "success",
+                "document": document,
+                "preview_type": "audio-inline",
+                "truncated": False,
+            }
 
         _, text = self.get_text_content(user_key, doc_id)
         preview_text = text[:preview_chars]
