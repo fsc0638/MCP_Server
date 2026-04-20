@@ -50,25 +50,9 @@ class WorkflowMatcher:
             for json_file in scope_dir.rglob("*.json"):
                 try:
                     data = json.loads(json_file.read_text(encoding="utf-8"))
-                    wf_id = data.get("id", json_file.stem)
-                    trigger = data.get("trigger", {})
-                    self._cache[wf_id] = {
-                        "id": wf_id,
-                        "name": data.get("name", wf_id),
-                        "description": data.get("description", ""),
-                        "trigger_keywords": data.get("trigger_keywords", []),
-                        "trigger_enabled": trigger.get("enabled", False),
-                        "trigger_mode": trigger.get("mode", "auto"),
-                        "trigger_priority": trigger.get("priority", 10),
-                        "scope": data.get("scope", "personal"),
-                        "owner": data.get("owner", ""),
-                        "variables": data.get("variables", []),
-                        "blocks": data.get("blocks", []),
-                        "connections": data.get("connections", []),
-                        "execution": data.get("execution", {}),
-                        "security": data.get("security", {}),
-                        "path": str(json_file),
-                    }
+                    entry = self._to_cache_entry(data, json_file)
+                    if entry:
+                        self._cache[entry["id"]] = entry
                 except Exception as e:
                     logger.debug(f"[WFMatcher] Skip {json_file}: {e}")
 
@@ -78,31 +62,67 @@ class WorkflowMatcher:
                 continue
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
-                wf_id = data.get("id", json_file.stem)
-                if wf_id not in self._cache:
-                    trigger = data.get("trigger", {})
-                    self._cache[wf_id] = {
-                        "id": wf_id,
-                        "name": data.get("name", wf_id),
-                        "description": data.get("description", ""),
-                        "trigger_keywords": data.get("trigger_keywords", []),
-                        "trigger_enabled": trigger.get("enabled", False),
-                        "trigger_mode": trigger.get("mode", "auto"),
-                        "trigger_priority": trigger.get("priority", 10),
-                        "scope": data.get("scope", "personal"),
-                        "owner": data.get("owner", ""),
-                        "variables": data.get("variables", []),
-                        "blocks": data.get("blocks", []),
-                        "connections": data.get("connections", []),
-                        "execution": data.get("execution", {}),
-                        "security": data.get("security", {}),
-                        "path": str(json_file),
-                    }
+                entry = self._to_cache_entry(data, json_file)
+                if entry and entry["id"] not in self._cache:
+                    self._cache[entry["id"]] = entry
             except Exception:
                 pass
 
         self._cache_ts = now
+        enabled = [w for w in self._cache.values() if w.get("trigger_enabled")]
+        enabled_with_kw = [w for w in enabled if w.get("trigger_keywords")]
+        # Surface the common footgun: enabled=true but no keywords → never matches
+        orphans = [w for w in enabled if not w.get("trigger_keywords")]
+        logger.info(
+            f"[WFMatcher] Scanned {len(self._cache)} workflow(s). "
+            f"Trigger-enabled: {len(enabled)} (with keywords: {len(enabled_with_kw)})"
+        )
+        if orphans:
+            orphan_names = ", ".join(w.get("name", w.get("id", "?")) for w in orphans[:5])
+            logger.warning(
+                f"[WFMatcher] ⚠️  {len(orphans)} workflow(s) have trigger.enabled=true "
+                f"but no trigger_keywords — they will NEVER match user input: [{orphan_names}]. "
+                f"Fix by adding keywords in 設定→觸發，or disable the trigger."
+            )
         return list(self._cache.values())
+
+    def _to_cache_entry(self, data: dict, json_file: Path) -> Optional[dict]:
+        """Normalize a workflow JSON into the matcher's cache shape.
+
+        Reads v2 fields with legacy fallback so workflows saved in either
+        format are equally matchable:
+          - id        ← workflow_id (v2) > id > filename stem
+          - name      ← display_name (v2) > name
+          - keywords  ← trigger.patterns (v2) ∪ trigger_keywords (legacy)
+        Skips empty / malformed entries so a broken file doesn't poison
+        the cache.
+        """
+        wf_id = data.get("workflow_id") or data.get("id") or json_file.stem
+        trigger = data.get("trigger") or {}
+        # V2 patterns live in trigger.patterns; legacy used top-level
+        # trigger_keywords. Merge both so users migrating between formats
+        # don't lose triggering.
+        v2_patterns = trigger.get("patterns") or []
+        legacy_patterns = data.get("trigger_keywords") or []
+        keywords = list(dict.fromkeys([*v2_patterns, *legacy_patterns]))
+        return {
+            "id": wf_id,
+            "name": data.get("display_name") or data.get("name", wf_id),
+            "description": data.get("description", ""),
+            "trigger_keywords": keywords,
+            "trigger_enabled": trigger.get("enabled", False),
+            "trigger_mode": trigger.get("mode", "auto"),
+            "trigger_priority": trigger.get("priority", 10),
+            "scope": data.get("scope", "personal"),
+            "owner": data.get("owner", ""),
+            "variables": data.get("variables", []),
+            "blocks": data.get("blocks", []),
+            "connections": data.get("connections", []),
+            "steps": data.get("steps", []),
+            "execution": data.get("execution", {}),
+            "security": data.get("security", {}),
+            "path": str(json_file),
+        }
 
     def match(self, user_input: str, user_context: dict = None) -> Optional[Dict[str, Any]]:
         """
@@ -144,40 +164,157 @@ class WorkflowMatcher:
 
         input_lower = user_input.strip().lower()
 
+        # Collect scores for ALL candidates so we can report rejected ones
+        # (per the integrated report §4.4 "explain why not matched").
+        all_scores: list = []
+
         # ── Phase 1: Keyword match (0 token cost) ──
         keyword_matches = []
         for wf in candidates:
-            for kw in wf["trigger_keywords"]:
-                kw_lower = kw.strip().lower()
-                if not kw_lower:
-                    continue
-                if kw_lower in input_lower or input_lower in kw_lower:
-                    keyword_matches.append({
-                        "workflow_id": wf["id"],
-                        "workflow": wf,
-                        "score": _KEYWORD_BOOST,
-                        "method": "keyword",
-                        "matched_keyword": kw,
-                    })
-                    break  # One match per workflow is enough
+            hit_keyword = None
+            for kw_raw in (wf.get("trigger_keywords") or []):
+                # Defensive re-split: legacy entries stored whole phrases like
+                # "每日新聞，新聞搜尋" (CJK comma) as a single element because
+                # older UI used ASCII-only .split(","). We accept both here so
+                # old workflows don't need to be re-saved to start matching.
+                for piece in re.split(r"[,，、;；]+", kw_raw or ""):
+                    kw_lower = piece.strip().lower()
+                    if not kw_lower:
+                        continue
+                    if kw_lower in input_lower or input_lower in kw_lower:
+                        hit_keyword = kw_lower
+                        break
+                if hit_keyword:
+                    break
+            if hit_keyword:
+                entry = {
+                    "workflow_id": wf["id"],
+                    "workflow": wf,
+                    "confidence": _KEYWORD_BOOST,
+                    "score": _KEYWORD_BOOST,  # backward compat
+                    "method": "keyword",
+                    "matched_keyword": hit_keyword,
+                    "match_reason": f"命中關鍵字「{hit_keyword}」",
+                }
+                keyword_matches.append(entry)
+                all_scores.append(entry)
 
         if keyword_matches:
-            # Sort by priority (lower = higher priority)
             keyword_matches.sort(key=lambda m: m["workflow"]["trigger_priority"])
             best = keyword_matches[0]
-            logger.info(f"[WFMatcher] Keyword match: '{best['matched_keyword']}' → {best['workflow_id']} (score={best['score']})")
+            logger.info(
+                f"[WFMatcher] Keyword match: '{best['matched_keyword']}' → "
+                f"{best['workflow_id']} (confidence={best['confidence']:.2f})"
+            )
+            # Build rejected_candidates list (other keyword matches with lower priority)
+            rejected = [
+                {
+                    "id": m["workflow_id"],
+                    "confidence": m["confidence"],
+                    "reason": f"優先級較低 (priority={m['workflow']['trigger_priority']})",
+                }
+                for m in keyword_matches[1:]
+            ]
+            best["rejected_candidates"] = rejected
             return best
 
         # ── Phase 2: FAISS semantic match (0 LLM token cost) ──
         try:
-            semantic_match = self._semantic_match(input_lower, candidates)
-            if semantic_match:
-                logger.info(f"[WFMatcher] Semantic match: {semantic_match['workflow_id']} (score={semantic_match['score']:.3f})")
-                return semantic_match
+            semantic_result = self._semantic_match_with_scores(input_lower, candidates)
+            if semantic_result:
+                best = semantic_result[0]
+                # Build rejected list from 2nd..N
+                rejected = []
+                for item in semantic_result[1:]:
+                    why = (
+                        f"相似度 {item['confidence']:.2f} 低於門檻 {_SEMANTIC_THRESHOLD}"
+                        if item['confidence'] < _SEMANTIC_THRESHOLD
+                        else f"未達最高分"
+                    )
+                    rejected.append({
+                        "id": item["workflow_id"],
+                        "confidence": item["confidence"],
+                        "reason": why,
+                    })
+                best["rejected_candidates"] = rejected
+                if best["confidence"] >= _SEMANTIC_THRESHOLD:
+                    logger.info(
+                        f"[WFMatcher] Semantic match: {best['workflow_id']} "
+                        f"(confidence={best['confidence']:.3f}, rejected={len(rejected)})"
+                    )
+                    return best
+                else:
+                    # Even the best candidate isn't confident enough — fall through to None
+                    logger.info(
+                        f"[WFMatcher] Best semantic candidate {best['workflow_id']} "
+                        f"confidence={best['confidence']:.3f} < threshold {_SEMANTIC_THRESHOLD}, not matched"
+                    )
         except Exception as e:
             logger.warning(f"[WFMatcher] Semantic match failed: {e}")
 
         return None
+
+    def _semantic_match_with_scores(self, user_input: str, candidates: List[dict]) -> List[Dict[str, Any]]:
+        """Return all candidates sorted by semantic similarity (descending).
+
+        The highest-scored one exceeding _SEMANTIC_THRESHOLD is the match;
+        the rest are potential rejected_candidates for explainability.
+        """
+        try:
+            if self._embedding_fn is None:
+                from langchain_huggingface import HuggingFaceEmbeddings
+                self._embedding_fn = HuggingFaceEmbeddings(
+                    model_name="paraphrase-multilingual-MiniLM-L12-v2"
+                )
+        except ImportError:
+            return []
+
+        import numpy as np
+
+        texts = []
+        for wf in candidates:
+            desc = wf.get("description", "") or wf.get("name", "")
+            kws = " ".join(wf.get("trigger_keywords", []))
+            texts.append(f"{desc} {kws}".strip())
+
+        if not texts:
+            return []
+
+        query_embedding = np.array(self._embedding_fn.embed_query(user_input))
+        doc_embeddings = np.array(self._embedding_fn.embed_documents(texts))
+
+        norms_q = np.linalg.norm(query_embedding)
+        norms_d = np.linalg.norm(doc_embeddings, axis=1)
+        if norms_q == 0:
+            return []
+
+        sims = np.dot(doc_embeddings, query_embedding) / (norms_d * norms_q + 1e-10)
+        order = np.argsort(-sims)  # descending
+
+        out: List[Dict[str, Any]] = []
+        for i in order[:5]:  # top-5 only
+            wf = candidates[int(i)]
+            conf = float(sims[int(i)])
+            # Build a human reason: what tokens matched the description?
+            desc = (wf.get("description") or "").lower()
+            hits = [t for t in user_input.split() if t in desc and len(t) >= 2]
+            reason_bits = []
+            if hits:
+                reason_bits.append(f"描述含「{'、'.join(hits[:3])}」")
+            kws = wf.get("trigger_keywords") or []
+            kw_hits = [k for k in kws if k.lower() in user_input.lower() or user_input.lower() in k.lower()]
+            if kw_hits:
+                reason_bits.append(f"觸發詞「{'、'.join(kw_hits[:2])}」部分命中")
+            reason = "、".join(reason_bits) if reason_bits else f"語義相似度 {conf:.2f}"
+            out.append({
+                "workflow_id": wf["id"],
+                "workflow": wf,
+                "confidence": conf,
+                "score": conf,
+                "method": "semantic",
+                "match_reason": reason,
+            })
+        return out
 
     def _semantic_match(self, user_input: str, candidates: List[dict]) -> Optional[Dict[str, Any]]:
         """Use sentence embeddings for semantic similarity matching."""

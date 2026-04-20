@@ -39,6 +39,20 @@ frontend_dir = PROJECT_ROOT / "frontend"
 app.mount("/ui", StaticFiles(directory=str(frontend_dir), html=True), name="frontend")
 
 
+# ── Favicon ──────────────────────────────────────────────────────────────
+# Browsers automatically hit /favicon.ico on every page load. Without a
+# handler the server returns 404 for each one, polluting logs. Serve the
+# KWAY brand logo instead so tab icons look proper.
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    from fastapi.responses import FileResponse
+    return FileResponse(
+        str(frontend_dir / "assets" / "images" / "kw_logo.png"),
+        media_type="image/png",
+    )
+
+
 # ── Phase B2 + D2: Scheduled Jobs ─────────────────────────────────────────────
 
 def _scheduled_profile_update():
@@ -286,6 +300,21 @@ async def startup():
 
         # Phase B2: Start APScheduler
         _setup_scheduler()
+
+        # Phase 1.4: Auto-migrate any legacy workflow JSON to v2 format
+        try:
+            from server.services.workflow_schema import migrate_on_startup
+            mig = migrate_on_startup(PROJECT_ROOT)
+            if mig.get("migrated", 0) > 0:
+                logger.info(
+                    f"[Startup] Workflow Schema v2 migration: "
+                    f"scanned={mig['scanned']} migrated={mig['migrated']} backed_up={mig['backed_up']}"
+                )
+            if mig.get("errors"):
+                for err in mig["errors"][:5]:
+                    logger.warning(f"[Startup] WF migration issue: {err}")
+        except Exception as mig_err:
+            logger.error(f"[Startup] Workflow schema migration failed: {mig_err}")
 
     except Exception as e:
         logger.error(f"[Startup] Failed to initialize background services: {e}")

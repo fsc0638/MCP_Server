@@ -1,0 +1,269 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://kway.com.tw/schemas/workflow_v2.json",
+  "title": "AgentK Workflow v2",
+  "description": "Integrated spec from Claude+OpenClaw+MAGELLAN BLOCKS analysis reports. Source of truth for creating, validating, and executing workflows.",
+  "type": "object",
+  "required": ["workflow_id", "display_name", "version"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "Schema version. Must be '1.0' or newer for v2 workflows.",
+      "examples": ["1.0"]
+    },
+    "workflow_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{2,63}$",
+      "description": "Programmatic ID (lowercase ASCII + underscore + hyphen). Used as filename and for sub-workflow references. 3-64 chars.",
+      "examples": ["search_and_summarize", "daily_news_digest", "wf-1776666666"]
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60,
+      "description": "Human-readable name, may contain Chinese/emoji. Shown in UI.",
+      "examples": ["每日新聞摘要", "會議逐字稿 → Notion"]
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 500,
+      "description": "What this workflow does and when to use it. Used by semantic matcher."
+    },
+    "icon": { "type": "string", "maxLength": 20 },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 10
+    },
+    "source": {
+      "type": "string",
+      "enum": ["user_defined", "llm_generated", "template", "legacy"],
+      "default": "user_defined",
+      "description": "Provenance. llm_generated workflows may be promoted; legacy = auto-migrated from older format."
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["system", "department", "personal"],
+      "default": "personal"
+    },
+    "owner": {
+      "type": "string",
+      "description": "For department scope: department_code; for personal: user_id; for system: empty."
+    },
+
+    "trigger": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "mode": { "type": "string", "enum": ["auto", "confirm"], "default": "confirm" },
+        "priority": { "type": "integer", "minimum": 1, "maximum": 100, "default": 10 },
+        "patterns": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Keyword or phrase patterns that trigger this workflow via chat/LINE."
+        },
+        "schedule": {
+          "type": "string",
+          "description": "Cron expression (5-field) or simple format like '09:00 weekday'. Empty = no schedule."
+        }
+      }
+    },
+
+    "variables": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "global_inputs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Required inputs the user must provide at execution time (e.g. query, recipient)."
+        },
+        "env_requirements": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+          "description": "OS environment variables this workflow needs (UPPER_SNAKE_CASE)."
+        },
+        "definitions": {
+          "type": "array",
+          "description": "Explicit variable definitions (used by block editor UI). Each has name/type/source/default.",
+          "items": {
+            "type": "object",
+            "required": ["name", "source"],
+            "properties": {
+              "name": { "type": "string" },
+              "type": { "type": "string", "enum": ["string", "number", "boolean", "array", "object"], "default": "string" },
+              "source": {
+                "type": "string",
+                "enum": ["fixed", "user_input", "system", "previous_step", "secret"]
+              },
+              "default_value": {},
+              "description": { "type": "string" },
+              "required": { "type": "boolean", "default": false }
+            }
+          }
+        }
+      }
+    },
+
+    "steps": {
+      "type": "array",
+      "minItems": 0,
+      "items": { "$ref": "#/definitions/step" },
+      "description": "Ordered list of steps. Topological order enforced by Gate 0. Empty array allowed for work-in-progress drafts; execution requires >=1 step (enforced at Gate 1)."
+    },
+
+    "on_error": {
+      "type": "object",
+      "description": "Error-handler workflow invoked when the main flow aborts (MAGELLAN BLOCKS エラー時に起動するフローのID).",
+      "properties": {
+        "workflow_id": { "type": "string" },
+        "pass_vars": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Variable names (incl. system _xxx vars) to hand off to the error workflow."
+        }
+      }
+    },
+
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_steps": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 },
+        "skill_whitelist": {
+          "type": ["array", "null"],
+          "items": { "type": "string" },
+          "default": null,
+          "description": "If set, only these skills may be used. Applied to LLM one-shot generation."
+        },
+        "timeout_seconds": { "type": "integer", "minimum": 10, "maximum": 3600, "default": 300 }
+      }
+    },
+
+    "execution": {
+      "type": "object",
+      "description": "Legacy execution hints (kept for backward compat). Prefer per-step on_fail + top-level constraints.",
+      "additionalProperties": true,
+      "properties": {
+        "default_model": { "type": "string" },
+        "timeout": { "type": "integer" },
+        "on_error": { "type": "string", "enum": ["retry", "skip", "abort"] },
+        "max_retries": { "type": "integer", "minimum": 0, "maximum": 10 }
+      }
+    },
+
+    "security": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "require_auth": { "type": "boolean", "default": true },
+        "allowed_roles": { "type": "array", "items": { "type": "string" } },
+        "rate_limit": { "type": "integer", "minimum": 0, "default": 0 },
+        "audit_log": { "type": "boolean", "default": true }
+      }
+    },
+
+    "context": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Free-form metadata slot. Not used by executor; available to UI/extensions."
+    },
+
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "created_by": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" },
+        "updated_at": { "type": "string", "format": "date-time" },
+        "last_run": { "type": ["string", "null"], "format": "date-time" },
+        "run_count": { "type": "integer", "default": 0 },
+        "promoted_from": {
+          "type": ["string", "null"],
+          "description": "If workflow was promoted from an LLM one-shot run, the run_id of that execution."
+        }
+      }
+    },
+
+    "blocks": {
+      "type": "array",
+      "description": "Canvas rendering data (legacy / visual editor). Derived from steps; both kept for compatibility.",
+      "items": { "type": "object", "additionalProperties": true }
+    },
+    "connections": {
+      "type": "array",
+      "description": "Canvas edge list (legacy / visual editor).",
+      "items": { "type": "object", "additionalProperties": true }
+    }
+  },
+
+  "definitions": {
+    "step": {
+      "type": "object",
+      "required": ["step_id", "type"],
+      "additionalProperties": true,
+      "properties": {
+        "step_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "description": "Unique within the workflow."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["sequential", "parallel", "sub_workflow"],
+          "description": "sequential = single skill; parallel = branches run together; sub_workflow = invoke another workflow."
+        },
+        "label": { "type": "string", "description": "Optional human-friendly step name for logs." },
+
+        "skill_id": {
+          "type": "string",
+          "description": "For sequential steps: which skill to call (must exist in registry)."
+        },
+        "input_map": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Mapping from skill's parameter keys to values/expressions. Values may reference ${variable_name} or ${GLOBAL.NAME}."
+        },
+        "output_var": {
+          "type": "string",
+          "description": "Name to assign the skill's result to. Readable by later steps via ${name}."
+        },
+
+        "branches": {
+          "type": "array",
+          "description": "For parallel type: list of sub-steps to execute concurrently.",
+          "items": { "$ref": "#/definitions/step" }
+        },
+        "merge_output_var": {
+          "type": "string",
+          "description": "For parallel type: joined output of all branches."
+        },
+
+        "sub_workflow_id": {
+          "type": "string",
+          "description": "For sub_workflow type: ID of the workflow to invoke."
+        },
+        "pass_vars": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "For sub_workflow type: variable names to pass to the called workflow."
+        },
+
+        "on_fail": {
+          "type": "string",
+          "enum": ["abort", "retry_once", "continue", "skip"],
+          "default": "abort",
+          "description": "abort = stop whole workflow; retry_once = retry after 2s; continue = log & move on; skip = same as continue but no log."
+        },
+
+        "condition": {
+          "type": "string",
+          "description": "Optional skip condition (e.g. '${summary.length} > 100'). Empty = always run."
+        }
+      }
+    }
+  }
+}

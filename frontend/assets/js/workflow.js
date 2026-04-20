@@ -137,6 +137,13 @@
       const block = { id, type, x: snap(x), y: snap(y), label: label || def.label, config: {}, el };
       this.blocks.set(id, block);
       this._updateInfo();
+      // Skill blocks: async-prefill params from skill schema so the user
+      // sees a populated params tab instead of an empty one. Control nodes
+      // (start/end/branch) don't have schemas so skip.
+      if (type !== "start" && type !== "end" && type !== "branch") {
+        const skillName = type.startsWith("mcp-") ? type : `mcp-${type}`;
+        _prefillBlockParamsFromSchema(block, skillName);
+      }
       return block;
     }
 
@@ -159,11 +166,32 @@
       `;
 
       // Block mousedown → start drag
+      // IMPORTANT: Use closest() so we still skip when the click lands on a
+      // child element of a port (e.g. pseudo-element / hover scale artifact).
+      // Previously `e.target.classList.contains("wf-port")` missed these
+      // cases — some skill blocks couldn't be dragged because the mousedown
+      // target resolved to an empty wrapper rather than the port itself.
+      // Also: opening the property panel is now deferred to mouseup so that
+      // fetch-triggered DOM updates can't interfere with drag-state setup.
       el.addEventListener("mousedown", e => {
-        if (e.target.classList.contains("wf-port")) return;
+        if (e.target.closest(".wf-port")) return;
+        // Avoid interfering with text selection in input fields (prop panel overlay)
+        if (e.target.closest("input, textarea, select, button")) return;
         e.stopPropagation();
+        // Track whether this mousedown turned into a drag or a simple click
+        this.dragging = {
+          id,
+          ox: e.clientX, oy: e.clientY,
+          sx: parseInt(el.style.left), sy: parseInt(el.style.top),
+          moved: false,
+        };
+      });
+
+      // Click (no drag movement) → select + open property panel
+      el.addEventListener("click", e => {
+        if (e.target.closest(".wf-port")) return;
+        if (e.target.closest("input, textarea, select, button")) return;
         this.select(id);
-        this.dragging = { id, ox: e.clientX, oy: e.clientY, sx: parseInt(el.style.left), sy: parseInt(el.style.top) };
       });
 
       // Port mousedown → start connection
@@ -224,6 +252,9 @@
         const d = this.dragging;
         const dx = (e.clientX - d.ox) / this.scale;
         const dy = (e.clientY - d.oy) / this.scale;
+        // Only treat as drag once mouse moved >2px — avoids tiny jitter on click
+        if (!d.moved && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) d.moved = true;
+        if (!d.moved) return;
         const b = this.blocks.get(d.id);
         if (!b) return;
         b.x = snap(d.sx + dx);
@@ -555,8 +586,40 @@
       const owner   = this._currentOwner || "";
       const wfName  = this._wfData?.name || wfId;
 
-      // Ask user for initial prompt (optional)
-      const prompt = window.prompt(`執行工作流「${wfName}」\n\n輸入測試訊息（可留空直接使用工作流變數）：`, "") ?? "";
+      // Phase 2 UX fix: replace native prompt() with the integrated wizard.
+      //
+      // Previous behavior used `window.prompt()` for "ad-hoc test message"
+      // when there were no required user_input vars. Problems with that:
+      //   - browser-native dialog, clashes with app style
+      //   - no hint which variable the text binds to
+      //   - pressing OK on empty field silently sends "" → skill dies with
+      //     "Missing query" / similar confusing error
+      //
+      // New rule:
+      //   - If workflow has ANY user_input source variables → pre-open the
+      //     wizard so user fills them by name (required OR optional)
+      //   - If workflow has none → execute immediately, no dialog
+      const _vars = _getVariableList(this._wfData);
+      const _userInputVars = _vars.filter(v => v && v.source === "user_input" && v.name);
+
+      let prompt = "";
+      let _userInputs = {};
+      if (_userInputVars.length > 0) {
+        const _missing = _userInputVars.map(v => ({
+          name: v.name,
+          type: v.type || "string",
+          description: v.description || "",
+          required: !!v.required,
+          default: v.default_value || "",
+        }));
+        const collected = await _showInputsWizard(wfName, _missing);
+        if (!collected) return;   // user cancelled — no animation to clear yet
+        _userInputs = collected;
+        // Use the first collected value as accumulated_context fallback so
+        // skills that don't reference any variable still get something useful.
+        const firstVal = Object.values(collected).find(v => v);
+        if (firstVal) prompt = String(firstVal);
+      }
 
       // Save current state first (skip validation so partial edits don't block test)
       await this.save(null, true);
@@ -572,14 +635,75 @@
         await sleep(300);
       }
 
-      // Call backend execution with correct scope/owner
-      const _eq = new URLSearchParams({ scope, owner });
-      try {
-        const resp = await fetch(`/api/workflows/${encodeURIComponent(wfId)}/execute?${_eq}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ initial_prompt: prompt, model: null }),
+      // Helper to clear animation on ANY exit path (error, gate block, success).
+      // Previously only the success path cleared it → blocks stayed spinning
+      // forever after a 422/428/network error. Capture in closure so every
+      // `return` below can call it.
+      const _clearRunningAnim = () => {
+        this.blocks.forEach(b => {
+          b.el.classList.remove("running");
+          b.el.querySelector(".wf-block-status")?.classList.remove("running");
         });
+        this.connections.forEach(c => c.el.classList.remove("active-flow"));
+      };
+
+      // Call backend execution with correct scope/owner.
+      // Phase 2 Gate 1 flow:
+      //   - 422 Unprocessable → env/skill problem, show hard error toast
+      //   - 428 Precondition Required → missing_inputs, pop wizard + retry
+      // Note: _userInputs was pre-filled above if workflow had user_input vars.
+      const _eq = new URLSearchParams({ scope, owner });
+      let _attempt = 0;
+      while (true) {
+        _attempt += 1;
+        if (_attempt > 2) break;  // one retry after wizard fills inputs
+        let resp;
+        try {
+          resp = await fetch(`/api/workflows/${encodeURIComponent(wfId)}/execute?${_eq}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ initial_prompt: prompt, model: null, inputs: _userInputs }),
+          });
+        } catch (e) {
+          _clearRunningAnim();
+          if (window.showToast) window.showToast("網路錯誤: " + e.message, "error");
+          if (window._wfDashboard) window._wfDashboard.addLog(`「${wfName}」網路錯誤: ${e.message}`, "failed");
+          return;
+        }
+
+        // Handle Gate 1 soft-block (need user inputs)
+        if (resp.status === 428) {
+          _clearRunningAnim();   // pause animation while wizard is up
+          const ed = await resp.json().catch(() => ({}));
+          const miss = ((ed.detail || {}).missing_inputs) || ed.missing_inputs || [];
+          const collected = await _showInputsWizard(wfName, miss);
+          if (!collected) return;  // user cancelled — already cleared
+          _userInputs = { ..._userInputs, ...collected };
+          continue;  // retry with inputs filled (animation will restart below on next pass? keep it simple: leave cleared)
+        }
+
+        // Handle Gate 0/1 hard-block
+        if (resp.status === 422) {
+          _clearRunningAnim();
+          const ed = await resp.json().catch(() => ({}));
+          const det = ed.detail || {};
+          const errs = det.errors || (Array.isArray(det) ? det : []);
+          const msg = errs.length
+            ? errs.slice(0, 5).join("; ")
+            : (typeof det === "string" ? det : "工作流檢查未通過");
+          if (window.showToast) window.showToast("⛔ " + msg, "error");
+          if (window._wfDashboard) window._wfDashboard.addLog(`「${wfName}」檢查未通過：${msg}`, "failed");
+          return;
+        }
+
+        if (!resp.ok) {
+          _clearRunningAnim();
+          const txt = await resp.text().catch(() => "");
+          if (window.showToast) window.showToast(`執行失敗 (${resp.status}): ${txt.slice(0, 120)}`, "error");
+          return;
+        }
+
+        // ── Success path ──
         const data = await resp.json();
 
         // Update block statuses from results
@@ -616,19 +740,27 @@
         }
 
         if (window.showToast) {
-          const msg = errors > 0
-            ? `執行完成：${success} 成功 / ${errors} 失敗`
-            : `✓ 執行完成：${data.blocks_executed} 個節點`;
-          window.showToast(msg, errors > 0 ? "warning" : "success");
+          if (errors > 0) {
+            // Surface the FIRST error message so user knows WHY it failed,
+            // not just a useless "1 失敗" count.
+            const firstErr = (data.results || []).find(r => r.status === "error");
+            const detail = firstErr?.error || firstErr?.reason || "";
+            const short = detail.length > 120 ? detail.slice(0, 120) + "…" : detail;
+            const msg = short
+              ? `❌ ${firstErr.skill || "步驟"}失敗：${short}`
+              : `執行完成：${success} 成功 / ${errors} 失敗`;
+            window.showToast(msg, "error");
+          } else {
+            window.showToast(`✓ 執行完成：${data.blocks_executed} 個節點`, "success");
+          }
         }
 
-        // Show final output in a result panel if there's meaningful output
-        if (data.final_output && data.final_output.trim()) {
+        // Always show result panel if there was ANY output or error,
+        // so user can inspect per-block details
+        if ((data.final_output && data.final_output.trim()) || errors > 0) {
           _showWfRunResult(wfName, data);
         }
-      } catch (e) {
-        if (window.showToast) window.showToast("執行失敗: " + e.message, "error");
-        if (window._wfDashboard) window._wfDashboard.addLog(`「${wfName}」執行失敗: ${e.message}`, "failed");
+        break;  // success — exit the retry loop
       }
 
       // Clean up animations
@@ -677,6 +809,11 @@
 
     // ── Persistence (Backend API with localStorage fallback) ──
     async save(name, skipValidation = false) {
+      // ── Read-only guard (opened without edit permission) ──
+      if (this.readOnly) {
+        if (window.showToast) window.showToast("🔒 此工作流為檢視模式，無法儲存", "error");
+        return false;
+      }
       const oldFlowId = name || this._currentWfId || "default";
       const _wd = this._wfData || {};
 
@@ -738,35 +875,74 @@
         const resp = await fetch(`/api/workflows/${encodeURIComponent(targetFlowId)}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify(data),
         });
-        if (!resp.ok) throw new Error("API save failed");
 
-        // If the workflow was renamed (ID changed), delete the old temp file
-        if (targetFlowId !== oldFlowId) {
-          try {
-            await fetch(
-              `/api/workflows/${encodeURIComponent(oldFlowId)}?scope=${encodeURIComponent(scope)}&owner=${encodeURIComponent(owner)}`,
-              { method: "DELETE" }
-            );
-          } catch (_) { /* ignore delete errors */ }
-          this._currentWfId = targetFlowId;   // update in-memory ID
+        // Permission / quota / validation errors — show explicit message and
+        // DO NOT fall back to localStorage (user's data would silently vanish
+        // on refresh).
+        if (resp.status === 422 || resp.status === 429 || resp.status === 403) {
+          const errData = await resp.json().catch(() => ({}));
+          const det = errData.detail || {};
+          // Backend may put errors at detail.errors (Phase 2 Gate 0 shape) or detail as string (FastAPI default)
+          const messages =
+            (Array.isArray(det.errors) && det.errors) ||
+            (Array.isArray(det) && det.map(e => e.msg || JSON.stringify(e))) ||
+            (typeof det === "string" ? [det] : []) ||
+            [`伺服器回應 ${resp.status}`];
+          const icon = resp.status === 429 ? "⚠️ 配額已滿"
+                     : resp.status === 403 ? "❌ 權限不足"
+                     : "⛔ 無法儲存";
+          const body = messages.slice(0, 5).join("；");
+          if (window.showToast) window.showToast(`${icon}：${body}`, "error");
+          else alert(`${icon}：${body}`);
+          return false;
+        }
+
+        if (!resp.ok) throw new Error(`API save failed (${resp.status})`);
+
+        // ── Pick up backend's final slug (Phase 1.5: filename = workflow_id) ──
+        // Backend may rename the file from legacy Chinese to v2 slug.
+        let serverResp = {};
+        try { serverResp = await resp.clone().json(); } catch (_) {}
+        const serverFinalId = serverResp.id || targetFlowId;
+
+        // If the workflow was renamed — delete the OLD legacy file so we
+        // don't end up with two copies. Skip if this is a fresh draft
+        // (the temp ID never actually got persisted, so DELETE would 404).
+        if (serverFinalId !== oldFlowId) {
+          if (!this._isNewDraft) {
+            try {
+              await fetch(
+                `/api/workflows/${encodeURIComponent(oldFlowId)}?scope=${encodeURIComponent(scope)}&owner=${encodeURIComponent(owner)}`,
+                { method: "DELETE" }
+              );
+            } catch (_) { /* ignore delete errors */ }
+          }
+          this._currentWfId = serverFinalId;  // update in-memory ID
+          this._isNewDraft = false;           // no longer a draft after first save
         }
 
         if (window.showToast) window.showToast(`「${data.name}」已儲存`, "success");
         // Sync toolbar display
         const infoEl = document.getElementById("wfInfoText");
         if (infoEl) infoEl.textContent = `${data.name}  ·  ${this.blocks.size} 節點 · ${this.connections.length} 連接`;
+        this._markAsSaved();
         return true;
 
       } catch (e) {
-        // Fallback: localStorage (keyed by targetFlowId so old temp key is abandoned)
+        // Network / unknown errors only — localStorage fallback so user
+        // doesn't lose in-progress work during network blips. Clearly
+        // labelled so they know it's not synced.
         localStorage.setItem("wf_flow_" + targetFlowId, JSON.stringify(data));
         if (targetFlowId !== oldFlowId) {
           localStorage.removeItem("wf_flow_" + oldFlowId);
           this._currentWfId = targetFlowId;
         }
-        if (window.showToast) window.showToast(`「${data.name}」已儲存（本地）`, "success");
+        if (window.showToast) window.showToast(`⚠️ 伺服器無法儲存，已暫存於本機（重整後會遺失）`, "warning");
+        // Don't mark as saved — we want user to still see the dirty warning
+        // next time they try to leave (their data is not really persisted)
         return true;
       }
     }
@@ -802,7 +978,19 @@
         if (block && b.config) block.config = b.config;
       });
       // Store workflow-level data for settings (include name for display)
-      this._wfData = { name: data.name || "", description: data.description || "", icon: data.icon || "", tags: data.tags || [], trigger_keywords: data.trigger_keywords || [], variables: data.variables || [], trigger: data.trigger || {}, execution: data.execution || {}, security: data.security || {} };
+      // v2 files use display_name; legacy used name. Accept either so the
+      // settings modal doesn't ask user to re-enter the name.
+      this._wfData = {
+        name: data.display_name || data.name || "",
+        description: data.description || "",
+        icon: data.icon || "",
+        tags: data.tags || [],
+        trigger_keywords: data.trigger_keywords || (data.trigger && data.trigger.patterns) || [],
+        variables: data.variables || [],
+        trigger: data.trigger || {},
+        execution: data.execution || {},
+        security: data.security || {},
+      };
       // Map old IDs to new sequential IDs
       const idMap = new Map();
       let idx = 1;
@@ -813,6 +1001,38 @@
         const to = idMap.get(c.to);
         if (from && to) this._addConnection(from, to);
       });
+
+      // Snapshot state as the "clean" reference for dirty detection
+      this._savedSnapshot = this._snapshotState();
+    }
+
+    // ── Dirty tracking ────────────────────────────────────────
+    // Capture everything users can mutate: block positions, types, configs,
+    // connections, and workflow-level metadata.
+    _snapshotState() {
+      try {
+        const blocks = Array.from(this.blocks.values()).map(b => ({
+          id: b.id, type: b.type, x: b.x, y: b.y, label: b.label,
+          config: b.config || {},
+        }));
+        const connections = this.connections.map(c => ({ from: c.from, to: c.to }));
+        return JSON.stringify({ blocks, connections, wfData: this._wfData || {} });
+      } catch (_) { return ""; }
+    }
+
+    hasUnsavedChanges() {
+      if (this.readOnly) return false;  // read-only can't dirty
+      const now = this._snapshotState();
+      // First entry (no saved snapshot yet): dirty if we already have content
+      if (this._savedSnapshot == null) {
+        return this.blocks.size > 1 || this.connections.length > 0;
+      }
+      return now !== this._savedSnapshot;
+    }
+
+    // Called after a successful save to reset the clean baseline
+    _markAsSaved() {
+      this._savedSnapshot = this._snapshotState();
     }
   }
 
@@ -1296,9 +1516,13 @@
     const _overlay = document.getElementById("wfLandingOverlay");
     const _landingOpen = _overlay?.classList.contains("open");
 
+    // Any transition out of canvas should remove the read-only banner
+    document.getElementById("wfReadOnlyBanner")?.remove();
+
     if (_landingOpen) {
       // Landing is open → close landing, back to chat
       body.classList.remove("wf-mode");
+      body.classList.remove("wf-readonly");
       if (btn) btn.classList.remove("active");
       if (_overlay) _overlay.classList.remove("open");
       const _pp = document.getElementById("wfPropPanel");
@@ -1310,7 +1534,27 @@
         const ok = await _showConfirmAsync("技能尚未儲存，確定要退出嗎？");
         if (!ok) return;
       }
+
+      // Workflow Designer dirty check — 3-option dialog (save/discard/cancel)
+      if (!_skillEditMode && window._wfDesigner?.hasUnsavedChanges?.()) {
+        const wfName = window._wfDesigner._wfData?.name || "此工作流";
+        const action = await _showDirtyExitDialog(
+          `「${_escHtml(wfName)}」有未儲存的變更。<br>` +
+          `「儲存並退出」會先驗證流程合規（需包含 [開始]/[結束] 節點、名稱與描述），驗證失敗將保留在畫布讓您修正。`
+        );
+        if (action === "cancel") return;
+        if (action === "save") {
+          // Try save; if validation fails (returns false), stay on canvas
+          const ok = await window._wfDesigner.save();
+          if (!ok) {
+            if (window.showToast) window.showToast("儲存失敗，請修正後再退出", "error");
+            return;
+          }
+        }
+        // "discard" falls through and exits without saving
+      }
       body.classList.remove("wf-mode");
+      body.classList.remove("wf-readonly");
       _skillEditMode = false;
       ["wfSkillEditArea", "wfCanvasArea", "wfPaletteWrap", "wfDashboardWrap"].forEach(id => {
         const el = document.getElementById(id);
@@ -1346,9 +1590,11 @@
     const overlay = document.getElementById("wfLandingOverlay");
     if (!overlay) return;
     overlay.classList.add("open");
+    // Banner only belongs to the canvas — clear it when returning to landing
+    document.getElementById("wfReadOnlyBanner")?.remove();
     // Remove anti-flash if present
     const af = document.getElementById("wfAntiFlash"); if (af) af.remove();
-    const body = document.querySelector(".page-chat-body"); if (body) body.style.visibility = "visible";
+    const body = document.querySelector(".page-chat-body"); if (body) { body.style.visibility = "visible"; body.classList.remove("wf-readonly"); }
 
     // Clear grid immediately so stale cards don't show while fetching
     const _gridPre = document.getElementById("wfLandingGrid");
@@ -1371,19 +1617,30 @@
     const leftPanel = document.getElementById("wfLandingLeft");
     const rightPanel = document.getElementById("wfLandingRight");
 
+    // ── Restore previous landing state (view-state memory) ──
+    // Preserves scope filter + search query between canvas trips so users
+    // returning via 回選單 land back on the tab they were browsing.
+    let _savedState = {};
+    try {
+      _savedState = JSON.parse(sessionStorage.getItem("kway_wf_landing_state") || "{}") || {};
+    } catch (_) { _savedState = {}; }
+    const _savedScope = _savedState.scope || "all";
+    const _savedQuery = _savedState.query || "";
+
     // ── Left Panel ──
     if (leftPanel) {
       const sc = { all: workflows.length, system: 0, department: 0, personal: 0 };
       workflows.forEach(wf => { sc[wf.scope || "personal"]++; });
+      const _isActive = (s) => s === _savedScope ? ' active' : '';
       leftPanel.innerHTML = `
         <div class="wf-lp-section"><div class="wf-lp-title">搜尋</div>
-          <input class="wf-lp-search" id="wfLandingSearch" type="text" placeholder="搜尋工作流名稱..." autocomplete="off" /></div>
+          <input class="wf-lp-search" id="wfLandingSearch" type="text" placeholder="搜尋工作流名稱..." autocomplete="off" value="${_escHtml(_savedQuery)}" /></div>
         <div class="wf-lp-section"><div class="wf-lp-title">分類</div>
           <div class="wf-lp-filter">
-            <div class="wf-lp-filter-item active" data-scope="all"><span class="wf-lp-filter-dot" style="background:#64748B;"></span><span>全部</span><span class="wf-lp-filter-count">${sc.all}</span></div>
-            <div class="wf-lp-filter-item" data-scope="system"><span class="wf-lp-filter-dot" style="background:#059669;"></span><span>系統</span><span class="wf-lp-filter-count">${sc.system}</span></div>
-            <div class="wf-lp-filter-item" data-scope="department"><span class="wf-lp-filter-dot" style="background:#4285f4;"></span><span>部門</span><span class="wf-lp-filter-count">${sc.department}</span></div>
-            <div class="wf-lp-filter-item" data-scope="personal"><span class="wf-lp-filter-dot" style="background:#1a9aaa;"></span><span>個人</span><span class="wf-lp-filter-count">${sc.personal}</span></div>
+            <div class="wf-lp-filter-item${_isActive("all")}" data-scope="all"><span class="wf-lp-filter-dot" style="background:#64748B;"></span><span>全部</span><span class="wf-lp-filter-count">${sc.all}</span></div>
+            <div class="wf-lp-filter-item${_isActive("system")}" data-scope="system"><span class="wf-lp-filter-dot" style="background:#059669;"></span><span>系統</span><span class="wf-lp-filter-count">${sc.system}</span></div>
+            <div class="wf-lp-filter-item${_isActive("department")}" data-scope="department"><span class="wf-lp-filter-dot" style="background:#4285f4;"></span><span>部門</span><span class="wf-lp-filter-count">${sc.department}</span></div>
+            <div class="wf-lp-filter-item${_isActive("personal")}" data-scope="personal"><span class="wf-lp-filter-dot" style="background:#1a9aaa;"></span><span>個人</span><span class="wf-lp-filter-count">${sc.personal}</span></div>
           </div></div>
         <div class="wf-lp-section"><div class="wf-lp-title">最近編輯</div>
           <div class="wf-lp-recent">${workflows.slice(0, 5).map(wf =>
@@ -1394,11 +1651,12 @@
         item.addEventListener("click", () => {
           leftPanel.querySelectorAll(".wf-lp-filter-item").forEach(i => i.classList.remove("active"));
           item.classList.add("active");
+          _saveWfLandingState();
           _filterWfCards();
         });
       });
       const si = leftPanel.querySelector("#wfLandingSearch");
-      if (si) si.addEventListener("input", () => _filterWfCards());
+      if (si) si.addEventListener("input", () => { _saveWfLandingState(); _filterWfCards(); });
     }
 
     // ── Center Cards (upgraded with description, trigger, updated_at) ──
@@ -1463,7 +1721,33 @@
         </div>
         <div class="wf-rp-section"><div class="wf-rp-title">排程狀態</div><div class="wf-rp-empty">尚未設定排程</div></div>`;
     }
+
+    // Apply saved filter/search immediately so returning user sees their previous view
+    _filterWfCards();
+
+    // Restore scroll position (if any) after a tiny delay for layout to settle
+    if (_savedState.scrollTop != null) {
+      setTimeout(() => {
+        const _center = document.getElementById("wfLandingCenter") || grid?.parentElement;
+        if (_center) _center.scrollTop = _savedState.scrollTop;
+      }, 30);
+    }
   }
+
+  // Persist the current landing view state — scope tab, search box, scroll
+  function _saveWfLandingState() {
+    try {
+      const scope = document.querySelector(".wf-lp-filter-item.active")?.dataset?.scope || "all";
+      const query = document.getElementById("wfLandingSearch")?.value || "";
+      const _center = document.getElementById("wfLandingCenter");
+      const scrollTop = _center ? _center.scrollTop : 0;
+      sessionStorage.setItem("kway_wf_landing_state", JSON.stringify({ scope, query, scrollTop }));
+    } catch (_) {}
+  }
+  // Save scroll on unload-ish events too (clicking a card → opens workflow)
+  document.addEventListener("click", (e) => {
+    if (e.target.closest(".wf-landing-card")) _saveWfLandingState();
+  }, true);
 
   function _filterWfCards() {
     const grid = document.getElementById("wfLandingGrid");
@@ -1477,6 +1761,82 @@
   }
 
   // ── Workflow Run Result Panel ──
+  // ── Phase 2 Gate 1: Missing-inputs wizard ──
+  // Server returned 428 Precondition Required with a list of required global_inputs.
+  // Pop a modal to collect them, resolve with the filled object (or null if cancelled).
+  function _showInputsWizard(wfName, missingInputs) {
+    return new Promise(resolve => {
+      document.getElementById("wfInputsWizardOverlay")?.remove();
+      const overlay = document.createElement("div");
+      overlay.id = "wfInputsWizardOverlay";
+      overlay.style.cssText = "position:fixed;inset:0;z-index:8500;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;";
+
+      const rows = (missingInputs || []).map(inp => {
+        const desc = inp.description ? `<div style="font-size:0.7rem;color:#64748b;margin-top:3px;">${_escHtml(inp.description)}</div>` : "";
+        const isMultiline = (inp.type || "").toLowerCase() === "text" || (inp.description || "").length > 60;
+        const defVal = _escHtml(inp.default || "");
+        const field = isMultiline
+          ? `<textarea rows="3" id="wfWizInp_${_escHtml(inp.name)}" placeholder="${defVal}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;resize:vertical;">${defVal}</textarea>`
+          : `<input type="text" id="wfWizInp_${_escHtml(inp.name)}" value="${defVal}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;" />`;
+        const required = inp.required === false ? '<span style="color:#94a3b8;font-size:0.72rem;">（選填）</span>' : '<span style="color:#dc2626;">*</span>';
+        return `<div style="margin-bottom:12px;">
+          <label style="display:block;font-size:0.78rem;font-weight:600;color:#1e293b;margin-bottom:4px;">
+            <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">${_escHtml(inp.name)}</code>
+            ${required}
+          </label>
+          ${field}
+          ${desc}
+        </div>`;
+      }).join("");
+
+      overlay.innerHTML = `
+        <div style="background:#fff;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,0.25);padding:22px 24px 18px;width:500px;max-width:92vw;max-height:85vh;overflow-y:auto;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <span style="font-size:1.1rem;">📝</span>
+            <div style="font-size:1rem;font-weight:700;">執行「${_escHtml(wfName)}」需要以下輸入</div>
+          </div>
+          <div style="font-size:0.78rem;color:#64748b;margin-bottom:16px;">填寫後按「確認」開始執行</div>
+          ${rows || '<div style="color:#94a3b8;">(沒有待輸入欄位)</div>'}
+          <footer style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;">
+            <button id="wfWizCancel" style="padding:8px 18px;border-radius:8px;background:transparent;color:#64748b;border:1px solid #e2e8f0;cursor:pointer;">取消</button>
+            <button id="wfWizSubmit" style="padding:8px 18px;border-radius:8px;background:#0D6EFD;color:#fff;border:none;font-weight:600;cursor:pointer;">確認並執行</button>
+          </footer>
+        </div>`;
+      document.body.appendChild(overlay);
+
+      const _cleanup = () => overlay.remove();
+      overlay.addEventListener("click", e => { if (e.target === overlay) { _cleanup(); resolve(null); } });
+      overlay.querySelector("#wfWizCancel").onclick = () => { _cleanup(); resolve(null); };
+      overlay.querySelector("#wfWizSubmit").onclick = () => {
+        const collected = {};
+        let hasMissing = false;
+        (missingInputs || []).forEach(inp => {
+          const el = document.getElementById("wfWizInp_" + inp.name);
+          const v = (el?.value || "").trim();
+          if (!v && inp.required !== false) {
+            hasMissing = true;
+            if (el) el.style.borderColor = "#dc2626";
+          } else {
+            collected[inp.name] = v;
+            if (el) el.style.borderColor = "#cbd5e1";
+          }
+        });
+        if (hasMissing) {
+          if (window.showToast) window.showToast("請填寫所有必填欄位", "error");
+          return;
+        }
+        _cleanup();
+        resolve(collected);
+      };
+
+      // Auto-focus the first input
+      setTimeout(() => {
+        const firstInput = overlay.querySelector("input, textarea");
+        if (firstInput) firstInput.focus();
+      }, 50);
+    });
+  }
+
   function _showWfRunResult(wfName, data) {
     document.getElementById("wfRunResultOverlay")?.remove();
     const overlay = document.createElement("div");
@@ -1592,9 +1952,13 @@
     const userId    = _u.employee_id || _u.id || "";
 
     // Permission checks
+    const isGuest  = _isGuestUser(_u);
+    // System: admin only
     const canSystem = role === "admin";
-    const canDept   = (role === "admin" || role === "editor") && !!deptCode;
-    const canPerson = role !== "guest";
+    // Department: non-guest with a dept_code AND role has edit rights
+    const canDept   = !isGuest && !!deptCode && (role === "admin" || role === "editor");
+    // Personal: any logged-in user (incl. guest) with a valid user identifier
+    const canPerson = !!(_u.id || _u.employee_id || _u.user_id);
 
     function _lockMsg(scope) {
       if (scope === "system") return "僅限系統管理員";
@@ -1605,7 +1969,9 @@
     function _card(icon, nameTW, path, desc, scope, allowed) {
       const dis = allowed ? "" : " disabled";
       const lock = allowed ? "" : `<div class="wf-scope-card-lock">🔒 ${_lockMsg(scope)}</div>`;
-      const click = allowed ? `onclick="window._createNewWorkflow('${scope}', '${scope==='department'?deptCode:scope==='personal'?userId:''}')"` : "";
+      // Phase 5: after picking scope, offer wizard OR blank canvas
+      const ownerArg = scope === 'department' ? deptCode : scope === 'personal' ? userId : '';
+      const click = allowed ? `onclick="window._chooseCreationMode('${scope}', '${ownerArg}')"` : "";
       return `<div class="wf-scope-card${dis}" ${click}>
         <div class="wf-scope-card-icon">${icon}</div>
         <div class="wf-scope-card-body">
@@ -1624,6 +1990,7 @@
       <div class="wf-scope-modal">
         <div class="wf-scope-modal-title">選擇工作流類型</div>
         <div class="wf-scope-modal-sub">選擇儲存位置，建立後可透過設定頁更改描述與觸發條件</div>
+        ${isGuest ? `<div style="background:#fff8e1;border:1px solid #ffd980;color:#78491a;padding:8px 12px;border-radius:8px;font-size:0.76rem;margin-bottom:12px;">⚠️ 您目前以訪客身分登入，僅能建立<b>個人工作流</b>（上限 3 個），無法編輯系統/部門工作流。完成身分驗證後可解除限制</div>` : ""}
         <div class="wf-scope-cards">
           ${_card("🌐", "系統工作流", "workspace/workflows/system/", "對所有使用者開放，需管理員權限", "system", canSystem)}
           ${_card("🏢", "部門工作流", `workspace/workflows/department/${deptCode||"(部門代碼)"}/`, "限本部門成員使用，需編輯者權限", "department", canDept)}
@@ -1639,6 +2006,169 @@
     document.body.appendChild(overlay);
   };
 
+  // Phase 5: Choose creation mode (wizard vs blank canvas)
+  window._chooseCreationMode = function (scope, owner) {
+    document.getElementById("wfScopeOverlay")?.remove();
+    const overlay = document.createElement("div");
+    overlay.id = "wfModeOverlay";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;";
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:22px 24px 18px;width:520px;max-width:92vw;">
+        <div style="font-size:1.05rem;font-weight:700;margin-bottom:4px;">選擇建立方式</div>
+        <div style="font-size:0.8rem;color:#64748b;margin-bottom:16px;">使用精靈可在 5 個問題內生成工作流；也可以直接進入空白畫布自行拖拉</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div class="wf-mode-card" onclick="window._showWfWizard('${scope}','${owner}')"
+            style="padding:14px 16px;border:2px solid #0d6efd;border-radius:12px;cursor:pointer;background:#f0f7ff;display:flex;align-items:flex-start;gap:14px;">
+            <div style="font-size:1.6rem;flex-shrink:0;">✨</div>
+            <div style="flex:1;">
+              <div style="font-size:0.9rem;font-weight:700;color:#0d6efd;">精靈模式（推薦）</div>
+              <div style="font-size:0.76rem;color:#475569;margin-top:3px;">回答 5 題（目的/輸入/輸出/時機/失敗處理）自動選最適合的模板</div>
+            </div>
+          </div>
+          <div class="wf-mode-card" onclick="window._createNewWorkflow('${scope}','${owner}');document.getElementById('wfModeOverlay')?.remove()"
+            style="padding:14px 16px;border:1.5px solid #e2e8f0;border-radius:12px;cursor:pointer;display:flex;align-items:flex-start;gap:14px;">
+            <div style="font-size:1.6rem;flex-shrink:0;">🎨</div>
+            <div style="flex:1;">
+              <div style="font-size:0.9rem;font-weight:700;">空白畫布</div>
+              <div style="font-size:0.76rem;color:#64748b;margin-top:3px;">從 Palette 拖拉節點自由設計</div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+          <button onclick="document.getElementById('wfModeOverlay')?.remove()" style="padding:7px 18px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;font-size:0.82rem;">取消</button>
+        </div>
+      </div>`;
+    overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  };
+
+  // Phase 5: 5-question wizard
+  window._showWfWizard = async function (scope, owner) {
+    document.getElementById("wfModeOverlay")?.remove();
+
+    const QUESTIONS = [
+      { key: "purpose", label: "您想做什麼？", options: ["情報/新聞", "資料整理", "會議整理", "備忘/提醒"] },
+      { key: "input_source", label: "輸入來源是？", options: ["文字", "檔案", "網址", "LINE 訊息"] },
+      { key: "output_target", label: "輸出要送到哪？", options: ["摘要", "Notion", "LINE 推播", "Email", "待辦"] },
+      { key: "schedule", label: "什麼時候執行？", options: ["手動", "每日", "每週", "每月"] },
+      { key: "on_fail", label: "失敗時怎麼辦？", options: ["retry", "skip", "notify"],
+        labels: { retry: "自動重試", skip: "跳過繼續", notify: "通知我" } },
+    ];
+
+    const answers = {};
+    let step = 0;
+
+    const overlay = document.createElement("div");
+    overlay.id = "wfWizardOverlay";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;";
+    document.body.appendChild(overlay);
+
+    function renderStep() {
+      if (step >= QUESTIONS.length) { renderPreview(); return; }
+      const q = QUESTIONS[step];
+      const labelFor = (o) => (q.labels && q.labels[o]) || o;
+      overlay.innerHTML = `
+        <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:24px;width:520px;max-width:92vw;">
+          <div style="font-size:0.72rem;color:#64748b;margin-bottom:6px;">步驟 ${step+1} / ${QUESTIONS.length}</div>
+          <div style="font-size:1.05rem;font-weight:700;margin-bottom:16px;">${q.label}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            ${q.options.map(o => `
+              <button class="wf-wiz-opt" data-val="${o}"
+                style="padding:14px;border:1.5px solid #e2e8f0;border-radius:10px;background:#f8f9fb;cursor:pointer;font-size:0.88rem;color:#1e293b;transition:border-color 0.15s,background 0.15s;">
+                ${labelFor(o)}
+              </button>
+            `).join("")}
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:18px;">
+            <button onclick="(function(){document.getElementById('wfWizardOverlay')?.remove()})()" style="padding:7px 16px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;font-size:0.82rem;">取消</button>
+            ${step > 0 ? `<button id="wfWizBack" style="padding:7px 16px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;font-size:0.82rem;">上一步</button>` : ""}
+          </div>
+        </div>`;
+      overlay.querySelectorAll(".wf-wiz-opt").forEach(btn => {
+        btn.onmouseenter = () => { btn.style.borderColor = "#0d6efd"; btn.style.background = "#f0f7ff"; };
+        btn.onmouseleave = () => { btn.style.borderColor = "#e2e8f0"; btn.style.background = "#f8f9fb"; };
+        btn.onclick = () => {
+          answers[q.key] = btn.dataset.val;
+          step += 1;
+          renderStep();
+        };
+      });
+      const back = overlay.querySelector("#wfWizBack");
+      if (back) back.onclick = () => { step -= 1; renderStep(); };
+    }
+
+    async function renderPreview() {
+      overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:24px;width:520px;max-width:92vw;"><div style="text-align:center;padding:30px 0;">⏳ 正在為你選擇最適合的模板...</div></div>`;
+      try {
+        const resp = await fetch("/api/workflows/wizard", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(answers),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.status !== "success") {
+          overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:24px;"><div style="color:#dc2626;">Wizard 建立失敗：${JSON.stringify(data.detail || data).slice(0,200)}</div><div style="text-align:right;margin-top:12px;"><button onclick="document.getElementById('wfWizardOverlay')?.remove()">關閉</button></div></div>`;
+          return;
+        }
+        const wf = data.workflow;
+        const stepsPreview = (wf.blocks || []).filter(b => !["start","end","branch"].includes(b.type)).map(b => b.type).join(" → ") || "(無節點)";
+        overlay.innerHTML = `
+          <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:24px;width:560px;max-width:92vw;max-height:85vh;overflow-y:auto;">
+            <div style="font-size:1.05rem;font-weight:700;margin-bottom:6px;">✨ 已為你選擇模板</div>
+            <div style="font-size:0.88rem;color:#0d6efd;font-weight:600;margin-bottom:12px;">${wf.icon || "📋"} ${_escHtml(wf.display_name)}</div>
+            <div style="background:#f8f9fb;border-radius:10px;padding:12px;margin-bottom:14px;">
+              <div style="font-size:0.76rem;color:#64748b;margin-bottom:4px;">描述</div>
+              <div style="font-size:0.85rem;color:#1e293b;">${_escHtml(wf.description || "")}</div>
+              <div style="font-size:0.76rem;color:#64748b;margin-top:10px;margin-bottom:4px;">流程</div>
+              <div style="font-size:0.82rem;color:#1e293b;font-family:monospace;">${_escHtml(stepsPreview)}</div>
+              ${(wf.variables?.env_requirements || []).length ? `
+                <div style="font-size:0.76rem;color:#64748b;margin-top:10px;margin-bottom:4px;">需要的環境變數</div>
+                <div style="font-size:0.78rem;color:#b45309;">${wf.variables.env_requirements.map(e => `<code style="background:#fff8e1;padding:2px 5px;border-radius:3px;margin-right:5px;">${e}</code>`).join("")}</div>
+              ` : ""}
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:12px;">
+              <input id="wfWizName" type="text" placeholder="輸入工作流名稱" value="${_escHtml(wf.display_name)}" style="flex:1;padding:8px 12px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:0.88rem;" />
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;">
+              <button onclick="document.getElementById('wfWizardOverlay')?.remove()" style="padding:8px 18px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;">取消</button>
+              <button id="wfWizCreate" style="padding:8px 18px;border-radius:8px;background:#0d6efd;color:#fff;border:none;font-weight:600;cursor:pointer;">建立並開啟畫布</button>
+            </div>
+          </div>`;
+        overlay.querySelector("#wfWizCreate").onclick = async () => {
+          const finalName = overlay.querySelector("#wfWizName").value.trim() || wf.display_name;
+          wf.display_name = finalName;
+          wf.name = finalName;
+          wf.scope = scope;
+          wf.owner = owner;
+          // Generate a slug-friendly workflow_id from the name OR timestamp
+          const wfId = "wf-" + Date.now();
+          try {
+            const saveResp = await fetch(`/api/workflows/${wfId}`, {
+              method: "POST", headers: {"Content-Type":"application/json"}, credentials:"include",
+              body: JSON.stringify(wf),
+            });
+            const saveData = await saveResp.json();
+            if (!saveResp.ok) {
+              const det = saveData.detail?.errors || [saveData.detail || saveResp.status];
+              if (window.showToast) window.showToast("建立失敗：" + (Array.isArray(det) ? det.join("；") : det), "error");
+              return;
+            }
+            overlay.remove();
+            const finalId = saveData.id || wfId;
+            _enterWorkflowCanvas(finalId, scope, owner);
+            if (window.showToast) window.showToast(`已從「${wf.icon} ${wf.display_name}」模板建立`, "success");
+          } catch (e) {
+            if (window.showToast) window.showToast("網路錯誤：" + e.message, "error");
+          }
+        };
+      } catch (err) {
+        overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:24px;"><div style="color:#dc2626;">錯誤：${err.message}</div></div>`;
+      }
+    }
+
+    overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+    renderStep();
+  };
+
   window._createNewWorkflow = async function (scope, owner) {
     // Close scope picker if open
     document.getElementById("wfScopeOverlay")?.remove();
@@ -1647,25 +2177,110 @@
     const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
     owner = owner || _u.employee_id || _u.id || "";
 
-    const _chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let _r = ""; for (let i = 0; i < 20; i++) _r += _chars.charAt(Math.floor(Math.random() * _chars.length));
-    const wfKey = "WorkflowK_" + _r, wfId = "wf-" + Date.now();
-
-    try {
-      await fetch(`/api/workflows/${wfId}`, { method: "POST", headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ name: "新工作流", blocks: [], connections: [], scope, owner, context: { workflow_key: wfKey } }) });
-    } catch (_) {}
-    _enterWorkflowCanvas(wfId, scope, owner);
+    // Client-side only: no backend stub is created. The workflow is
+    // materialized on disk only when the user explicitly saves (Phase 2
+    // Gate 0 enforces display_name + at least one skill block).
+    // This prevents orphan files from being left behind when users open
+    // the canvas and then abandon without saving.
+    const wfId = "wf-" + Date.now();
+    _enterWorkflowCanvas(wfId, scope, owner, { isNewDraft: true });
   };
 
-  window._openWorkflow = function (id, scope, owner) { _enterWorkflowCanvas(id, scope, owner); };
+  // ── Read-only banner shown when entering a workflow without edit rights ──
+  function _showReadOnlyBanner(isReadOnly, scope) {
+    // Remove any existing banner
+    document.getElementById("wfReadOnlyBanner")?.remove();
+    if (!isReadOnly) return;
 
-  async function _enterWorkflowCanvas(wfId, scope, owner) {
+    const scopeLabel = scope === "system" ? "系統" : scope === "department" ? "部門" : "個人";
+    const reason = _isGuestUser()
+      ? "訪客帳號僅能檢視此工作流，無法編輯。請完成身分驗證以取得編輯權限"
+      : `您沒有編輯此${scopeLabel}工作流的權限，目前為「檢視模式」`;
+
+    const banner = document.createElement("div");
+    banner.id = "wfReadOnlyBanner";
+    banner.style.cssText =
+      "position:fixed;top:60px;left:50%;transform:translateX(-50%);z-index:800;" +
+      "background:#b45309;color:#fff;padding:8px 18px;border-radius:8px;" +
+      "box-shadow:0 6px 18px rgba(0,0,0,0.15);font-size:0.82rem;font-weight:600;" +
+      "display:flex;align-items:center;gap:10px;max-width:92vw;";
+    banner.innerHTML =
+      '<span style="font-size:1.05rem;">🔒</span>' +
+      '<span>' + reason + '</span>';
+    document.body.appendChild(banner);
+  }
+
+  // ── Central role / write-permission helpers ────────────────────────
+  // Mirror of server/services/permissions.py — must stay in sync.
+  function _getCurrentUser() {
+    return JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+  }
+
+  function _isGuestUser(u) {
+    u = u || _getCurrentUser();
+    const role = (u.role || "").toLowerCase();
+    if (role === "guest") return true;
+    if ((u.name || "") === "訪客") return true;
+    // No role AND no employee_id AND no onboarding → guest
+    if (!role && !u.employee_id && !u.onboarding_completed) return true;
+    return false;
+  }
+
+  function _allUserIds(u) {
+    u = u || _getCurrentUser();
+    const ids = new Set();
+    ["user_id", "employee_id", "id"].forEach(k => {
+      const v = u[k];
+      if (v) {
+        ids.add(String(v));
+        if (String(v).startsWith("line_")) ids.add(String(v).slice(5));
+      }
+    });
+    return ids;
+  }
+
+  // Returns true if the current user can WRITE (create/modify/delete) a
+  // resource at the given (scope, owner).
+  function _canEditScope(scope, owner, u) {
+    u = u || _getCurrentUser();
+    const role = (u.role || "").toLowerCase();
+    const dept = u.department_code || u.dept_code || "";
+
+    if (role === "admin") return true;
+    if (_isGuestUser(u)) {
+      // Guests: only their own personal scope
+      return scope === "personal" && _allUserIds(u).has(String(owner || ""));
+    }
+    if (scope === "system") return false;   // non-admin can't touch system
+    if (scope === "department") {
+      if (!dept) return false;
+      return dept === String(owner || "") && (role === "admin" || role === "editor" || role === "viewer");
+    }
+    if (scope === "personal") {
+      return _allUserIds(u).has(String(owner || ""));
+    }
+    return false;
+  }
+  window._canEditScope = _canEditScope;  // expose for other handlers
+
+  window._openWorkflow = function (id, scope, owner) {
+    // Permission pre-flight: if not editable, open in read-only mode so user
+    // can still inspect but can't accidentally make changes that fail at save.
+    const canEdit = _canEditScope(scope, owner);
+    _enterWorkflowCanvas(id, scope, owner, { readOnly: !canEdit });
+  };
+
+  async function _enterWorkflowCanvas(wfId, scope, owner, opts) {
+    opts = opts || {};
+    const readOnly = !!opts.readOnly;
     // Close landing overlay, enter wf-mode with canvas
     const overlay = document.getElementById("wfLandingOverlay");
     if (overlay) overlay.classList.remove("open");
     const body = document.querySelector(".page-chat-body");
-    if (body) body.classList.add("wf-mode");
+    if (body) {
+      body.classList.add("wf-mode");
+      body.classList.toggle("wf-readonly", readOnly);
+    }
     // Remove anti-flash style if present (from ?wf= redirect)
     const antiFlash = document.getElementById("wfAntiFlash");
     if (antiFlash) antiFlash.remove();
@@ -1694,14 +2309,27 @@
       window._wfDesigner._currentWfId = wfId;
       window._wfDesigner._currentScope = scope;
       window._wfDesigner._currentOwner = owner;
-      await window._wfDesigner.load(wfId, scope, owner);
+      window._wfDesigner.readOnly = readOnly;
+      window._wfDesigner._isNewDraft = !!opts.isNewDraft;
+
+      if (opts.isNewDraft) {
+        // No backend stub exists yet — initialize an empty in-memory designer
+        window._wfDesigner._wfData = { name: "", description: "", icon: "", tags: [], variables: { global_inputs: [], env_requirements: [], definitions: [] }, trigger: {}, execution: {}, security: {} };
+        window._wfDesigner._savedSnapshot = null;  // any edit becomes dirty
+      } else {
+        await window._wfDesigner.load(wfId, scope, owner);
+      }
+
       // If new workflow (no blocks), initialize _wfData so settings modal shows blank name
       if (window._wfDesigner.blocks.size === 0) {
         if (!window._wfDesigner._wfData) window._wfDesigner._wfData = {};
         // Don't pre-fill name — force user to set it via settings modal
-        window._wfDesigner.addBlock("start", 200, 250);
+        if (!readOnly) window._wfDesigner.addBlock("start", 200, 250);
       }
     }
+
+    // ── Read-only banner ──
+    _showReadOnlyBanner(readOnly, scope);
 
     // Init Dashboard
     const dashWrap = document.getElementById("wfDashboardWrap");
@@ -1731,7 +2359,7 @@
       // Enter skill edit mode — reset to initial state
       if (canvasArea) canvasArea.style.display = "none";
       if (editArea) { editArea.style.display = "flex"; editArea.classList.add("visible"); }
-      _rebuildPaletteForEdit(paletteWrap);
+      await _rebuildPaletteForEdit(paletteWrap);
       if (!window._wfSkillEditor) window._wfSkillEditor = new SkillEditor();
       // Reset editor to empty state
       const empty = document.getElementById("wfEditorEmpty");
@@ -1745,6 +2373,14 @@
       // Clear palette selection
       document.querySelectorAll(".wf-palette-item--clickable").forEach(el => el.classList.remove("is-active"));
       if (window._wfSkillEditor) window._wfSkillEditor.currentSkill = null;
+
+      // ── Restore last-opened skill from view state ──
+      try {
+        const _lastSkill = window.viewState?.("skill_editor").restore("currentSkill", "");
+        if (_lastSkill && _dynamicSkills[_lastSkill]) {
+          setTimeout(() => { window._wfSkillEditor?.loadSkill(_lastSkill); }, 60);
+        }
+      } catch (_) {}
     } else {
       // Exit skill edit mode
       if (editArea) { editArea.style.display = "none"; editArea.classList.remove("visible"); }
@@ -1928,6 +2564,9 @@
       this.currentSkill = skillName;
       this._isNew = false;
       this._clearDirty();
+
+      // Remember last-opened skill so re-entering editor resumes where user was
+      if (window.viewState) window.viewState("skill_editor").update({ currentSkill: skillName });
 
       // Highlight active in palette
       document.querySelectorAll(".wf-palette-item--clickable").forEach(el => el.classList.remove("is-active"));
@@ -2557,6 +3196,41 @@
     return window.confirm(message);
   }
 
+  // 3-option dirty-exit dialog. Resolves to one of:
+  //   "save"   — save then exit
+  //   "discard" — exit without saving
+  //   "cancel" — stay
+  function _showDirtyExitDialog(message) {
+    return new Promise(resolve => {
+      document.getElementById("wfConfirmOverlay")?.remove();
+      const overlay = document.createElement("div");
+      overlay.id = "wfConfirmOverlay";
+      overlay.className = "wf-confirm-overlay";
+      overlay.innerHTML = `
+        <div class="wf-confirm-box" style="max-width:440px;">
+          <div class="wf-confirm-icon">⚠️</div>
+          <div class="wf-confirm-msg">${message}</div>
+          <div class="wf-confirm-actions" style="flex-wrap:wrap;gap:8px;">
+            <button class="wf-confirm-btn wf-confirm-cancel" data-a="cancel">取消</button>
+            <button class="wf-confirm-btn" data-a="discard"
+              style="background:#fff5f5;color:#b91c1c;border:1px solid #fca5a5;">直接退出</button>
+            <button class="wf-confirm-btn wf-confirm-ok" data-a="save"
+              style="background:var(--kway-blue,#4a90d9);">儲存並退出</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      const _close = (a) => { overlay.remove(); resolve(a); };
+      overlay.querySelectorAll("button[data-a]").forEach(btn => {
+        btn.onclick = () => _close(btn.dataset.a);
+      });
+      overlay.onclick = (e) => { if (e.target === overlay) _close("cancel"); };
+      // Esc = cancel
+      overlay._onKey = (e) => { if (e.key === "Escape") _close("cancel"); };
+      document.addEventListener("keydown", overlay._onKey, { once: true });
+    });
+  }
+
   // Inject styled confirm modal into DOM (async version for future use)
   function _showConfirmAsync(message) {
     return new Promise(resolve => {
@@ -2640,12 +3314,31 @@
       _renderVariablesTab(body, wd);
     } else if (tab === "trigger") {
       const tr = wd.trigger || {};
+      const kwList = wd.trigger_keywords || [];
+      const hasKw = kwList.length > 0;
+      const hasCron = !!(tr.cron || "").trim();
+      // Inline warning: enabled but neither keywords nor cron → silent no-op
+      const showWarn = tr.enabled && !hasKw && !hasCron;
       body.innerHTML = `
         <div class="wf-settings-field">
           <label class="wf-settings-toggle-label">
             <input type="checkbox" id="wfSetTriggerEnabled" ${tr.enabled ? "checked" : ""} />
             啟用自動觸發
           </label></div>
+        ${showWarn ? `<div class="wf-settings-field" style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:10px;margin-bottom:10px;">
+          <div style="color:#b91c1c;font-weight:700;font-size:0.85rem;margin-bottom:4px;">⚠️ 此工作流永遠不會自動觸發</div>
+          <div style="color:#7f1d1d;font-size:0.78rem;">已啟用觸發但沒有設定任何關鍵詞或排程。請至少做一件：<br>
+            1. 到「<strong>基本</strong>」tab 填寫<strong>觸發關鍵詞</strong>（如「每日新聞」），或<br>
+            2. 在下方填寫<strong>排程 Cron 表達式</strong>，或<br>
+            3. 取消勾「啟用自動觸發」
+          </div>
+        </div>` : ""}
+        <div class="wf-settings-field">
+          <label>觸發關鍵詞摘要（在「基本」tab 編輯）</label>
+          <div class="wf-settings-hint" style="padding:6px 10px;background:#f1f5f9;border-radius:4px;color:#334155;">
+            ${hasKw ? kwList.map(k => `<code style="background:#e2e8f0;padding:1px 6px;border-radius:3px;margin-right:4px;">${_escHtml(k)}</code>`).join("") : '<span style="color:#94a3b8;">（尚未設定，自動觸發不會生效）</span>'}
+          </div>
+        </div>
         <div class="wf-settings-field"><label>觸發模式</label>
           <select id="wfSetTriggerMode">
             <option value="auto" ${tr.mode === "auto" ? "selected" : ""}>自動執行</option>
@@ -2656,7 +3349,7 @@
           <input type="number" id="wfSetTriggerPriority" value="${tr.priority || 10}" min="1" max="99" /></div>
         <div class="wf-settings-field"><label>排程 Cron 表達式</label>
           <input type="text" id="wfSetTriggerCron" value="${_escHtml(tr.cron || "")}" placeholder="例如: 0 9 * * 1-5" />
-          <div class="wf-settings-hint">留空表示不啟用排程自動觸發</div></div>
+          <div class="wf-settings-hint">留空表示不啟用排程自動觸發（若關鍵詞也空，整個觸發無效）</div></div>
       `;
     } else if (tab === "execution") {
       const ex = wd.execution || {};
@@ -2724,8 +3417,32 @@
 
   const SYSTEM_VARS = ["{{current_date}}", "{{current_time}}", "{{user_name}}", "{{user_dept}}", "{{session_id}}", "{{workflow_name}}"];
 
+  // ── Variables schema compatibility helpers ──
+  // Phase 1 migration changed wf.variables from legacy array to v2 dict
+  // {global_inputs, env_requirements, definitions}. These helpers let old UI
+  // code keep working with either shape without scattered if-else.
+  function _getVariableList(wd) {
+    if (!wd) return [];
+    const v = wd.variables;
+    if (Array.isArray(v)) return v;
+    if (v && Array.isArray(v.definitions)) return v.definitions;
+    return [];
+  }
+  function _ensureVariableContainer(wd) {
+    if (!wd) return [];
+    if (Array.isArray(wd.variables)) {
+      wd.variables = { global_inputs: [], env_requirements: [], definitions: wd.variables };
+    } else if (!wd.variables || typeof wd.variables !== "object") {
+      wd.variables = { global_inputs: [], env_requirements: [], definitions: [] };
+    }
+    if (!Array.isArray(wd.variables.definitions)) wd.variables.definitions = [];
+    if (!Array.isArray(wd.variables.global_inputs)) wd.variables.global_inputs = [];
+    if (!Array.isArray(wd.variables.env_requirements)) wd.variables.env_requirements = [];
+    return wd.variables.definitions;
+  }
+
   function _renderVariablesTab(body, wd) {
-    const vars = wd.variables || [];
+    const vars = _getVariableList(wd);
     let html = `
       <div class="wf-var-header">
         <span class="wf-var-title">自訂變數</span>
@@ -2777,23 +3494,31 @@
     const fd = window._wfDesigner;
     if (!fd) return;
     if (!fd._wfData) fd._wfData = {};
-    if (!fd._wfData.variables) fd._wfData.variables = [];
-    if (fd._wfData.variables.length >= 20) { if (window.showToast) window.showToast("最多 20 個變數", "error"); return; }
-    fd._wfData.variables.push({ name: "var_" + (fd._wfData.variables.length + 1), type: "string", source: "user_input", default_value: "", description: "", required: false });
+    const defs = _ensureVariableContainer(fd._wfData);
+    if (defs.length >= 20) { if (window.showToast) window.showToast("最多 20 個變數", "error"); return; }
+    defs.push({ name: "var_" + (defs.length + 1), type: "string", source: "user_input", default_value: "", description: "", required: false });
     _renderVariablesTab(document.getElementById("wfSettingsBody"), fd._wfData);
   };
 
   window._removeWfVar = function (idx) {
     const fd = window._wfDesigner;
-    if (!fd || !fd._wfData?.variables) return;
-    fd._wfData.variables.splice(idx, 1);
+    if (!fd || !fd._wfData) return;
+    const defs = _ensureVariableContainer(fd._wfData);
+    defs.splice(idx, 1);
     _renderVariablesTab(document.getElementById("wfSettingsBody"), fd._wfData);
   };
 
   window._updateWfVar = function (idx, field, value) {
     const fd = window._wfDesigner;
-    if (!fd || !fd._wfData?.variables?.[idx]) return;
-    fd._wfData.variables[idx][field] = value;
+    if (!fd || !fd._wfData) return;
+    const defs = _ensureVariableContainer(fd._wfData);
+    if (!defs[idx]) return;
+    // Trim whitespace for string fields — leading/trailing spaces in variable
+    // names cause subtle bugs (e.g. ' searchQuery' != 'searchQuery').
+    if (typeof value === "string" && (field === "name" || field === "default_value" || field === "description")) {
+      value = value.trim();
+    }
+    defs[idx][field] = value;
   };
 
   // ── Save Settings ────────────────────────────────────────────
@@ -2838,10 +3563,17 @@
     if (desc) wd.description = desc.value;
     const icon = document.getElementById("wfSetIcon");
     if (icon) wd.icon = icon.value;
+    // Accept both ASCII and CJK delimiters — users on Chinese keyboards
+    // often type 「每日新聞，新聞搜尋」 (fullwidth comma) which used to be
+    // stored as a single blob that never matched.
+    const _splitList = (s) => (s || "")
+      .split(/[,，、;；]+/)
+      .map(t => t.trim())
+      .filter(Boolean);
     const tags = document.getElementById("wfSetTags");
-    if (tags) wd.tags = tags.value.split(",").map(t => t.trim()).filter(Boolean);
+    if (tags) wd.tags = _splitList(tags.value);
     const kw = document.getElementById("wfSetKeywords");
-    if (kw) wd.trigger_keywords = kw.value.split(",").map(t => t.trim()).filter(Boolean);
+    if (kw) wd.trigger_keywords = _splitList(kw.value);
 
     // Trigger
     const trigEnabled = document.getElementById("wfSetTriggerEnabled");
@@ -2877,7 +3609,7 @@
       if (!wd.security) wd.security = {};
       wd.security.require_auth = secAuth.checked;
       const secRoles = document.getElementById("wfSetSecRoles");
-      if (secRoles) wd.security.allowed_roles = secRoles.value.split(",").map(t => t.trim()).filter(Boolean);
+      if (secRoles) wd.security.allowed_roles = _splitList(secRoles.value);
       const secRate = document.getElementById("wfSetSecRateLimit");
       if (secRate) wd.security.rate_limit = parseInt(secRate.value) || 0;
       const secAudit = document.getElementById("wfSetSecAudit");
@@ -2915,11 +3647,113 @@
     else block.config[field] = value;
   };
 
+  // ── Skill schema cache (populated lazily) ───────────────────────────
+  // GET /skills/{id} is cheap but running it every time a block renders
+  // (or drops) is wasteful. Cache per-session.
+  const _skillSchemaCache = new Map();
+
+  async function _fetchSkillSchema(skillName) {
+    if (_skillSchemaCache.has(skillName)) return _skillSchemaCache.get(skillName);
+    try {
+      const r = await fetch(`/skills/${encodeURIComponent(skillName)}`);
+      if (!r.ok) { _skillSchemaCache.set(skillName, null); return null; }
+      const data = await r.json();
+      const schema = data?.metadata?.parameters || null;
+      _skillSchemaCache.set(skillName, schema);
+      return schema;
+    } catch (_) {
+      _skillSchemaCache.set(skillName, null);
+      return null;
+    }
+  }
+
+  // Populate config.params with sensible defaults derived from the skill's
+  // JSON-Schema: every required param + every param that declares a `default`
+  // gets pre-created. Required without default → source=auto (LLM will fill);
+  // required string with enum → source=fixed with first enum value; other
+  // params with default → source=fixed with that default. The user can then
+  // tweak / delete from the block's params tab — but they no longer have to
+  // remember WHICH params exist, or guess what values are valid.
+  async function _prefillBlockParamsFromSchema(block, skillName) {
+    const schema = await _fetchSkillSchema(skillName);
+    if (!schema || !schema.properties) return;
+    if (!block || !block.config) return;
+    if (!block.config.params) block.config.params = {};
+    const required = new Set(schema.required || []);
+    Object.entries(schema.properties).forEach(([pname, pdef]) => {
+      if (block.config.params[pname]) return;  // don't clobber existing
+      pdef = pdef || {};
+      const isReq = required.has(pname);
+      const hasDefault = pdef.default !== undefined && pdef.default !== null && pdef.default !== "";
+      if (!isReq && !hasDefault) return;        // skip optional-no-default
+      if (isReq && hasDefault) {
+        block.config.params[pname] = { source: "fixed", value: String(pdef.default) };
+      } else if (isReq && Array.isArray(pdef.enum) && pdef.enum.length) {
+        block.config.params[pname] = { source: "fixed", value: String(pdef.enum[0]) };
+      } else if (isReq) {
+        // required but no default / enum → auto (LLM will supply) or leave
+        // blank and let the user either bind to a variable or type a fixed
+        // value. Default to `auto` which is the most forgiving.
+        block.config.params[pname] = { source: "auto", value: "" };
+      } else if (hasDefault) {
+        block.config.params[pname] = { source: "fixed", value: String(pdef.default) };
+      }
+    });
+    // Mark designer dirty so user is prompted to save
+    if (window._wfDesigner && typeof window._wfDesigner._markDirty === "function") {
+      try { window._wfDesigner._markDirty(); } catch (_) {}
+    }
+  }
+
+  // ── Helper: render the "fixed" value input with schema-aware widgets ──
+  // If the skill's parameter schema declares enum / type=integer / etc, render
+  // a <select> or <input type=number> accordingly so users can't accidentally
+  // fill "search_depth=1" (valid text, but Tavily rejects with 400).
+  function _renderFixedParamInput(blockId, pName, currentVal, paramSchema) {
+    const updateFn = `window._updateBlockParam(${blockId},'${pName}','value',this.value)`;
+    // 1. Enum → dropdown. If the currently-stored value is not in the enum
+    // (e.g. legacy "1" from before we added validation), show it as a red
+    // invalid option at the top so the user can SEE there's a problem.
+    if (paramSchema && Array.isArray(paramSchema.enum) && paramSchema.enum.length > 0) {
+      const def = paramSchema.default != null ? String(paramSchema.default) : "";
+      const cur = currentVal != null && currentVal !== "" ? String(currentVal) : def;
+      const isValid = paramSchema.enum.map(String).includes(cur);
+      const invalidOpt = (!isValid && currentVal) ? `<option value="${_escHtml(String(currentVal))}" selected style="color:#dc2626;background:#fef2f2;">⚠️ 目前值：${_escHtml(String(currentVal))}（不合法，請選新值）</option>` : "";
+      const opts = paramSchema.enum.map(v => {
+        const vs = String(v);
+        const sel = isValid && vs === cur ? " selected" : "";
+        return `<option value="${_escHtml(vs)}"${sel}>${_escHtml(vs)}</option>`;
+      }).join("");
+      return `<select class="wf-param-map-val" onchange="${updateFn}">${invalidOpt}${opts}</select>`;
+    }
+    // 2. Integer / number → numeric input with min/max
+    const t = paramSchema && paramSchema.type;
+    if (t === "integer" || t === "number") {
+      const min = paramSchema.minimum != null ? ` min="${paramSchema.minimum}"` : "";
+      const max = paramSchema.maximum != null ? ` max="${paramSchema.maximum}"` : "";
+      const step = t === "integer" ? ' step="1"' : "";
+      const def = paramSchema.default != null ? String(paramSchema.default) : "";
+      const cur = currentVal != null && currentVal !== "" ? _escHtml(String(currentVal)) : "";
+      const placeholder = def ? `placeholder="預設: ${_escHtml(def)}"` : 'placeholder="數字"';
+      return `<input class="wf-param-map-val" type="number"${min}${max}${step} value="${cur}" ${placeholder} onchange="${updateFn}" />`;
+    }
+    // 3. Array / object → JSON textarea with sample
+    if (t === "array" || t === "object") {
+      const cur = currentVal != null ? _escHtml(typeof currentVal === "string" ? currentVal : JSON.stringify(currentVal)) : "";
+      const sample = t === "array" ? '["item1","item2"]' : '{"key":"value"}';
+      return `<input class="wf-param-map-val" type="text" value="${cur}" placeholder="JSON: ${sample}" onchange="${updateFn}" />`;
+    }
+    // 4. Default — string text input
+    const cur = _escHtml(currentVal || "");
+    const def = paramSchema && paramSchema.default != null ? `預設: ${_escHtml(String(paramSchema.default))}` : "固定值";
+    return `<input class="wf-param-map-val" type="text" value="${cur}" onchange="${updateFn}" placeholder="${def}" />`;
+  }
+
   // ── Block Params Renderer (used by prop panel Tab 2) ──
   function _renderBlockParams(block, container, fd, skillName, schema) {
     const cfg    = block.config || {};
     const params = cfg.params || {};
-    const wfVars = fd._wfData?.variables || [];
+    const wfVars = _getVariableList(fd._wfData);
     const varOpts = wfVars.map(v => `<option value="{{${v.name}}}">${v.name}</option>`).join("");
 
     // Determine which param names to display:
@@ -2987,7 +3821,7 @@
                   `value="${_escHtml(pv.value || '')}" selected`
                 )}</select>`
             : pv.source === "fixed"
-              ? `<input class="wf-param-map-val" type="text" value="${_escHtml(pv.value || "")}" onchange="window._updateBlockParam(${block.id},'${pName}','value',this.value)" placeholder="固定值" />`
+              ? _renderFixedParamInput(block.id, pName, pv.value, schema?.properties?.[pName])
               : `<span class="wf-param-map-auto-hint">${pv.source === "previous_step" ? "使用前一節點輸出" : "由 LLM 自動推斷"}</span>`}
         </div>
       </div>`;

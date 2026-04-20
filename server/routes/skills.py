@@ -8,7 +8,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import yaml
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
@@ -532,6 +532,21 @@ def rescan_skills():
     from server.core.retriever import retriever
     from server.services.runtime import delta_index_skills
 
+    # Reload .env into os.environ before rescanning skills. Users who edit .env
+    # expect the next rescan to pick up new API keys — they shouldn't need to
+    # kill the Python process.
+    env_reloaded = False
+    try:
+        from pathlib import Path as _P
+        from dotenv import load_dotenv as _ld
+        import os as _os
+        _env_path = _P(_os.getenv("PROJECT_ROOT", ".")) / ".env"
+        if _env_path.exists():
+            _ld(_env_path, override=True)
+            env_reloaded = True
+    except Exception as _err:
+        logger.warning(f"[RescanSkills] .env reload failed: {_err}")
+
     uma = get_uma()
     uma.registry.skills.clear()
     uma.registry.validation_cache.clear()
@@ -541,11 +556,43 @@ def rescan_skills():
     return {
         "status": "success",
         "total_skills": len(uma.registry.skills),
+        "env_reloaded": env_reloaded,
         "added": summary["added"],
         "updated": summary["updated"],
         "removed": summary["removed"],
         "unchanged": len(summary["unchanged"]),
         "errors": summary["errors"],
+    }
+
+
+@router.get("/api/debug/env-status")
+def env_status():
+    """Diagnostic — for each skill's declared env_requirements, report whether
+    the env var is currently set in os.environ. Helpful when Gate 1 keeps
+    rejecting with missing-env errors even though the user thinks they've
+    added the key to .env (usually they forgot to rescan/restart).
+    """
+    import os as _os
+    uma = get_uma()
+    rows: List[Dict[str, Any]] = []
+    missing_vars: set = set()
+    for key, entry in (uma.registry.skills or {}).items():
+        meta = (entry or {}).get("metadata") or {}
+        declared = meta.get("env_requirements") or []
+        for env_name in declared:
+            present = bool(_os.environ.get(env_name))
+            rows.append({
+                "skill": meta.get("name") or key,
+                "env_var": env_name,
+                "present": present,
+            })
+            if not present:
+                missing_vars.add(env_name)
+    return {
+        "status": "success",
+        "skill_env_checks": rows,
+        "missing_env_vars": sorted(missing_vars),
+        "hint": "若 .env 已新增但仍 missing：呼叫 POST /skills/rescan 重載，或重啟 server" if missing_vars else "",
     }
 
 

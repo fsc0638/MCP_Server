@@ -5,64 +5,68 @@
   "icon": "",
   "tags": [],
   "trigger_keywords": [],
-  "variables": [
-    {
-      "name": "keyword",
-      "type": "string",
-      "source": "user_input",
-      "default_value": "AI",
-      "description": "",
-      "required": false
-    },
-    {
-      "name": "var_2",
-      "type": "string",
-      "source": "user_input",
-      "default_value": "",
-      "description": "",
-      "required": false
-    },
-    {
-      "name": "var_3",
-      "type": "string",
-      "source": "user_input",
-      "default_value": "",
-      "description": "",
-      "required": false
-    },
-    {
-      "name": "var_4",
-      "type": "string",
-      "source": "user_input",
-      "default_value": "",
-      "description": "",
-      "required": false
-    },
-    {
-      "name": "var_5",
-      "type": "string",
-      "source": "user_input",
-      "default_value": "",
-      "description": "",
-      "required": false
-    },
-    {
-      "name": "var_6",
-      "type": "string",
-      "source": "user_input",
-      "default_value": "",
-      "description": "",
-      "required": false
-    },
-    {
-      "name": "var_7",
-      "type": "string",
-      "source": "user_input",
-      "default_value": "",
-      "description": "",
-      "required": false
-    }
-  ],
+  "variables": {
+    "global_inputs": [],
+    "env_requirements": [],
+    "definitions": [
+      {
+        "name": "keyword",
+        "type": "string",
+        "source": "user_input",
+        "default_value": "AI",
+        "description": "",
+        "required": false
+      },
+      {
+        "name": "var_2",
+        "type": "string",
+        "source": "user_input",
+        "default_value": "",
+        "description": "",
+        "required": false
+      },
+      {
+        "name": "var_3",
+        "type": "string",
+        "source": "user_input",
+        "default_value": "",
+        "description": "",
+        "required": false
+      },
+      {
+        "name": "var_4",
+        "type": "string",
+        "source": "user_input",
+        "default_value": "",
+        "description": "",
+        "required": false
+      },
+      {
+        "name": "var_5",
+        "type": "string",
+        "source": "user_input",
+        "default_value": "",
+        "description": "",
+        "required": false
+      },
+      {
+        "name": "var_6",
+        "type": "string",
+        "source": "user_input",
+        "default_value": "",
+        "description": "",
+        "required": false
+      },
+      {
+        "name": "var_7",
+        "type": "string",
+        "source": "user_input",
+        "default_value": "",
+        "description": "",
+        "required": false
+      }
+    ]
+  },
   "blocks": [
     {
       "id": 1,
@@ -116,7 +120,7 @@
     "default_model": "",
     "timeout": 30,
     "token_budget": 0,
-    "on_error": "stop",
+    "on_error": "abort",
     "max_retries": 3
   },
   "security": {
@@ -130,5 +134,32 @@
   "scope": "department",
   "owner": "Y200",
   "updated_at": "2026-04-17T10:24:03.336315",
-  "created_at": "2026-04-17T09:45:56.659068"
+  "created_at": "2026-04-17T09:45:56.659068",
+  "version": "1.0",
+  "workflow_id": "wf_76319f66a7",
+  "display_name": "網路搜尋V2",
+  "source": "legacy",
+  "metadata": {
+    "created_at": "2026-04-17T09:45:56.659068",
+    "updated_at": "2026-04-17T10:24:03.336315",
+    "run_count": 0
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "type": "sequential",
+      "skill_id": "mcp-web-search",
+      "label": "網路搜尋",
+      "input_map": {
+        "input": "${keyword}"
+      },
+      "output_var": "step_1_output",
+      "on_fail": "abort"
+    }
+  ],
+  "constraints": {
+    "max_steps": 10,
+    "timeout_seconds": 300,
+    "skill_whitelist": null
+  }
 }

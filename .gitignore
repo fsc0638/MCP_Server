@@ -18,6 +18,7 @@ memory/MEMORY.md
 !package.json
 !tsconfig.json
 !composer.json
+!docs/schemas/*.json
 !*.md
 # Track workflow definitions (system / department / personal), but NOT logs or versions
 !workspace/workflows/**

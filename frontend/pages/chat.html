@@ -309,8 +309,9 @@
       <!-- Workflow: Canvas Area (shown in wf-mode) -->
       <div class="wf-canvas-area" id="wfCanvasArea">
         <div class="wf-canvas-toolbar">
-          <button title="返回" onclick="window.toggleWorkflowView()">
+          <button class="wf-toolbar-back-btn" title="回選單" aria-label="回選單" onclick="window.toggleWorkflowView()">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            <span>回選單</span>
           </button>
           <div class="wf-toolbar-sep"></div>
           <button title="縮小" onclick="window._wfDesigner&&window._wfDesigner.zoom(-0.1)">
@@ -525,6 +526,7 @@
 </div>
 
 <script src="../assets/js/script.js"></script>
+<script src="../assets/js/view-state.js"></script>
 <script src="../assets/js/chat.js"></script>
 <script src="../assets/js/workflow.js"></script>
 </body>

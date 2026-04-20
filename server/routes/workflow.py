@@ -6,7 +6,7 @@ import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 from fastapi import APIRouter, Cookie, HTTPException
 from pydantic import BaseModel
@@ -39,7 +39,10 @@ class WorkflowSaveRequest(BaseModel):
     icon: str = ""
     tags: list = []
     trigger_keywords: list = []
-    variables: list = []
+    # variables accepts BOTH the legacy list format and the v2 dict format
+    # (migrate_legacy normalizes to dict before persisting). Union is used
+    # because Pydantic v1 rejects dict body when type is declared as list.
+    variables: Any = []
     blocks: list = []
     connections: list = []
     trigger: dict = {}
@@ -138,19 +141,39 @@ def list_workflows(scope: str = "", owner: str = "", dept_code: str = ""):
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 _ctx = data.get("context", {})
+
+                # v2-aware field reads with legacy fallbacks
+                _display = data.get("display_name") or data.get("name") or f.stem
+
+                # variables: v2 dict {global_inputs, env_requirements, definitions}
+                _vars = data.get("variables") or []
+                if isinstance(_vars, dict):
+                    _vars_count = len(_vars.get("definitions") or [])
+                else:
+                    _vars_count = len(_vars)
+
+                # trigger keywords: v2 moves to trigger.patterns
+                _trig = data.get("trigger") or {}
+                _keywords = _trig.get("patterns") if isinstance(_trig, dict) else None
+                if not _keywords:
+                    _keywords = data.get("trigger_keywords") or []  # legacy fallback
+
                 workflows.append({
-                    "id": f.stem,
-                    "name": data.get("name", f.stem),
+                    "id": data.get("workflow_id") or f.stem,
+                    "name": _display,
+                    "display_name": _display,  # explicit v2 field
+                    "workflow_id": data.get("workflow_id") or f.stem,
                     "description": data.get("description", ""),
                     "icon": data.get("icon", ""),
                     "tags": data.get("tags", []),
-                    "trigger_keywords": data.get("trigger_keywords", []),
+                    "trigger_keywords": _keywords,
                     "workflow_key": _ctx.get("workflow_key", ""),
                     "block_count": len(data.get("blocks", [])),
                     "connection_count": len(data.get("connections", [])),
-                    "variables_count": len(data.get("variables", [])),
-                    "has_trigger": bool(data.get("trigger", {}).get("enabled")),
-                    "updated_at": data.get("updated_at", ""),
+                    "variables_count": _vars_count,
+                    "has_trigger": bool(_trig.get("enabled")) if isinstance(_trig, dict) else False,
+                    "updated_at": data.get("updated_at") or data.get("metadata", {}).get("updated_at", ""),
+                    "source": data.get("source", ""),
                     "scope": wf_scope,
                 })
             except Exception:
@@ -221,13 +244,18 @@ def save_workflow(
     caller_ctx = resolve_caller_context(mcp_session)
     check_scope_write_permission(req.scope, req.owner, caller_ctx, resource_kind="工作流")
 
+    # The URL workflow_id is what the client uses to locate the file.
+    # May be a legacy Chinese name (existing files) or a v2 slug (new writes).
+    # We honor it as the filename for this save but the internal workflow_id
+    # field inside the JSON is ALWAYS a v2 slug (derived by migrate_legacy).
     path = _workflows_dir(req.scope, req.owner) / f"{workflow_id}.json"
-    # Quota only applies to NEW workflow creation (not updates of existing)
-    if not path.exists():
+    is_new = not path.exists()
+
+    if is_new:
         enforce_guest_workflow_quota(caller_ctx, creating_new=True)
 
     data = {
-        "id": workflow_id,
+        "id": workflow_id,  # Retained temporarily for migrate_legacy to derive slug
         "name": req.name,
         "description": req.description,
         "icon": req.icon,
@@ -244,43 +272,120 @@ def save_workflow(
         "owner": req.owner,
         "updated_at": datetime.now().isoformat(),
     }
-    # Track the creator for dept-scope quota counting
-    _uid = (caller_ctx or {}).get("user_id", "")
-    if _uid:
-        data["created_by"] = _uid
-    if path.exists():
-        try:
-            old = json.loads(path.read_text(encoding="utf-8"))
-            data["created_at"] = old.get("created_at", data["updated_at"])
-            # Preserve original creator if already set
-            if old.get("created_by"):
-                data["created_by"] = old["created_by"]
-        except Exception:
-            data["created_at"] = data["updated_at"]
-    else:
-        data["created_at"] = data["updated_at"]
 
-    # Save version snapshot before overwrite (for version management)
-    if path.exists():
+    # Preserve pre-existing metadata (created_at, run_count, promoted_from, etc.)
+    existing_data = {}
+    if not is_new:
         try:
-            ver_dir = _workflows_base() / "versions" / workflow_id
+            existing_data = json.loads(path.read_text(encoding="utf-8"))
+            if existing_data.get("metadata"):
+                data.setdefault("metadata", {}).update(existing_data["metadata"])
+            # Carry across scope/owner if file moved
+            if existing_data.get("source"):
+                data["source"] = existing_data["source"]
+        except Exception:
+            pass
+
+    # Track creator (goes into metadata via migrate_legacy)
+    _uid = (caller_ctx or {}).get("user_id", "")
+    if _uid and not existing_data.get("metadata", {}).get("created_by"):
+        data["created_by"] = _uid
+
+    # Phase 1.1-1.7: Upgrade incoming data to v2 format before persistence.
+    # - mark_as_source=user_defined (NOT legacy): this is a UI save, not the
+    #   startup migration sweep
+    # - resync_steps=True: always rebuild steps[] from current blocks so canvas
+    #   edits stay in sync with the executable list
+    try:
+        from server.services.workflow_schema import migrate_legacy
+        data = migrate_legacy(
+            data,
+            mark_as_source=existing_data.get("source") or "user_defined",
+            resync_steps=True,
+        )
+        # Preserve fields the editor UI just updated (overriding any stale values)
+        data["display_name"] = req.name or data.get("display_name", workflow_id)
+        data["description"] = req.description or data.get("description", "")
+        data["scope"] = req.scope
+        data["owner"] = req.owner
+    except Exception as _mig_err:
+        logger.warning(f"[WF Save] Schema upgrade failed (non-fatal): {_mig_err}")
+
+    # ── Phase 2 Gate 0: static validation (hard block) ──
+    # Draft workflows (steps=[]) are exempt from skill_id checks but still
+    # must pass schema validation. Any error blocks the save with HTTP 422.
+    try:
+        from server.services.workflow_gates import gate_0_validate
+        from main import get_uma
+        _uma = get_uma()
+        ok0, errs0 = gate_0_validate(data, _uma)
+        if not ok0:
+            logger.warning(f"[WF Gate0] Rejected save of {workflow_id}: {errs0[:3]}")
+            raise HTTPException(status_code=422, detail={
+                "gate": 0,
+                "errors": errs0,
+                "message": "工作流無法儲存：檢查規則未通過",
+            })
+    except HTTPException:
+        raise
+    except Exception as _g0_err:
+        # Never block save on Gate-0 internal errors (fail-open for safety);
+        # user can retry or contact admin.
+        logger.error(f"[WF Gate0] Internal error for {workflow_id}: {_g0_err}")
+
+    # ── Phase 1.5: Align filename with internal workflow_id (slug) ──
+    # If the URL path differs from the v2 slug, rename the file so the two
+    # stay in sync (enables sub-workflow lookup by workflow_id).
+    # This runs ONLY when:
+    #   - migration produced a different slug than the URL path, AND
+    #   - the new filename is safe (ASCII slug, no filesystem issues)
+    final_slug = data.get("workflow_id", workflow_id)
+    final_path = path
+    renamed = False
+    if final_slug and final_slug != workflow_id:
+        # Guard: only switch if slug looks safe (pure slug pattern incl. hyphen)
+        import re as _re
+        if _re.match(r"^[a-z][a-z0-9_-]{2,63}$", final_slug):
+            final_path = _workflows_dir(req.scope, req.owner) / f"{final_slug}.json"
+            renamed = True
+
+    # Version snapshot before overwrite (use the FINAL path's version dir)
+    if not is_new:
+        try:
+            ver_dir = _workflows_base() / "versions" / final_slug
             ver_dir.mkdir(parents=True, exist_ok=True)
             ver_name = datetime.now().strftime("v%Y%m%d_%H%M%S")
-            ver_data = json.loads(path.read_text(encoding="utf-8"))
-            ver_data["saved_at"] = datetime.now().isoformat()
             (ver_dir / f"{ver_name}.json").write_text(
-                json.dumps(ver_data, ensure_ascii=False, indent=2), encoding="utf-8"
+                json.dumps(existing_data, ensure_ascii=False, indent=2), encoding="utf-8"
             )
-            # Keep only last 20 versions
             ver_files = sorted(ver_dir.glob("*.json"), reverse=True)
             for old_ver in ver_files[20:]:
                 old_ver.unlink()
         except Exception as ver_err:
             logger.debug(f"[Workflow] Version snapshot failed: {ver_err}")
 
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info(f"[Workflow] Saved: {workflow_id} (scope={req.scope}, {len(req.blocks)} blocks)")
-    return {"status": "success", "id": workflow_id, "scope": req.scope, "updated_at": data["updated_at"]}
+    final_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Delete old file if we renamed
+    if renamed and path.exists() and path != final_path:
+        try:
+            path.unlink()
+            logger.info(f"[Workflow] Renamed: {workflow_id}.json → {final_slug}.json")
+        except Exception as rm_err:
+            logger.warning(f"[Workflow] Failed to remove old file {path}: {rm_err}")
+
+    logger.info(
+        f"[Workflow] Saved: {final_slug} "
+        f"(scope={req.scope}, {len(req.blocks)} blocks → {len(data.get('steps') or [])} steps, "
+        f"source={data.get('source')})"
+    )
+    return {
+        "status": "success",
+        "id": final_slug,
+        "scope": req.scope,
+        "updated_at": data["updated_at"],
+        "renamed": renamed,
+    }
 
 
 @router.delete("/api/workflows/{workflow_id}")
@@ -426,11 +531,22 @@ def get_recent_logs_api(limit: int = 100):
 class WorkflowExecuteRequest(BaseModel):
     model: Optional[str] = None  # User-specified model override for entire flow
     initial_prompt: Optional[str] = ""  # User's intent for this execution
+    inputs: Dict[str, Any] = {}  # global_inputs supplied by user / wizard
 
 
 @router.post("/api/workflows/{workflow_id}/execute")
 async def execute_workflow(workflow_id: str, req: WorkflowExecuteRequest = None, scope: str = "personal", owner: str = "default"):
-    """Execute a workflow using the WorkflowExecutor."""
+    """Execute a workflow using the WorkflowExecutor.
+
+    Phase 2 Gate 1 (pre-execution check):
+      - Environment variables must be satisfied → HTTP 422 (hard block)
+      - All referenced skills must be env_ready → HTTP 422
+      - Required global_inputs must be provided → HTTP 428 (wizard prompt)
+      - Sub-workflow references must resolve → HTTP 422
+
+    428 Precondition Required is used specifically for the "need user input"
+    case so the frontend can distinguish "cannot run" from "need more info".
+    """
     if req is None:
         req = WorkflowExecuteRequest()
 
@@ -459,6 +575,36 @@ async def execute_workflow(workflow_id: str, req: WorkflowExecuteRequest = None,
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to load workflow: {e}")
 
+    # ── Phase 2 Gate 1: pre-execution check ──
+    try:
+        from server.services.workflow_gates import gate_1_pre_execute
+        from main import get_uma
+        _uma = get_uma()
+        ok1, info1 = gate_1_pre_execute(flow, user_inputs=req.inputs or {}, uma=_uma)
+        if not ok1:
+            if info1.get("errors"):
+                # Hard block — server-side issue user can't fix directly
+                logger.warning(f"[WF Gate1] {workflow_id} rejected: {info1['errors'][:3]}")
+                raise HTTPException(status_code=422, detail={
+                    "gate": 1,
+                    "errors": info1["errors"],
+                    "missing_inputs": info1.get("missing_inputs", []),
+                    "message": "工作流尚無法執行，請先排除以下問題",
+                })
+            if info1.get("missing_inputs"):
+                # Soft block — UI should show a wizard to collect
+                logger.info(f"[WF Gate1] {workflow_id} needs inputs: {[i['name'] for i in info1['missing_inputs']]}")
+                raise HTTPException(status_code=428, detail={
+                    "gate": 1,
+                    "missing_inputs": info1["missing_inputs"],
+                    "message": "工作流需要以下輸入才能執行",
+                })
+    except HTTPException:
+        raise
+    except Exception as _g1_err:
+        logger.error(f"[WF Gate1] Internal error: {_g1_err}")
+        # Fail-open: let executor attempt the run; Gate 2 still protects each step
+
     try:
         from server.services.workflow_executor import get_workflow_executor
         executor = get_workflow_executor()
@@ -466,11 +612,308 @@ async def execute_workflow(workflow_id: str, req: WorkflowExecuteRequest = None,
             workflow=flow,
             user_input=req.initial_prompt or "",
             model_override=req.model,
+            user_inputs=req.inputs or {},
         )
         return result
     except Exception as e:
         logger.error(f"[Workflow] Execution failed: {e}")
         raise HTTPException(status_code=500, detail=f"Workflow execution failed: {str(e)}")
+
+
+# ── Phase 6: One-shot LLM workflow promotion ───────────────────────────────
+
+class PromoteRequest(BaseModel):
+    run_id: str = ""            # The run_id from Gate 3's promotion_queue.json
+    display_name: str = ""      # User-chosen name for the persisted workflow
+    description: str = ""
+    target_scope: str = "personal"
+    target_owner: str = ""
+
+
+@router.get("/api/workflows/oneshot/pending")
+def list_promotion_candidates(
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """List recent one-shot LLM-generated executions available for promotion.
+
+    Returns only items the current user originated (by created_by).
+    Phase 3 Gate 3 writes these to workspace/workflows/promotion_queue.json
+    when a source='llm_generated' workflow executes successfully.
+    """
+    from server.services.permissions import resolve_caller_context
+    caller_ctx = resolve_caller_context(mcp_session)
+    caller_id = (caller_ctx or {}).get("user_id", "") or (caller_ctx or {}).get("employee_id", "")
+
+    promo_path = _workflows_base() / "promotion_queue.json"
+    if not promo_path.exists():
+        return {"candidates": []}
+
+    try:
+        data = json.loads(promo_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"candidates": []}
+
+    # Filter by caller (safety + relevance)
+    mine = [c for c in data if c.get("user_id") == caller_id or not caller_id]
+    # Newest first
+    mine.sort(key=lambda c: c.get("at", 0), reverse=True)
+    return {"candidates": mine[:20]}
+
+
+@router.post("/api/workflows/promote")
+def promote_oneshot(
+    req: PromoteRequest,
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """Save an LLM one-shot workflow into the user's scope as a persistent
+    template. The one-shot's JSON is stored under workspace/workflows/oneshot/
+    by WorkflowExecutor when source=llm_generated; we copy + relabel here.
+    """
+    from server.services.permissions import (
+        resolve_caller_context, check_scope_write_permission,
+    )
+    caller_ctx = resolve_caller_context(mcp_session)
+
+    # Resolve empty owner from caller context (frontend sends "" for convenience)
+    target_owner = req.target_owner or ""
+    if not target_owner:
+        if req.target_scope == "personal":
+            target_owner = (caller_ctx or {}).get("user_id", "") or (caller_ctx or {}).get("employee_id", "")
+        elif req.target_scope == "department":
+            target_owner = (caller_ctx or {}).get("department_code", "")
+
+    check_scope_write_permission(req.target_scope, target_owner, caller_ctx, resource_kind="工作流")
+
+    if not req.run_id or not req.display_name:
+        raise HTTPException(status_code=400, detail="需要 run_id 與 display_name")
+
+    # The one-shot source file is expected at workspace/workflows/oneshot/{run_id}.json
+    src = _workflows_base() / "oneshot" / f"{req.run_id}.json"
+    if not src.exists():
+        raise HTTPException(status_code=404, detail=f"One-shot 工作流 '{req.run_id}' 不存在")
+
+    try:
+        wf = json.loads(src.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read source: {e}")
+
+    # Relabel for persistence
+    wf["display_name"] = req.display_name
+    wf["description"] = req.description or wf.get("description", "")
+    wf["scope"] = req.target_scope
+    wf["owner"] = target_owner
+    wf["source"] = "llm_generated"  # preserved for analytics
+    meta = wf.get("metadata") or {}
+    meta["promoted_from"] = req.run_id
+    meta["promoted_at"] = datetime.now().isoformat()
+    wf["metadata"] = meta
+
+    # Migrate to full v2 shape + validate
+    try:
+        from server.services.workflow_schema import migrate_legacy, validate_workflow
+        wf = migrate_legacy(wf, mark_as_source="llm_generated", resync_steps=True)
+        ok, errs = validate_workflow(wf)
+        if not ok:
+            raise HTTPException(status_code=422, detail={"errors": errs[:5]})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[Promote] Validation failed: {e}")
+
+    dest_id = wf.get("workflow_id", f"promoted_{req.run_id}")
+    dest_path = _workflows_dir(req.target_scope, target_owner) / f"{dest_id}.json"
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    dest_path.write_text(json.dumps(wf, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # Remove from promotion_queue.json
+    try:
+        promo_path = _workflows_base() / "promotion_queue.json"
+        if promo_path.exists():
+            queue = json.loads(promo_path.read_text(encoding="utf-8"))
+            queue = [c for c in queue if c.get("run_id") != req.run_id]
+            promo_path.write_text(json.dumps(queue, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    logger.info(f"[Promote] {req.run_id} → {dest_id} (scope={req.target_scope})")
+    return {
+        "status": "success",
+        "workflow_id": dest_id,
+        "scope": req.target_scope,
+        "path": str(dest_path),
+    }
+
+
+@router.get("/api/workflows/oneshot/accessible-skills")
+def list_accessible_skills(
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """Return the skill whitelist available to the current user for LLM one-shot
+    workflow generation. Only skills the caller can actually execute are listed,
+    so the LLM generator won't propose skills the user can't run at execution time.
+
+    Each entry: { skill_id, display_name, description, parameters, env_ready }.
+    """
+    from server.services.permissions import resolve_caller_context
+    from server.dependencies.uma import get_uma_instance
+    caller_ctx = resolve_caller_context(mcp_session)
+    uma = get_uma_instance()
+
+    out: List[Dict[str, Any]] = []
+    try:
+        registry = uma.skill_registry
+        skills_dict = getattr(registry, "skills", {}) or {}
+    except Exception as e:
+        logger.warning(f"[AccessibleSkills] registry access failed: {e}")
+        skills_dict = {}
+
+    for registry_key, entry in skills_dict.items():
+        try:
+            meta = (entry or {}).get("metadata") or {}
+            skill_id = meta.get("name") or registry_key
+            # Permission gate — reuse registry's access check if present
+            if hasattr(registry, "can_access"):
+                try:
+                    if not registry.can_access(skill_id, caller_ctx):
+                        continue
+                except Exception:
+                    pass
+            out.append({
+                "skill_id": skill_id,
+                "display_name": meta.get("display_name") or skill_id,
+                "description": (meta.get("description") or "")[:400],
+                "parameters": meta.get("parameters") or {},
+                "env_ready": bool(meta.get("_env_ready", True)),
+                "risk_level": meta.get("risk_level", "low"),
+            })
+        except Exception as _e:
+            logger.debug(f"[AccessibleSkills] skip entry: {_e}")
+            continue
+
+    # Stable ordering
+    out.sort(key=lambda x: x.get("skill_id", ""))
+    return {"skills": out, "count": len(out)}
+
+
+# ── Phase 5: 5-question Wizard ──────────────────────────────────────────────
+
+class WizardRequest(BaseModel):
+    purpose: str = ""          # Q1 — what are you doing? (新聞 / 資料整理 / 會議整理 / 備忘)
+    input_source: str = ""     # Q2 — what's the input? (文字 / 檔案 / 網址 / 日曆 / LINE)
+    output_target: str = ""    # Q3 — where should it go? (摘要 / Notion / LINE 推播 / Email)
+    schedule: str = ""         # Q4 — when should it run? (手動 / 每日 / 每週 / 每月)
+    on_fail: str = "retry"     # Q5 — what on failure? (retry / skip / notify)
+
+
+@router.post("/api/workflows/wizard")
+def workflow_wizard(req: WizardRequest):
+    """Build a workflow JSON from 5 natural-language answers (no LLM).
+
+    Deterministically picks the closest template based on the user's answers,
+    then returns a fully-formed v2 workflow that can be reviewed and saved.
+    """
+    import re as _re
+    templates_dir = _workflows_base() / "templates"
+    if not templates_dir.exists():
+        raise HTTPException(status_code=500, detail="模板庫尚未建立")
+
+    candidates: List[Dict[str, Any]] = []
+    for f in sorted(templates_dir.glob("*.json")):
+        try:
+            t = json.loads(f.read_text(encoding="utf-8"))
+            score = _score_template(t, req)
+            candidates.append({"template": t, "score": score, "file": f.name})
+        except Exception as e:
+            logger.debug(f"[Wizard] skip {f.name}: {e}")
+
+    if not candidates:
+        raise HTTPException(status_code=500, detail="沒有可用的模板")
+
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+    top = candidates[0]
+    best_tpl = top["template"]
+
+    # Merge wizard answers into workflow data
+    wf_data = dict(best_tpl.get("workflow") or {})
+    wf_data.setdefault("display_name", best_tpl.get("display_name", "新工作流"))
+    wf_data.setdefault("description", best_tpl.get("description", ""))
+    wf_data.setdefault("icon", best_tpl.get("icon", ""))
+    wf_data["source"] = "template"
+    wf_data.setdefault("metadata", {})["promoted_from"] = f"template:{best_tpl.get('template_id')}"
+
+    # Apply on_fail strategy to all steps
+    if req.on_fail:
+        on_fail_map = {"retry": "retry_once", "skip": "skip", "notify": "continue",
+                       "retry_once": "retry_once", "abort": "abort", "continue": "continue"}
+        mapped = on_fail_map.get(req.on_fail, "abort")
+        # Apply to legacy execution.on_error (used by current executor)
+        wf_data.setdefault("execution", {})["on_error"] = \
+            {"retry_once": "retry", "continue": "skip", "skip": "skip", "abort": "abort", "retry": "retry"}.get(mapped, "retry")
+        # Also apply to each step's on_fail (for v2 steps[] when executor path uses it)
+        for step in (wf_data.get("steps") or []):
+            step["on_fail"] = mapped
+
+    return {
+        "status": "success",
+        "template_id": best_tpl.get("template_id"),
+        "template_match_score": top["score"],
+        "alternative_templates": [
+            {"id": c["template"].get("template_id"),
+             "name": c["template"].get("display_name"),
+             "score": c["score"]}
+            for c in candidates[1:4]
+        ],
+        "workflow": wf_data,
+    }
+
+
+def _score_template(template: Dict[str, Any], req) -> int:
+    """Rank templates against the wizard answers. Each matching dimension
+    adds 10 points; substring match adds 5; unmatched adds 0."""
+    score = 0
+    qm = template.get("question_match") or {}
+
+    def _match(dimension: str, user_val: str) -> int:
+        if not user_val:
+            return 0
+        expected = qm.get(dimension) or []
+        if not expected:
+            return 0
+        for e in expected:
+            if user_val == e:
+                return 10
+            if e in user_val or user_val in e:
+                return 5
+        return 0
+
+    score += _match("purpose", req.purpose)
+    score += _match("input_source", req.input_source)
+    score += _match("output_target", req.output_target)
+    score += _match("schedule", req.schedule)
+    return score
+
+
+@router.get("/api/workflows/templates")
+def list_templates():
+    """List available wizard templates for the UI."""
+    templates_dir = _workflows_base() / "templates"
+    if not templates_dir.exists():
+        return {"templates": []}
+    out = []
+    for f in sorted(templates_dir.glob("*.json")):
+        try:
+            t = json.loads(f.read_text(encoding="utf-8"))
+            out.append({
+                "id": t.get("template_id"),
+                "display_name": t.get("display_name"),
+                "description": t.get("description"),
+                "icon": t.get("icon"),
+                "category": t.get("category"),
+                "question_match": t.get("question_match"),
+            })
+        except Exception:
+            pass
+    return {"templates": out, "total": len(out)}
 
 
 # ── Webhook Trigger ────────────────────────────────────────────────────────

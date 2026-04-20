@@ -1,0 +1,30 @@
+{
+  "template_id": "search_summarize_notion",
+  "display_name": "搜尋 + 摘要 + 寫入 Notion",
+  "description": "搜尋關鍵字、摘要後寫入 Notion 資料庫",
+  "category": "research",
+  "icon": "📚",
+  "question_match": {
+    "purpose": ["資料整理"],
+    "input_source": ["文字"],
+    "output_target": ["Notion", "摘要"]
+  },
+  "workflow": {
+    "version": "1.0",
+    "trigger": {"enabled": false, "mode": "confirm", "priority": 10, "patterns": [], "schedule": ""},
+    "variables": {
+      "global_inputs": ["researchTopic"],
+      "env_requirements": ["TAVILY_API_KEY", "NOTION_TOKEN", "NOTION_DATABASE_ID"],
+      "definitions": [
+        {"name": "researchTopic", "type": "string", "source": "user_input", "required": true, "description": "研究主題", "default_value": ""}
+      ]
+    },
+    "blocks": [
+      {"id": 1, "type": "start", "x": 50, "y": 100, "label": "開始", "config": {}},
+      {"id": 2, "type": "web-search", "x": 230, "y": 100, "label": "搜尋", "config": {"params": {"query": {"source": "variable", "value": "${researchTopic}"}}}},
+      {"id": 3, "type": "notion-crud", "x": 410, "y": 100, "label": "寫入 Notion", "config": {"params": {}}},
+      {"id": 4, "type": "end", "x": 590, "y": 100, "label": "結束", "config": {}}
+    ],
+    "connections": [{"from": 1, "to": 2}, {"from": 2, "to": 3}, {"from": 3, "to": 4}]
+  }
+}

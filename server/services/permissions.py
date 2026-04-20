@@ -212,11 +212,15 @@ def check_scope_write_permission(
 
 # ── Guest quota ────────────────────────────────────────────────────────────
 
-def _count_workflows_owned_by(user_id: str, dept_code: str, all_ids: set = None) -> int:
+def _count_workflows_owned_by(user_id: str, dept_code: str, all_ids: set = None,
+                               personal_only: bool = False) -> int:
     """Count workflows created by this user (personal) + dept (department).
 
     `all_ids` is the full set of identifiers the user goes by (user_id,
     employee_id, line raw id) — used so we count folders keyed by ANY of them.
+
+    `personal_only=True` skips department — used for guest quota since
+    guests can only write personal scope anyway.
     """
     base = _project_root() / "workspace" / "workflows"
     count = 0
@@ -230,6 +234,8 @@ def _count_workflows_owned_by(user_id: str, dept_code: str, all_ids: set = None)
             folder = personal_base / uid
             if folder.exists():
                 count += len(list(folder.glob("*.json")))
+    if personal_only:
+        return count
     if dept_code:
         dept = base / "department" / dept_code
         if dept.exists():
@@ -269,18 +275,24 @@ def _count_skills_owned_by(user_id: str, dept_code: str) -> int:
 
 
 def enforce_guest_workflow_quota(ctx: Optional[Dict[str, Any]], *, creating_new: bool = True) -> None:
-    """Raise HTTPException(429) if a guest already has >=3 workflows."""
+    """Raise HTTPException(429) if a guest already has >=3 PERSONAL workflows.
+
+    Only personal workflows count — guests can't create dept/system anyway
+    (blocked by check_scope_write_permission).
+    """
     if not is_guest_user(ctx):
         return
     if not creating_new:
         return
     uid, dept = _caller_identity(ctx)
-    count = _count_workflows_owned_by(uid, dept, all_ids=_all_caller_ids(ctx))
+    count = _count_workflows_owned_by(
+        uid, dept, all_ids=_all_caller_ids(ctx), personal_only=True
+    )
     if count >= GUEST_MAX_WORKFLOWS:
         raise HTTPException(
             status_code=429,
             detail=(
-                f"訪客帳號最多只能建立 {GUEST_MAX_WORKFLOWS} 個工作流（目前 {count} 個）。"
+                f"訪客帳號最多只能建立 {GUEST_MAX_WORKFLOWS} 個個人工作流（目前 {count} 個）。"
                 f" 請先刪除舊工作流或完成身分驗證以解除限制"
             ),
         )

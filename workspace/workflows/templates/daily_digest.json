@@ -1,0 +1,30 @@
+{
+  "template_id": "daily_digest",
+  "display_name": "每日新聞簡報（排程）",
+  "description": "每天早上 9:00 自動搜尋新聞並推送 LINE 摘要",
+  "category": "scheduled",
+  "icon": "🌅",
+  "question_match": {
+    "purpose": ["情報/新聞"],
+    "input_source": ["文字"],
+    "output_target": ["LINE 推播"],
+    "schedule": ["每日"]
+  },
+  "workflow": {
+    "version": "1.0",
+    "trigger": {"enabled": true, "mode": "auto", "priority": 10, "patterns": ["每日新聞", "新聞簡報"], "schedule": "0 9 * * *"},
+    "variables": {
+      "global_inputs": [],
+      "env_requirements": ["TAVILY_API_KEY"],
+      "definitions": [
+        {"name": "topic", "type": "string", "source": "fixed", "required": false, "description": "搜尋主題", "default_value": "AI 科技新聞"}
+      ]
+    },
+    "blocks": [
+      {"id": 1, "type": "start", "x": 50, "y": 100, "label": "開始", "config": {}},
+      {"id": 2, "type": "web-search", "x": 230, "y": 100, "label": "搜尋新聞", "config": {"params": {"query": {"source": "variable", "value": "${topic}"}, "max_results": {"source": "fixed", "value": 5}}}},
+      {"id": 3, "type": "end", "x": 410, "y": 100, "label": "結束", "config": {}}
+    ],
+    "connections": [{"from": 1, "to": 2}, {"from": 2, "to": 3}]
+  }
+}

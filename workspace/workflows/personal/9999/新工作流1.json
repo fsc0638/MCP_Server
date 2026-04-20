@@ -1,0 +1,61 @@
+{
+  "id": "新工作流1",
+  "name": "新工作流1",
+  "description": "新工作流1新工作流1新工作流1",
+  "icon": "",
+  "tags": [],
+  "trigger_keywords": [],
+  "variables": {
+    "global_inputs": [],
+    "env_requirements": [],
+    "definitions": []
+  },
+  "blocks": [
+    {
+      "id": 1,
+      "type": "start",
+      "x": 200,
+      "y": 250,
+      "label": "開始",
+      "config": {}
+    },
+    {
+      "id": 2,
+      "type": "end",
+      "x": 520,
+      "y": 270,
+      "label": "結束",
+      "config": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": 1,
+      "to": 2
+    }
+  ],
+  "trigger": {},
+  "execution": {},
+  "security": {},
+  "context": {},
+  "scope": "personal",
+  "owner": "9999",
+  "updated_at": "2026-04-20T10:34:16.578482",
+  "created_by": "pw_user_at_kway_com_tw",
+  "created_at": "2026-04-20T10:34:16.578482",
+  "version": "1.0",
+  "workflow_id": "wf_05ab106428",
+  "display_name": "新工作流1",
+  "source": "legacy",
+  "metadata": {
+    "created_at": "2026-04-20T10:34:16.578482",
+    "updated_at": "2026-04-20T10:34:16.578482",
+    "run_count": 0
+  },
+  "steps": [],
+  "constraints": {
+    "max_steps": 10,
+    "timeout_seconds": 300,
+    "skill_whitelist": null
+  }
+}

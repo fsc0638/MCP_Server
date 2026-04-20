@@ -7,16 +7,20 @@
   "trigger_keywords": [
     "量子新聞，量子計算新聞，查找量子相關新聞"
   ],
-  "variables": [
-    {
-      "name": "搜尋主體",
-      "type": "string",
-      "source": "fixed",
-      "default_value": "量子運算",
-      "description": "",
-      "required": false
-    }
-  ],
+  "variables": {
+    "global_inputs": [],
+    "env_requirements": [],
+    "definitions": [
+      {
+        "name": "搜尋主體",
+        "type": "string",
+        "source": "fixed",
+        "default_value": "量子運算",
+        "description": "",
+        "required": false
+      }
+    ]
+  },
   "blocks": [
     {
       "id": 1,
@@ -84,5 +88,32 @@
   "scope": "department",
   "owner": "Y200",
   "updated_at": "2026-04-16T17:28:21.100536",
-  "created_at": "2026-04-16T16:33:58.552278"
+  "created_at": "2026-04-16T16:33:58.552278",
+  "version": "1.0",
+  "workflow_id": "wf_810fe384f1",
+  "display_name": "網路搜尋",
+  "source": "legacy",
+  "metadata": {
+    "created_at": "2026-04-16T16:33:58.552278",
+    "updated_at": "2026-04-16T17:28:21.100536",
+    "run_count": 0
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "type": "sequential",
+      "skill_id": "mcp-web-search",
+      "label": "網路搜尋",
+      "input_map": {
+        "query": "${搜尋主體}"
+      },
+      "output_var": "step_1_output",
+      "on_fail": "abort"
+    }
+  ],
+  "constraints": {
+    "max_steps": 10,
+    "timeout_seconds": 300,
+    "skill_whitelist": null
+  }
 }
