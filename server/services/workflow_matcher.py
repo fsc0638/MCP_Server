@@ -172,12 +172,19 @@ class WorkflowMatcher:
         keyword_matches = []
         for wf in candidates:
             hit_keyword = None
-            for kw in (wf.get("trigger_keywords") or []):
-                kw_lower = kw.strip().lower()
-                if not kw_lower:
-                    continue
-                if kw_lower in input_lower or input_lower in kw_lower:
-                    hit_keyword = kw
+            for kw_raw in (wf.get("trigger_keywords") or []):
+                # Defensive re-split: legacy entries stored whole phrases like
+                # "每日新聞，新聞搜尋" (CJK comma) as a single element because
+                # older UI used ASCII-only .split(","). We accept both here so
+                # old workflows don't need to be re-saved to start matching.
+                for piece in re.split(r"[,，、;；]+", kw_raw or ""):
+                    kw_lower = piece.strip().lower()
+                    if not kw_lower:
+                        continue
+                    if kw_lower in input_lower or input_lower in kw_lower:
+                        hit_keyword = kw_lower
+                        break
+                if hit_keyword:
                     break
             if hit_keyword:
                 entry = {

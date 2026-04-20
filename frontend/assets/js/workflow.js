@@ -3563,10 +3563,17 @@
     if (desc) wd.description = desc.value;
     const icon = document.getElementById("wfSetIcon");
     if (icon) wd.icon = icon.value;
+    // Accept both ASCII and CJK delimiters — users on Chinese keyboards
+    // often type 「每日新聞，新聞搜尋」 (fullwidth comma) which used to be
+    // stored as a single blob that never matched.
+    const _splitList = (s) => (s || "")
+      .split(/[,，、;；]+/)
+      .map(t => t.trim())
+      .filter(Boolean);
     const tags = document.getElementById("wfSetTags");
-    if (tags) wd.tags = tags.value.split(",").map(t => t.trim()).filter(Boolean);
+    if (tags) wd.tags = _splitList(tags.value);
     const kw = document.getElementById("wfSetKeywords");
-    if (kw) wd.trigger_keywords = kw.value.split(",").map(t => t.trim()).filter(Boolean);
+    if (kw) wd.trigger_keywords = _splitList(kw.value);
 
     // Trigger
     const trigEnabled = document.getElementById("wfSetTriggerEnabled");
@@ -3602,7 +3609,7 @@
       if (!wd.security) wd.security = {};
       wd.security.require_auth = secAuth.checked;
       const secRoles = document.getElementById("wfSetSecRoles");
-      if (secRoles) wd.security.allowed_roles = secRoles.value.split(",").map(t => t.trim()).filter(Boolean);
+      if (secRoles) wd.security.allowed_roles = _splitList(secRoles.value);
       const secRate = document.getElementById("wfSetSecRateLimit");
       if (secRate) wd.security.rate_limit = parseInt(secRate.value) || 0;
       const secAudit = document.getElementById("wfSetSecAudit");
