@@ -50,25 +50,9 @@ class WorkflowMatcher:
             for json_file in scope_dir.rglob("*.json"):
                 try:
                     data = json.loads(json_file.read_text(encoding="utf-8"))
-                    wf_id = data.get("id", json_file.stem)
-                    trigger = data.get("trigger", {})
-                    self._cache[wf_id] = {
-                        "id": wf_id,
-                        "name": data.get("name", wf_id),
-                        "description": data.get("description", ""),
-                        "trigger_keywords": data.get("trigger_keywords", []),
-                        "trigger_enabled": trigger.get("enabled", False),
-                        "trigger_mode": trigger.get("mode", "auto"),
-                        "trigger_priority": trigger.get("priority", 10),
-                        "scope": data.get("scope", "personal"),
-                        "owner": data.get("owner", ""),
-                        "variables": data.get("variables", []),
-                        "blocks": data.get("blocks", []),
-                        "connections": data.get("connections", []),
-                        "execution": data.get("execution", {}),
-                        "security": data.get("security", {}),
-                        "path": str(json_file),
-                    }
+                    entry = self._to_cache_entry(data, json_file)
+                    if entry:
+                        self._cache[entry["id"]] = entry
                 except Exception as e:
                     logger.debug(f"[WFMatcher] Skip {json_file}: {e}")
 
@@ -78,31 +62,56 @@ class WorkflowMatcher:
                 continue
             try:
                 data = json.loads(json_file.read_text(encoding="utf-8"))
-                wf_id = data.get("id", json_file.stem)
-                if wf_id not in self._cache:
-                    trigger = data.get("trigger", {})
-                    self._cache[wf_id] = {
-                        "id": wf_id,
-                        "name": data.get("name", wf_id),
-                        "description": data.get("description", ""),
-                        "trigger_keywords": data.get("trigger_keywords", []),
-                        "trigger_enabled": trigger.get("enabled", False),
-                        "trigger_mode": trigger.get("mode", "auto"),
-                        "trigger_priority": trigger.get("priority", 10),
-                        "scope": data.get("scope", "personal"),
-                        "owner": data.get("owner", ""),
-                        "variables": data.get("variables", []),
-                        "blocks": data.get("blocks", []),
-                        "connections": data.get("connections", []),
-                        "execution": data.get("execution", {}),
-                        "security": data.get("security", {}),
-                        "path": str(json_file),
-                    }
+                entry = self._to_cache_entry(data, json_file)
+                if entry and entry["id"] not in self._cache:
+                    self._cache[entry["id"]] = entry
             except Exception:
                 pass
 
         self._cache_ts = now
+        logger.info(
+            f"[WFMatcher] Scanned {len(self._cache)} workflow(s). "
+            f"Trigger-enabled: {sum(1 for w in self._cache.values() if w.get('trigger_enabled'))}"
+        )
         return list(self._cache.values())
+
+    def _to_cache_entry(self, data: dict, json_file: Path) -> Optional[dict]:
+        """Normalize a workflow JSON into the matcher's cache shape.
+
+        Reads v2 fields with legacy fallback so workflows saved in either
+        format are equally matchable:
+          - id        ← workflow_id (v2) > id > filename stem
+          - name      ← display_name (v2) > name
+          - keywords  ← trigger.patterns (v2) ∪ trigger_keywords (legacy)
+        Skips empty / malformed entries so a broken file doesn't poison
+        the cache.
+        """
+        wf_id = data.get("workflow_id") or data.get("id") or json_file.stem
+        trigger = data.get("trigger") or {}
+        # V2 patterns live in trigger.patterns; legacy used top-level
+        # trigger_keywords. Merge both so users migrating between formats
+        # don't lose triggering.
+        v2_patterns = trigger.get("patterns") or []
+        legacy_patterns = data.get("trigger_keywords") or []
+        keywords = list(dict.fromkeys([*v2_patterns, *legacy_patterns]))
+        return {
+            "id": wf_id,
+            "name": data.get("display_name") or data.get("name", wf_id),
+            "description": data.get("description", ""),
+            "trigger_keywords": keywords,
+            "trigger_enabled": trigger.get("enabled", False),
+            "trigger_mode": trigger.get("mode", "auto"),
+            "trigger_priority": trigger.get("priority", 10),
+            "scope": data.get("scope", "personal"),
+            "owner": data.get("owner", ""),
+            "variables": data.get("variables", []),
+            "blocks": data.get("blocks", []),
+            "connections": data.get("connections", []),
+            "steps": data.get("steps", []),
+            "execution": data.get("execution", {}),
+            "security": data.get("security", {}),
+            "path": str(json_file),
+        }
 
     def match(self, user_input: str, user_context: dict = None) -> Optional[Dict[str, Any]]:
         """
