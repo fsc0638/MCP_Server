@@ -43,19 +43,24 @@ class WorkflowExecutor:
         user_input: str = "",
         user_context: dict = None,
         model_override: str = None,
+        user_inputs: dict = None,
     ) -> Dict[str, Any]:
         """
         Execute a workflow end-to-end.
 
         Args:
             workflow: Full workflow data (blocks, connections, variables, execution, etc.)
-            user_input: The user's original message
+            user_input: The user's original free-text message
             user_context: User identity context (name, dept, session_id, etc.)
             model_override: Override model for all blocks
+            user_inputs: Per-variable values collected by the Gate 1 wizard
+                (e.g. {searchQuery: "台股新聞"}). Takes precedence over
+                user_input for variables matched by name.
 
         Returns:
             { status, workflow_id, results: [...], final_output, executed_at }
         """
+        user_inputs = user_inputs or {}
         # Phase 1 v2 fields preferred; fall back to legacy for compat
         workflow_id = workflow.get("workflow_id") or workflow.get("id", "unknown")
         raw_vars = workflow.get("variables", [])
@@ -108,7 +113,7 @@ class WorkflowExecutor:
         logger.info(f"[WFExec] Start: {workflow_id} run={run_id} ({len(blocks_data)} blocks, {len(variables)} vars, stack_depth={len(WorkflowExecutor._execution_stack)})")
 
         # ── Step 1: Resolve variables ──
-        resolved_vars = self._resolve_variables(variables, user_input, user_context)
+        resolved_vars = self._resolve_variables(variables, user_input, user_context, user_inputs)
         logger.info(f"[WFExec] Resolved {len(resolved_vars)} variables")
 
         # ── Step 2: Topological sort ──
@@ -534,6 +539,7 @@ class WorkflowExecutor:
         variables: List[dict],
         user_input: str,
         user_context: dict = None,
+        user_inputs: dict = None,
     ) -> Dict[str, str]:
         """Resolve workflow variables to concrete values.
 
@@ -550,6 +556,7 @@ class WorkflowExecutor:
 
         resolved = {}
         uc = user_context or {}
+        ui = user_inputs or {}
 
         # ── System variables (always available) ──
         # Naming follows the _xxx convention per the integrated report.
@@ -594,11 +601,18 @@ class WorkflowExecutor:
                 # Map system variable references (legacy syntax: default="{{current_date}}")
                 resolved[name] = resolved.get(default.strip("{}"), default)
             elif source == "user_input":
-                resolved[name] = user_input or default
+                # Priority: wizard-collected value (exact name match) > free-text
+                # user_input fallback > default. This lets multi-input workflows
+                # bind each variable to the wizard field the user filled in.
+                wizard_val = ui.get(name)
+                if wizard_val not in (None, ""):
+                    resolved[name] = wizard_val
+                else:
+                    resolved[name] = user_input or default
             elif source == "previous_step":
                 resolved[name] = default
             elif source == "auto":
-                resolved[name] = default or user_input
+                resolved[name] = ui.get(name) or default or user_input
             elif source == "secret":
                 env_key = default.upper().replace(" ", "_") if default else name.upper()
                 # Secrets MUST be ALL_CAPS per convention — warn if not

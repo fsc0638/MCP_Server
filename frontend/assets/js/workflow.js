@@ -579,20 +579,39 @@
       const owner   = this._currentOwner || "";
       const wfName  = this._wfData?.name || wfId;
 
-      // Check if workflow has any required user_input variables — if yes,
-      // skip the ad-hoc prompt() and let Gate 1's wizard collect inputs
-      // cleanly (integrated UI instead of native dialog).
+      // Phase 2 UX fix: replace native prompt() with the integrated wizard.
+      //
+      // Previous behavior used `window.prompt()` for "ad-hoc test message"
+      // when there were no required user_input vars. Problems with that:
+      //   - browser-native dialog, clashes with app style
+      //   - no hint which variable the text binds to
+      //   - pressing OK on empty field silently sends "" → skill dies with
+      //     "Missing query" / similar confusing error
+      //
+      // New rule:
+      //   - If workflow has ANY user_input source variables → pre-open the
+      //     wizard so user fills them by name (required OR optional)
+      //   - If workflow has none → execute immediately, no dialog
       const _vars = _getVariableList(this._wfData);
-      const _hasRequiredInputs = _vars.some(v =>
-        v && v.source === "user_input" && v.required && !v.default_value
-      );
+      const _userInputVars = _vars.filter(v => v && v.source === "user_input" && v.name);
 
       let prompt = "";
-      if (!_hasRequiredInputs) {
-        // Optional free-text intent for simple single-shot workflows
-        prompt = window.prompt(
-          `執行工作流「${wfName}」\n\n輸入測試訊息（可留空直接使用工作流變數）：`, ""
-        ) ?? "";
+      let _userInputs = {};
+      if (_userInputVars.length > 0) {
+        const _missing = _userInputVars.map(v => ({
+          name: v.name,
+          type: v.type || "string",
+          description: v.description || "",
+          required: !!v.required,
+          default: v.default_value || "",
+        }));
+        const collected = await _showInputsWizard(wfName, _missing);
+        if (!collected) return;   // user cancelled — no animation to clear yet
+        _userInputs = collected;
+        // Use the first collected value as accumulated_context fallback so
+        // skills that don't reference any variable still get something useful.
+        const firstVal = Object.values(collected).find(v => v);
+        if (firstVal) prompt = String(firstVal);
       }
 
       // Save current state first (skip validation so partial edits don't block test)
@@ -625,8 +644,8 @@
       // Phase 2 Gate 1 flow:
       //   - 422 Unprocessable → env/skill problem, show hard error toast
       //   - 428 Precondition Required → missing_inputs, pop wizard + retry
+      // Note: _userInputs was pre-filled above if workflow had user_input vars.
       const _eq = new URLSearchParams({ scope, owner });
-      let _userInputs = {};
       let _attempt = 0;
       while (true) {
         _attempt += 1;
@@ -1748,10 +1767,11 @@
       const rows = (missingInputs || []).map(inp => {
         const desc = inp.description ? `<div style="font-size:0.7rem;color:#64748b;margin-top:3px;">${_escHtml(inp.description)}</div>` : "";
         const isMultiline = (inp.type || "").toLowerCase() === "text" || (inp.description || "").length > 60;
+        const defVal = _escHtml(inp.default || "");
         const field = isMultiline
-          ? `<textarea rows="3" id="wfWizInp_${_escHtml(inp.name)}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;resize:vertical;"></textarea>`
-          : `<input type="text" id="wfWizInp_${_escHtml(inp.name)}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;" />`;
-        const required = inp.required === false ? "" : '<span style="color:#dc2626;">*</span>';
+          ? `<textarea rows="3" id="wfWizInp_${_escHtml(inp.name)}" placeholder="${defVal}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;resize:vertical;">${defVal}</textarea>`
+          : `<input type="text" id="wfWizInp_${_escHtml(inp.name)}" value="${defVal}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;" />`;
+        const required = inp.required === false ? '<span style="color:#94a3b8;font-size:0.72rem;">（選填）</span>' : '<span style="color:#dc2626;">*</span>';
         return `<div style="margin-bottom:12px;">
           <label style="display:block;font-size:0.78rem;font-weight:600;color:#1e293b;margin-bottom:4px;">
             <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">${_escHtml(inp.name)}</code>

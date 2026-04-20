@@ -612,6 +612,7 @@ async def execute_workflow(workflow_id: str, req: WorkflowExecuteRequest = None,
             workflow=flow,
             user_input=req.initial_prompt or "",
             model_override=req.model,
+            user_inputs=req.inputs or {},
         )
         return result
     except Exception as e:
