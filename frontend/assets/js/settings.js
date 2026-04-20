@@ -420,11 +420,28 @@
     if (target) target.style.display = 'block';
 
     document.querySelectorAll('.page-settings-nav-item').forEach((n) => n.classList.remove('is-active'));
-    navItem.classList.add('is-active');
+    if (navItem) navItem.classList.add('is-active');
 
     const content = document.getElementById('settingsContent');
     if (content) content.scrollTop = 0;
+
+    // Persist so returning to settings lands on the same section
+    if (window.viewState) window.viewState('settings').update({ section: name });
   };
+
+  /* ── Restore last section on page load ─────────────────────── */
+  (function _restoreSettingsSection() {
+    try {
+      if (!window.viewState) return;
+      const last = window.viewState('settings').restore('section', '');
+      if (!last || last === 'profile') return;  // profile is the default, skip
+      // Find the matching nav item (has `showSection('{name}',this)` in onclick)
+      const navItem = Array.from(document.querySelectorAll('.page-settings-nav-item')).find(
+        el => (el.getAttribute('onclick') || '').includes("'" + last + "'")
+      );
+      if (navItem) window.showSection(last, navItem);
+    } catch (_) {}
+  })();
 
   /* ── Danger actions ───────────────────────────────────────── */
   window.confirmDanger = function (action) {
@@ -484,6 +501,8 @@
       // Nuke any other kway_* keys defensively
       Object.keys(localStorage).forEach(k => { if (k.startsWith('kway_')) localStorage.removeItem(k); });
       Object.keys(sessionStorage).forEach(k => { if (k.startsWith('kway_')) sessionStorage.removeItem(k); });
+      // Also clear per-page view state memory
+      if (typeof window.clearAllViewStates === 'function') window.clearAllViewStates();
     } catch (_) {}
 
     // 3. Hard redirect so any in-memory module state is discarded

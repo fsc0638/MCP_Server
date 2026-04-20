@@ -275,6 +275,15 @@
 .wf-canvas-toolbar button.active {
   background: var(--kway-blue); color: #fff; border-color: var(--kway-blue);
 }
+/* Back-to-menu button: wider, with label */
+.wf-canvas-toolbar .wf-toolbar-back-btn {
+  width: auto; padding: 0 10px; gap: 5px;
+  font-size: 0.72rem; font-weight: 600;
+}
+.wf-canvas-toolbar .wf-toolbar-back-btn svg { flex-shrink: 0; }
+.wf-canvas-toolbar .wf-toolbar-back-btn:hover {
+  color: var(--kway-blue); border-color: var(--kway-blue);
+}
 .wf-toolbar-sep {
   width: 1px; height: 18px; background: var(--border-subtle); margin: 0 4px;
 }

@@ -900,6 +900,10 @@ html, body { height: 100%; overflow: hidden; }
   pointer-events: none; white-space: nowrap; z-index: 9999;
 }
 .toast.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.show       { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.error      { background: #b91c1c; white-space: normal; max-width: 90vw; text-align: left; }
+.toast.warning    { background: #b45309; white-space: normal; max-width: 90vw; text-align: left; }
+.toast.info       { background: #1e40af; }
 
 /* ── prefers-reduced-motion ─────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {

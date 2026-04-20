@@ -44,8 +44,22 @@
       item.classList.toggle("active", item.dataset.page === hash);
     });
 
+    // Persist last-visited section so admin.html re-opens on the right tab
+    if (window.viewState) {
+      window.viewState("admin").update({ section: hash });
+    }
+
     // Render page
     page();
+  }
+
+  // On fresh entry (no hash in URL), restore the last section from view state
+  if (!location.hash && window.viewState) {
+    const _lastSection = window.viewState("admin").restore("section", "");
+    if (_lastSection && pages[_lastSection]) {
+      // Replace state so browser back doesn't have an empty hash loop
+      history.replaceState(null, "", "#/" + _lastSection);
+    }
   }
 
   window.addEventListener("hashchange", navigate);

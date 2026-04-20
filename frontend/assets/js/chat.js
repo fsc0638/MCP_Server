@@ -219,11 +219,18 @@
           ? '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
           : '<polyline points="20 6 9 17 4 12"/>';
     }
+    // Add BOTH class names to support old (.show from style.css) and new
+    // (.is-visible from chat.css) stylesheets. chat.css overrides .toast base
+    // styles with opacity:0, so we must add .is-visible for it to appear.
     toast.classList.add("show");
+    toast.classList.add("is-visible");
+    // Error toasts stick around longer so quota / permission messages can be read
+    const _dur = (type === "error" || type === "warning") ? 5500 : 3000;
     clearTimeout(toast._timer);
     toast._timer = setTimeout(function () {
       toast.classList.remove("show");
-    }, 3000);
+      toast.classList.remove("is-visible");
+    }, _dur);
   }
   window.showToast = showToast;
 
@@ -1785,9 +1792,16 @@
     const prevSessionId = state.sessionId;
     const isSameSession = sid === prevSessionId;
 
-    // 切換前先保存當前 session 的 composer 草稿
+    // 切換前先保存當前 session 的 composer 草稿 + 滾動位置
     if (!isSameSession && chatInput) {
       state.sessionInputDrafts[prevSessionId] = chatInput.value || "";
+    }
+    if (!isSameSession && prevSessionId && window.viewState && chatMessages) {
+      try {
+        window.viewState("chat_scroll").update({
+          [prevSessionId]: chatMessages.scrollTop,
+        });
+      } catch (_) {}
     }
 
     // 關掉上一個 session 的 approval modal (如果還開著)
@@ -1814,6 +1828,14 @@
 
     renderConversationList();
     syncComposerState();
+
+    // 4. 還原該 session 的滾動位置（若有存過）
+    if (!isSameSession && window.viewState && chatMessages) {
+      const _savedTop = window.viewState("chat_scroll").restore(sid, null);
+      if (_savedTop != null) {
+        setTimeout(() => { chatMessages.scrollTop = _savedTop; }, 50);
+      }
+    }
 
     if (isDraftSessionId(sid)) {
       const cachedHistory = getCachedHistory(sid);
