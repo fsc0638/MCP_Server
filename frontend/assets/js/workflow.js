@@ -579,8 +579,21 @@
       const owner   = this._currentOwner || "";
       const wfName  = this._wfData?.name || wfId;
 
-      // Ask user for initial prompt (optional)
-      const prompt = window.prompt(`執行工作流「${wfName}」\n\n輸入測試訊息（可留空直接使用工作流變數）：`, "") ?? "";
+      // Check if workflow has any required user_input variables — if yes,
+      // skip the ad-hoc prompt() and let Gate 1's wizard collect inputs
+      // cleanly (integrated UI instead of native dialog).
+      const _vars = _getVariableList(this._wfData);
+      const _hasRequiredInputs = _vars.some(v =>
+        v && v.source === "user_input" && v.required && !v.default_value
+      );
+
+      let prompt = "";
+      if (!_hasRequiredInputs) {
+        // Optional free-text intent for simple single-shot workflows
+        prompt = window.prompt(
+          `執行工作流「${wfName}」\n\n輸入測試訊息（可留空直接使用工作流變數）：`, ""
+        ) ?? "";
+      }
 
       // Save current state first (skip validation so partial edits don't block test)
       await this.save(null, true);

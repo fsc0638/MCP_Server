@@ -231,22 +231,33 @@ def _step_skill_id(step: Dict[str, Any]) -> Optional[str]:
 
 
 def _collect_required_inputs(variables: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Build a list of required global inputs the user must provide at runtime.
+    """Build a list of required inputs the user must provide at runtime.
 
-    Combines `global_inputs` (names) with any matching `definitions` entries
-    that carry schema info (type, description, default).
+    Sources considered (union):
+      1. `global_inputs` — names the user declared as required inputs
+      2. `definitions[]` where source=user_input AND required=true AND no default
 
-    Skips inputs that have a default_value or are not marked required.
+    This fixes the UX gap where the variables tab stores data in definitions[]
+    but Gate 1 used to only inspect global_inputs, making required user_input
+    variables invisible and letting workflows execute with empty values.
+
+    Returns one {name, type, description, required} entry per missing input.
+    Already-satisfied inputs (with default_value or source=fixed/secret) are skipped.
     """
     out: List[Dict[str, Any]] = []
-    globals_list = variables.get("global_inputs") or []
-    defs_by_name = {
-        d.get("name"): d for d in (variables.get("definitions") or [])
+    seen: set = set()
+
+    definitions = [
+        d for d in (variables.get("definitions") or [])
         if isinstance(d, dict) and d.get("name")
-    }
-    for name in globals_list:
+    ]
+    defs_by_name = {d["name"]: d for d in definitions}
+
+    # Source 1: explicit global_inputs list (plain names)
+    for name in (variables.get("global_inputs") or []):
+        if name in seen:
+            continue
         defn = defs_by_name.get(name) or {}
-        # Skip if has default or source=fixed (no user input needed)
         if defn.get("default_value"):
             continue
         if defn.get("source") in ("fixed", "secret"):
@@ -257,6 +268,24 @@ def _collect_required_inputs(variables: Dict[str, Any]) -> List[Dict[str, Any]]:
             "description": defn.get("description", ""),
             "required": True,
         })
+        seen.add(name)
+
+    # Source 2: definitions entries that are user-input + required + no default
+    for defn in definitions:
+        name = defn["name"]
+        if name in seen:
+            continue
+        if (defn.get("source") == "user_input"
+                and defn.get("required", False)
+                and not defn.get("default_value")):
+            out.append({
+                "name": name,
+                "type": defn.get("type", "string"),
+                "description": defn.get("description", ""),
+                "required": True,
+            })
+            seen.add(name)
+
     return out
 
 
