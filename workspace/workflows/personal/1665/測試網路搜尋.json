@@ -1,0 +1,83 @@
+{
+  "id": "測試網路搜尋",
+  "name": "測試網路搜尋",
+  "description": "舉凡需要利用到網路搜尋，使用此工作流",
+  "icon": "",
+  "tags": [],
+  "trigger_keywords": [],
+  "variables": {
+    "global_inputs": [],
+    "env_requirements": [],
+    "definitions": []
+  },
+  "blocks": [
+    {
+      "id": 1,
+      "type": "start",
+      "x": 10,
+      "y": 110,
+      "label": "開始",
+      "config": {}
+    },
+    {
+      "id": 2,
+      "type": "web-search",
+      "x": 220,
+      "y": 170,
+      "label": "網路搜尋",
+      "config": {}
+    },
+    {
+      "id": 3,
+      "type": "end",
+      "x": 200,
+      "y": 360,
+      "label": "結束",
+      "config": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": 1,
+      "to": 2
+    },
+    {
+      "from": 2,
+      "to": 3
+    }
+  ],
+  "trigger": {},
+  "execution": {},
+  "security": {},
+  "context": {},
+  "scope": "personal",
+  "owner": "1665",
+  "updated_at": "2026-04-20T13:57:44.373236",
+  "version": "1.0",
+  "workflow_id": "wf_447f176707",
+  "display_name": "測試網路搜尋",
+  "source": "legacy",
+  "metadata": {
+    "created_at": "2026-04-20T13:57:44.373286",
+    "updated_at": "2026-04-20T13:57:44.373236",
+    "run_count": 0
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "type": "sequential",
+      "skill_id": "mcp-web-search",
+      "label": "網路搜尋",
+      "input_map": {},
+      "output_var": "step_1_output",
+      "on_fail": "abort"
+    }
+  ],
+  "constraints": {
+    "max_steps": 10,
+    "timeout_seconds": 300,
+    "skill_whitelist": null
+  },
+  "created_by": "line_U09e3122dcc146ed9784ec91acd6d7530",
+  "created_at": "2026-04-20T13:57:44.373236"
+}
