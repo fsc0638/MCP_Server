@@ -619,6 +619,127 @@ async def execute_workflow(workflow_id: str, req: WorkflowExecuteRequest = None,
         raise HTTPException(status_code=500, detail=f"Workflow execution failed: {str(e)}")
 
 
+# ── Phase 5: 5-question Wizard ──────────────────────────────────────────────
+
+class WizardRequest(BaseModel):
+    purpose: str = ""          # Q1 — what are you doing? (新聞 / 資料整理 / 會議整理 / 備忘)
+    input_source: str = ""     # Q2 — what's the input? (文字 / 檔案 / 網址 / 日曆 / LINE)
+    output_target: str = ""    # Q3 — where should it go? (摘要 / Notion / LINE 推播 / Email)
+    schedule: str = ""         # Q4 — when should it run? (手動 / 每日 / 每週 / 每月)
+    on_fail: str = "retry"     # Q5 — what on failure? (retry / skip / notify)
+
+
+@router.post("/api/workflows/wizard")
+def workflow_wizard(req: WizardRequest):
+    """Build a workflow JSON from 5 natural-language answers (no LLM).
+
+    Deterministically picks the closest template based on the user's answers,
+    then returns a fully-formed v2 workflow that can be reviewed and saved.
+    """
+    import re as _re
+    templates_dir = _workflows_base() / "templates"
+    if not templates_dir.exists():
+        raise HTTPException(status_code=500, detail="模板庫尚未建立")
+
+    candidates: List[Dict[str, Any]] = []
+    for f in sorted(templates_dir.glob("*.json")):
+        try:
+            t = json.loads(f.read_text(encoding="utf-8"))
+            score = _score_template(t, req)
+            candidates.append({"template": t, "score": score, "file": f.name})
+        except Exception as e:
+            logger.debug(f"[Wizard] skip {f.name}: {e}")
+
+    if not candidates:
+        raise HTTPException(status_code=500, detail="沒有可用的模板")
+
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+    top = candidates[0]
+    best_tpl = top["template"]
+
+    # Merge wizard answers into workflow data
+    wf_data = dict(best_tpl.get("workflow") or {})
+    wf_data.setdefault("display_name", best_tpl.get("display_name", "新工作流"))
+    wf_data.setdefault("description", best_tpl.get("description", ""))
+    wf_data.setdefault("icon", best_tpl.get("icon", ""))
+    wf_data["source"] = "template"
+    wf_data.setdefault("metadata", {})["promoted_from"] = f"template:{best_tpl.get('template_id')}"
+
+    # Apply on_fail strategy to all steps
+    if req.on_fail:
+        on_fail_map = {"retry": "retry_once", "skip": "skip", "notify": "continue",
+                       "retry_once": "retry_once", "abort": "abort", "continue": "continue"}
+        mapped = on_fail_map.get(req.on_fail, "abort")
+        # Apply to legacy execution.on_error (used by current executor)
+        wf_data.setdefault("execution", {})["on_error"] = \
+            {"retry_once": "retry", "continue": "skip", "skip": "skip", "abort": "abort", "retry": "retry"}.get(mapped, "retry")
+        # Also apply to each step's on_fail (for v2 steps[] when executor path uses it)
+        for step in (wf_data.get("steps") or []):
+            step["on_fail"] = mapped
+
+    return {
+        "status": "success",
+        "template_id": best_tpl.get("template_id"),
+        "template_match_score": top["score"],
+        "alternative_templates": [
+            {"id": c["template"].get("template_id"),
+             "name": c["template"].get("display_name"),
+             "score": c["score"]}
+            for c in candidates[1:4]
+        ],
+        "workflow": wf_data,
+    }
+
+
+def _score_template(template: Dict[str, Any], req) -> int:
+    """Rank templates against the wizard answers. Each matching dimension
+    adds 10 points; substring match adds 5; unmatched adds 0."""
+    score = 0
+    qm = template.get("question_match") or {}
+
+    def _match(dimension: str, user_val: str) -> int:
+        if not user_val:
+            return 0
+        expected = qm.get(dimension) or []
+        if not expected:
+            return 0
+        for e in expected:
+            if user_val == e:
+                return 10
+            if e in user_val or user_val in e:
+                return 5
+        return 0
+
+    score += _match("purpose", req.purpose)
+    score += _match("input_source", req.input_source)
+    score += _match("output_target", req.output_target)
+    score += _match("schedule", req.schedule)
+    return score
+
+
+@router.get("/api/workflows/templates")
+def list_templates():
+    """List available wizard templates for the UI."""
+    templates_dir = _workflows_base() / "templates"
+    if not templates_dir.exists():
+        return {"templates": []}
+    out = []
+    for f in sorted(templates_dir.glob("*.json")):
+        try:
+            t = json.loads(f.read_text(encoding="utf-8"))
+            out.append({
+                "id": t.get("template_id"),
+                "display_name": t.get("display_name"),
+                "description": t.get("description"),
+                "icon": t.get("icon"),
+                "category": t.get("category"),
+                "question_match": t.get("question_match"),
+            })
+        except Exception:
+            pass
+    return {"templates": out, "total": len(out)}
+
+
 # ── Webhook Trigger ────────────────────────────────────────────────────────
 
 class WorkflowTriggerRequest(BaseModel):

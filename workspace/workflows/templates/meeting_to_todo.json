@@ -1,0 +1,29 @@
+{
+  "template_id": "meeting_to_todo",
+  "display_name": "會議記錄 → 待辦清單",
+  "description": "分析會議逐字稿產生待辦事項並寫入 Notion",
+  "category": "meeting",
+  "icon": "🎙",
+  "question_match": {
+    "purpose": ["會議整理"],
+    "input_source": ["檔案"],
+    "output_target": ["Notion", "待辦"]
+  },
+  "workflow": {
+    "version": "1.0",
+    "trigger": {"enabled": false, "mode": "confirm", "priority": 10, "patterns": [], "schedule": ""},
+    "variables": {
+      "global_inputs": ["meetingFile"],
+      "env_requirements": ["NOTION_TOKEN", "NOTION_DATABASE_ID", "OPENAI_API_KEY"],
+      "definitions": [
+        {"name": "meetingFile", "type": "string", "source": "user_input", "required": true, "description": "會議逐字稿檔案路徑", "default_value": ""}
+      ]
+    },
+    "blocks": [
+      {"id": 1, "type": "start", "x": 50, "y": 100, "label": "開始", "config": {}},
+      {"id": 2, "type": "meeting-to-notion", "x": 230, "y": 100, "label": "會議分析 + Notion", "config": {"params": {"file_path": {"source": "variable", "value": "${meetingFile}"}}}},
+      {"id": 3, "type": "end", "x": 410, "y": 100, "label": "結束", "config": {}}
+    ],
+    "connections": [{"from": 1, "to": 2}, {"from": 2, "to": 3}]
+  }
+}

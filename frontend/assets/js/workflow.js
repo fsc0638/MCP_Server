@@ -1914,7 +1914,9 @@
     function _card(icon, nameTW, path, desc, scope, allowed) {
       const dis = allowed ? "" : " disabled";
       const lock = allowed ? "" : `<div class="wf-scope-card-lock">🔒 ${_lockMsg(scope)}</div>`;
-      const click = allowed ? `onclick="window._createNewWorkflow('${scope}', '${scope==='department'?deptCode:scope==='personal'?userId:''}')"` : "";
+      // Phase 5: after picking scope, offer wizard OR blank canvas
+      const ownerArg = scope === 'department' ? deptCode : scope === 'personal' ? userId : '';
+      const click = allowed ? `onclick="window._chooseCreationMode('${scope}', '${ownerArg}')"` : "";
       return `<div class="wf-scope-card${dis}" ${click}>
         <div class="wf-scope-card-icon">${icon}</div>
         <div class="wf-scope-card-body">
@@ -1947,6 +1949,169 @@
     // Close on backdrop click
     overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
     document.body.appendChild(overlay);
+  };
+
+  // Phase 5: Choose creation mode (wizard vs blank canvas)
+  window._chooseCreationMode = function (scope, owner) {
+    document.getElementById("wfScopeOverlay")?.remove();
+    const overlay = document.createElement("div");
+    overlay.id = "wfModeOverlay";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;";
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:22px 24px 18px;width:520px;max-width:92vw;">
+        <div style="font-size:1.05rem;font-weight:700;margin-bottom:4px;">選擇建立方式</div>
+        <div style="font-size:0.8rem;color:#64748b;margin-bottom:16px;">使用精靈可在 5 個問題內生成工作流；也可以直接進入空白畫布自行拖拉</div>
+        <div style="display:flex;flex-direction:column;gap:10px;">
+          <div class="wf-mode-card" onclick="window._showWfWizard('${scope}','${owner}')"
+            style="padding:14px 16px;border:2px solid #0d6efd;border-radius:12px;cursor:pointer;background:#f0f7ff;display:flex;align-items:flex-start;gap:14px;">
+            <div style="font-size:1.6rem;flex-shrink:0;">✨</div>
+            <div style="flex:1;">
+              <div style="font-size:0.9rem;font-weight:700;color:#0d6efd;">精靈模式（推薦）</div>
+              <div style="font-size:0.76rem;color:#475569;margin-top:3px;">回答 5 題（目的/輸入/輸出/時機/失敗處理）自動選最適合的模板</div>
+            </div>
+          </div>
+          <div class="wf-mode-card" onclick="window._createNewWorkflow('${scope}','${owner}');document.getElementById('wfModeOverlay')?.remove()"
+            style="padding:14px 16px;border:1.5px solid #e2e8f0;border-radius:12px;cursor:pointer;display:flex;align-items:flex-start;gap:14px;">
+            <div style="font-size:1.6rem;flex-shrink:0;">🎨</div>
+            <div style="flex:1;">
+              <div style="font-size:0.9rem;font-weight:700;">空白畫布</div>
+              <div style="font-size:0.76rem;color:#64748b;margin-top:3px;">從 Palette 拖拉節點自由設計</div>
+            </div>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:16px;">
+          <button onclick="document.getElementById('wfModeOverlay')?.remove()" style="padding:7px 18px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;font-size:0.82rem;">取消</button>
+        </div>
+      </div>`;
+    overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+    document.body.appendChild(overlay);
+  };
+
+  // Phase 5: 5-question wizard
+  window._showWfWizard = async function (scope, owner) {
+    document.getElementById("wfModeOverlay")?.remove();
+
+    const QUESTIONS = [
+      { key: "purpose", label: "您想做什麼？", options: ["情報/新聞", "資料整理", "會議整理", "備忘/提醒"] },
+      { key: "input_source", label: "輸入來源是？", options: ["文字", "檔案", "網址", "LINE 訊息"] },
+      { key: "output_target", label: "輸出要送到哪？", options: ["摘要", "Notion", "LINE 推播", "Email", "待辦"] },
+      { key: "schedule", label: "什麼時候執行？", options: ["手動", "每日", "每週", "每月"] },
+      { key: "on_fail", label: "失敗時怎麼辦？", options: ["retry", "skip", "notify"],
+        labels: { retry: "自動重試", skip: "跳過繼續", notify: "通知我" } },
+    ];
+
+    const answers = {};
+    let step = 0;
+
+    const overlay = document.createElement("div");
+    overlay.id = "wfWizardOverlay";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;";
+    document.body.appendChild(overlay);
+
+    function renderStep() {
+      if (step >= QUESTIONS.length) { renderPreview(); return; }
+      const q = QUESTIONS[step];
+      const labelFor = (o) => (q.labels && q.labels[o]) || o;
+      overlay.innerHTML = `
+        <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:24px;width:520px;max-width:92vw;">
+          <div style="font-size:0.72rem;color:#64748b;margin-bottom:6px;">步驟 ${step+1} / ${QUESTIONS.length}</div>
+          <div style="font-size:1.05rem;font-weight:700;margin-bottom:16px;">${q.label}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            ${q.options.map(o => `
+              <button class="wf-wiz-opt" data-val="${o}"
+                style="padding:14px;border:1.5px solid #e2e8f0;border-radius:10px;background:#f8f9fb;cursor:pointer;font-size:0.88rem;color:#1e293b;transition:border-color 0.15s,background 0.15s;">
+                ${labelFor(o)}
+              </button>
+            `).join("")}
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:18px;">
+            <button onclick="(function(){document.getElementById('wfWizardOverlay')?.remove()})()" style="padding:7px 16px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;font-size:0.82rem;">取消</button>
+            ${step > 0 ? `<button id="wfWizBack" style="padding:7px 16px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;font-size:0.82rem;">上一步</button>` : ""}
+          </div>
+        </div>`;
+      overlay.querySelectorAll(".wf-wiz-opt").forEach(btn => {
+        btn.onmouseenter = () => { btn.style.borderColor = "#0d6efd"; btn.style.background = "#f0f7ff"; };
+        btn.onmouseleave = () => { btn.style.borderColor = "#e2e8f0"; btn.style.background = "#f8f9fb"; };
+        btn.onclick = () => {
+          answers[q.key] = btn.dataset.val;
+          step += 1;
+          renderStep();
+        };
+      });
+      const back = overlay.querySelector("#wfWizBack");
+      if (back) back.onclick = () => { step -= 1; renderStep(); };
+    }
+
+    async function renderPreview() {
+      overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:24px;width:520px;max-width:92vw;"><div style="text-align:center;padding:30px 0;">⏳ 正在為你選擇最適合的模板...</div></div>`;
+      try {
+        const resp = await fetch("/api/workflows/wizard", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(answers),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.status !== "success") {
+          overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:24px;"><div style="color:#dc2626;">Wizard 建立失敗：${JSON.stringify(data.detail || data).slice(0,200)}</div><div style="text-align:right;margin-top:12px;"><button onclick="document.getElementById('wfWizardOverlay')?.remove()">關閉</button></div></div>`;
+          return;
+        }
+        const wf = data.workflow;
+        const stepsPreview = (wf.blocks || []).filter(b => !["start","end","branch"].includes(b.type)).map(b => b.type).join(" → ") || "(無節點)";
+        overlay.innerHTML = `
+          <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:24px;width:560px;max-width:92vw;max-height:85vh;overflow-y:auto;">
+            <div style="font-size:1.05rem;font-weight:700;margin-bottom:6px;">✨ 已為你選擇模板</div>
+            <div style="font-size:0.88rem;color:#0d6efd;font-weight:600;margin-bottom:12px;">${wf.icon || "📋"} ${_escHtml(wf.display_name)}</div>
+            <div style="background:#f8f9fb;border-radius:10px;padding:12px;margin-bottom:14px;">
+              <div style="font-size:0.76rem;color:#64748b;margin-bottom:4px;">描述</div>
+              <div style="font-size:0.85rem;color:#1e293b;">${_escHtml(wf.description || "")}</div>
+              <div style="font-size:0.76rem;color:#64748b;margin-top:10px;margin-bottom:4px;">流程</div>
+              <div style="font-size:0.82rem;color:#1e293b;font-family:monospace;">${_escHtml(stepsPreview)}</div>
+              ${(wf.variables?.env_requirements || []).length ? `
+                <div style="font-size:0.76rem;color:#64748b;margin-top:10px;margin-bottom:4px;">需要的環境變數</div>
+                <div style="font-size:0.78rem;color:#b45309;">${wf.variables.env_requirements.map(e => `<code style="background:#fff8e1;padding:2px 5px;border-radius:3px;margin-right:5px;">${e}</code>`).join("")}</div>
+              ` : ""}
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:12px;">
+              <input id="wfWizName" type="text" placeholder="輸入工作流名稱" value="${_escHtml(wf.display_name)}" style="flex:1;padding:8px 12px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:0.88rem;" />
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:10px;">
+              <button onclick="document.getElementById('wfWizardOverlay')?.remove()" style="padding:8px 18px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;">取消</button>
+              <button id="wfWizCreate" style="padding:8px 18px;border-radius:8px;background:#0d6efd;color:#fff;border:none;font-weight:600;cursor:pointer;">建立並開啟畫布</button>
+            </div>
+          </div>`;
+        overlay.querySelector("#wfWizCreate").onclick = async () => {
+          const finalName = overlay.querySelector("#wfWizName").value.trim() || wf.display_name;
+          wf.display_name = finalName;
+          wf.name = finalName;
+          wf.scope = scope;
+          wf.owner = owner;
+          // Generate a slug-friendly workflow_id from the name OR timestamp
+          const wfId = "wf-" + Date.now();
+          try {
+            const saveResp = await fetch(`/api/workflows/${wfId}`, {
+              method: "POST", headers: {"Content-Type":"application/json"}, credentials:"include",
+              body: JSON.stringify(wf),
+            });
+            const saveData = await saveResp.json();
+            if (!saveResp.ok) {
+              const det = saveData.detail?.errors || [saveData.detail || saveResp.status];
+              if (window.showToast) window.showToast("建立失敗：" + (Array.isArray(det) ? det.join("；") : det), "error");
+              return;
+            }
+            overlay.remove();
+            const finalId = saveData.id || wfId;
+            _enterWorkflowCanvas(finalId, scope, owner);
+            if (window.showToast) window.showToast(`已從「${wf.icon} ${wf.display_name}」模板建立`, "success");
+          } catch (e) {
+            if (window.showToast) window.showToast("網路錯誤：" + e.message, "error");
+          }
+        };
+      } catch (err) {
+        overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:24px;"><div style="color:#dc2626;">錯誤：${err.message}</div></div>`;
+      }
+    }
+
+    overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
+    renderStep();
   };
 
   window._createNewWorkflow = async function (scope, owner) {

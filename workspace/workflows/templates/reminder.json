@@ -1,0 +1,27 @@
+{
+  "template_id": "reminder",
+  "display_name": "排程提醒",
+  "description": "在指定時間推送自訂訊息到 LINE",
+  "category": "scheduled",
+  "icon": "⏰",
+  "question_match": {
+    "purpose": ["備忘/提醒"],
+    "schedule": ["每日", "每週", "每月"]
+  },
+  "workflow": {
+    "version": "1.0",
+    "trigger": {"enabled": true, "mode": "auto", "priority": 10, "patterns": [], "schedule": "0 9 * * *"},
+    "variables": {
+      "global_inputs": [],
+      "env_requirements": [],
+      "definitions": [
+        {"name": "reminderMessage", "type": "string", "source": "fixed", "required": true, "description": "提醒內容", "default_value": "今天也要加油 💪"}
+      ]
+    },
+    "blocks": [
+      {"id": 1, "type": "start", "x": 50, "y": 100, "label": "開始", "config": {}},
+      {"id": 2, "type": "end", "x": 230, "y": 100, "label": "結束", "config": {}}
+    ],
+    "connections": [{"from": 1, "to": 2}]
+  }
+}
