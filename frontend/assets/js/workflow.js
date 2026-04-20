@@ -3314,12 +3314,31 @@
       _renderVariablesTab(body, wd);
     } else if (tab === "trigger") {
       const tr = wd.trigger || {};
+      const kwList = wd.trigger_keywords || [];
+      const hasKw = kwList.length > 0;
+      const hasCron = !!(tr.cron || "").trim();
+      // Inline warning: enabled but neither keywords nor cron → silent no-op
+      const showWarn = tr.enabled && !hasKw && !hasCron;
       body.innerHTML = `
         <div class="wf-settings-field">
           <label class="wf-settings-toggle-label">
             <input type="checkbox" id="wfSetTriggerEnabled" ${tr.enabled ? "checked" : ""} />
             啟用自動觸發
           </label></div>
+        ${showWarn ? `<div class="wf-settings-field" style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:10px;margin-bottom:10px;">
+          <div style="color:#b91c1c;font-weight:700;font-size:0.85rem;margin-bottom:4px;">⚠️ 此工作流永遠不會自動觸發</div>
+          <div style="color:#7f1d1d;font-size:0.78rem;">已啟用觸發但沒有設定任何關鍵詞或排程。請至少做一件：<br>
+            1. 到「<strong>基本</strong>」tab 填寫<strong>觸發關鍵詞</strong>（如「每日新聞」），或<br>
+            2. 在下方填寫<strong>排程 Cron 表達式</strong>，或<br>
+            3. 取消勾「啟用自動觸發」
+          </div>
+        </div>` : ""}
+        <div class="wf-settings-field">
+          <label>觸發關鍵詞摘要（在「基本」tab 編輯）</label>
+          <div class="wf-settings-hint" style="padding:6px 10px;background:#f1f5f9;border-radius:4px;color:#334155;">
+            ${hasKw ? kwList.map(k => `<code style="background:#e2e8f0;padding:1px 6px;border-radius:3px;margin-right:4px;">${_escHtml(k)}</code>`).join("") : '<span style="color:#94a3b8;">（尚未設定，自動觸發不會生效）</span>'}
+          </div>
+        </div>
         <div class="wf-settings-field"><label>觸發模式</label>
           <select id="wfSetTriggerMode">
             <option value="auto" ${tr.mode === "auto" ? "selected" : ""}>自動執行</option>
@@ -3330,7 +3349,7 @@
           <input type="number" id="wfSetTriggerPriority" value="${tr.priority || 10}" min="1" max="99" /></div>
         <div class="wf-settings-field"><label>排程 Cron 表達式</label>
           <input type="text" id="wfSetTriggerCron" value="${_escHtml(tr.cron || "")}" placeholder="例如: 0 9 * * 1-5" />
-          <div class="wf-settings-hint">留空表示不啟用排程自動觸發</div></div>
+          <div class="wf-settings-hint">留空表示不啟用排程自動觸發（若關鍵詞也空，整個觸發無效）</div></div>
       `;
     } else if (tab === "execution") {
       const ex = wd.execution || {};

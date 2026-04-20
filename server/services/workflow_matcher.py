@@ -69,10 +69,21 @@ class WorkflowMatcher:
                 pass
 
         self._cache_ts = now
+        enabled = [w for w in self._cache.values() if w.get("trigger_enabled")]
+        enabled_with_kw = [w for w in enabled if w.get("trigger_keywords")]
+        # Surface the common footgun: enabled=true but no keywords → never matches
+        orphans = [w for w in enabled if not w.get("trigger_keywords")]
         logger.info(
             f"[WFMatcher] Scanned {len(self._cache)} workflow(s). "
-            f"Trigger-enabled: {sum(1 for w in self._cache.values() if w.get('trigger_enabled'))}"
+            f"Trigger-enabled: {len(enabled)} (with keywords: {len(enabled_with_kw)})"
         )
+        if orphans:
+            orphan_names = ", ".join(w.get("name", w.get("id", "?")) for w in orphans[:5])
+            logger.warning(
+                f"[WFMatcher] ⚠️  {len(orphans)} workflow(s) have trigger.enabled=true "
+                f"but no trigger_keywords — they will NEVER match user input: [{orphan_names}]. "
+                f"Fix by adding keywords in 設定→觸發，or disable the trigger."
+            )
         return list(self._cache.values())
 
     def _to_cache_entry(self, data: dict, json_file: Path) -> Optional[dict]:

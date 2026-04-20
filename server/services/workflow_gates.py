@@ -94,6 +94,20 @@ def gate_0_validate(workflow: Dict[str, Any], uma) -> Tuple[bool, List[str]]:
     if len(steps) == 0 and skill_block_count == 0:
         errors.append("工作流至少需要一個技能節點 — 請從左側 Palette 拖入節點後再儲存")
 
+    # Trigger config sanity — enable + (no patterns AND no cron) is a no-op
+    # config that confuses users ("why isn't my workflow firing?"). Force them
+    # to either add keywords or schedule, or disable the trigger.
+    trig = workflow.get("trigger") or {}
+    if trig.get("enabled"):
+        v2_patterns = trig.get("patterns") or []
+        legacy_kw = workflow.get("trigger_keywords") or []
+        has_any_keyword = bool(v2_patterns) or bool(legacy_kw)
+        has_schedule = bool((trig.get("schedule") or trig.get("cron") or "").strip())
+        if not has_any_keyword and not has_schedule:
+            errors.append(
+                "已啟用觸發但未設定任何關鍵詞或排程 — 請至少填寫一個觸發關鍵詞（設定→觸發→觸發關鍵詞），或關閉自動觸發"
+            )
+
     # Show the most actionable errors first if basic requirements fail
     if errors:
         return False, errors
