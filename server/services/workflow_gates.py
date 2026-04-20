@@ -115,6 +115,14 @@ def gate_0_validate(workflow: Dict[str, Any], uma) -> Tuple[bool, List[str]]:
                 skill = uma.registry.get_skill(skill_id)
                 if not skill:
                     errors.append(f"步驟 {step_id} 使用的技能 '{skill_id}' 不存在於技能庫")
+                else:
+                    # Per-param validation: catch enum / integer mistakes at
+                    # save time instead of after 3 Tavily retries. We read the
+                    # matching block.config.params (authoritative for UI edits)
+                    # since migrate_legacy only keeps the resolved string in
+                    # step.input_map — loses the {source,value} distinction.
+                    param_errs = _validate_step_param_values(workflow, step, skill, step_id)
+                    errors.extend(param_errs)
 
         elif step_type == "parallel":
             branches = step.get("branches") or []
@@ -272,6 +280,94 @@ def _step_skill_id(step: Dict[str, Any]) -> Optional[str]:
         return step.get("skill_id")
     # parallel/sub_workflow handled elsewhere
     return None
+
+
+def _get_param_schema(meta: Dict[str, Any], param_name: str) -> Optional[Dict[str, Any]]:
+    """Return the JSON-Schema-like definition for a single parameter, reading
+    either the v2 `input_schema` map or the legacy `parameters.properties`.
+    """
+    inp = meta.get("input_schema")
+    if isinstance(inp, dict) and isinstance(inp.get(param_name), dict):
+        return inp[param_name]
+    params = meta.get("parameters") or {}
+    props = params.get("properties") or {}
+    if isinstance(props, dict) and isinstance(props.get(param_name), dict):
+        return props[param_name]
+    return None
+
+
+def _validate_step_param_values(
+    workflow: Dict[str, Any],
+    step: Dict[str, Any],
+    skill: Dict[str, Any],
+    step_id: str,
+) -> List[str]:
+    """Validate each fixed param value against its schema (enum / type / range).
+
+    Catches common mistakes users make in the block config UI, e.g.
+    search_depth="1" when the skill only accepts ["basic","advanced"].
+
+    Only validates `source=fixed` params — variables are resolved at runtime
+    so we can't check those here. Values for `variable` / `auto` / `previous_step`
+    are skipped.
+    """
+    errs: List[str] = []
+    meta = (skill or {}).get("metadata") or {}
+
+    # Find the matching block (authoritative source for param config)
+    step_label = step.get("label") or step_id
+    block_params: Dict[str, Any] = {}
+    for b in (workflow.get("blocks") or []):
+        if not isinstance(b, dict):
+            continue
+        b_type = b.get("type", "")
+        b_skill = b_type if b_type.startswith("mcp-") else f"mcp-{b_type}"
+        if b_skill == (step.get("skill_id") or "") and (b.get("label") == step_label or not step_label):
+            block_params = (b.get("config") or {}).get("params") or {}
+            break
+
+    for pname, pv in block_params.items():
+        if not isinstance(pv, dict):
+            continue
+        source = pv.get("source", "auto")
+        if source != "fixed":
+            continue
+        value = pv.get("value", "")
+        if value in (None, ""):
+            continue  # empty → skill will use its own default
+        schema = _get_param_schema(meta, pname)
+        if not schema:
+            continue
+
+        # enum check
+        allowed = schema.get("enum")
+        if isinstance(allowed, list) and allowed and value not in allowed:
+            errs.append(
+                f"步驟「{step_label}」的參數 {pname} 值 '{value}' 不合法，只能是：{', '.join(map(str, allowed))}"
+            )
+            continue
+
+        # integer / number type check
+        ptype = schema.get("type")
+        if ptype == "integer":
+            try:
+                iv = int(str(value))
+            except (ValueError, TypeError):
+                errs.append(f"步驟「{step_label}」的參數 {pname} 必須是整數，目前為 '{value}'")
+                continue
+            mn = schema.get("minimum")
+            mx = schema.get("maximum")
+            if mn is not None and iv < mn:
+                errs.append(f"步驟「{step_label}」的參數 {pname} 不得小於 {mn}，目前為 {iv}")
+            if mx is not None and iv > mx:
+                errs.append(f"步驟「{step_label}」的參數 {pname} 不得大於 {mx}，目前為 {iv}")
+        elif ptype == "number":
+            try:
+                float(str(value))
+            except (ValueError, TypeError):
+                errs.append(f"步驟「{step_label}」的參數 {pname} 必須是數字，目前為 '{value}'")
+
+    return errs
 
 
 def _skill_required_param_names(meta: Dict[str, Any]) -> List[str]:

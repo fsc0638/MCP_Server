@@ -137,6 +137,13 @@
       const block = { id, type, x: snap(x), y: snap(y), label: label || def.label, config: {}, el };
       this.blocks.set(id, block);
       this._updateInfo();
+      // Skill blocks: async-prefill params from skill schema so the user
+      // sees a populated params tab instead of an empty one. Control nodes
+      // (start/end/branch) don't have schemas so skip.
+      if (type !== "start" && type !== "end" && type !== "branch") {
+        const skillName = type.startsWith("mcp-") ? type : `mcp-${type}`;
+        _prefillBlockParamsFromSchema(block, skillName);
+      }
       return block;
     }
 
@@ -3614,22 +3621,84 @@
     else block.config[field] = value;
   };
 
+  // ── Skill schema cache (populated lazily) ───────────────────────────
+  // GET /skills/{id} is cheap but running it every time a block renders
+  // (or drops) is wasteful. Cache per-session.
+  const _skillSchemaCache = new Map();
+
+  async function _fetchSkillSchema(skillName) {
+    if (_skillSchemaCache.has(skillName)) return _skillSchemaCache.get(skillName);
+    try {
+      const r = await fetch(`/skills/${encodeURIComponent(skillName)}`);
+      if (!r.ok) { _skillSchemaCache.set(skillName, null); return null; }
+      const data = await r.json();
+      const schema = data?.metadata?.parameters || null;
+      _skillSchemaCache.set(skillName, schema);
+      return schema;
+    } catch (_) {
+      _skillSchemaCache.set(skillName, null);
+      return null;
+    }
+  }
+
+  // Populate config.params with sensible defaults derived from the skill's
+  // JSON-Schema: every required param + every param that declares a `default`
+  // gets pre-created. Required without default → source=auto (LLM will fill);
+  // required string with enum → source=fixed with first enum value; other
+  // params with default → source=fixed with that default. The user can then
+  // tweak / delete from the block's params tab — but they no longer have to
+  // remember WHICH params exist, or guess what values are valid.
+  async function _prefillBlockParamsFromSchema(block, skillName) {
+    const schema = await _fetchSkillSchema(skillName);
+    if (!schema || !schema.properties) return;
+    if (!block || !block.config) return;
+    if (!block.config.params) block.config.params = {};
+    const required = new Set(schema.required || []);
+    Object.entries(schema.properties).forEach(([pname, pdef]) => {
+      if (block.config.params[pname]) return;  // don't clobber existing
+      pdef = pdef || {};
+      const isReq = required.has(pname);
+      const hasDefault = pdef.default !== undefined && pdef.default !== null && pdef.default !== "";
+      if (!isReq && !hasDefault) return;        // skip optional-no-default
+      if (isReq && hasDefault) {
+        block.config.params[pname] = { source: "fixed", value: String(pdef.default) };
+      } else if (isReq && Array.isArray(pdef.enum) && pdef.enum.length) {
+        block.config.params[pname] = { source: "fixed", value: String(pdef.enum[0]) };
+      } else if (isReq) {
+        // required but no default / enum → auto (LLM will supply) or leave
+        // blank and let the user either bind to a variable or type a fixed
+        // value. Default to `auto` which is the most forgiving.
+        block.config.params[pname] = { source: "auto", value: "" };
+      } else if (hasDefault) {
+        block.config.params[pname] = { source: "fixed", value: String(pdef.default) };
+      }
+    });
+    // Mark designer dirty so user is prompted to save
+    if (window._wfDesigner && typeof window._wfDesigner._markDirty === "function") {
+      try { window._wfDesigner._markDirty(); } catch (_) {}
+    }
+  }
+
   // ── Helper: render the "fixed" value input with schema-aware widgets ──
   // If the skill's parameter schema declares enum / type=integer / etc, render
   // a <select> or <input type=number> accordingly so users can't accidentally
   // fill "search_depth=1" (valid text, but Tavily rejects with 400).
   function _renderFixedParamInput(blockId, pName, currentVal, paramSchema) {
     const updateFn = `window._updateBlockParam(${blockId},'${pName}','value',this.value)`;
-    // 1. Enum → dropdown
+    // 1. Enum → dropdown. If the currently-stored value is not in the enum
+    // (e.g. legacy "1" from before we added validation), show it as a red
+    // invalid option at the top so the user can SEE there's a problem.
     if (paramSchema && Array.isArray(paramSchema.enum) && paramSchema.enum.length > 0) {
       const def = paramSchema.default != null ? String(paramSchema.default) : "";
       const cur = currentVal != null && currentVal !== "" ? String(currentVal) : def;
+      const isValid = paramSchema.enum.map(String).includes(cur);
+      const invalidOpt = (!isValid && currentVal) ? `<option value="${_escHtml(String(currentVal))}" selected style="color:#dc2626;background:#fef2f2;">⚠️ 目前值：${_escHtml(String(currentVal))}（不合法，請選新值）</option>` : "";
       const opts = paramSchema.enum.map(v => {
         const vs = String(v);
-        const sel = vs === cur ? " selected" : "";
+        const sel = isValid && vs === cur ? " selected" : "";
         return `<option value="${_escHtml(vs)}"${sel}>${_escHtml(vs)}</option>`;
       }).join("");
-      return `<select class="wf-param-map-val" onchange="${updateFn}">${opts}</select>`;
+      return `<select class="wf-param-map-val" onchange="${updateFn}">${invalidOpt}${opts}</select>`;
     }
     // 2. Integer / number → numeric input with min/max
     const t = paramSchema && paramSchema.type;
