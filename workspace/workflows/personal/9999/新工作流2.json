@@ -1,7 +1,7 @@
 {
-  "id": "新工作流1",
-  "name": "新工作流1",
-  "description": "新工作流1新工作流1新工作流1",
+  "id": "新工作流2",
+  "name": "新工作流2",
+  "description": "新工作流2新工作流2新工作流2",
   "icon": "",
   "tags": [],
   "trigger_keywords": [],
@@ -18,20 +18,25 @@
     {
       "id": 2,
       "type": "end",
-      "x": 360,
-      "y": 250,
+      "x": 420,
+      "y": 260,
       "label": "結束",
       "config": {}
     }
   ],
-  "connections": [],
+  "connections": [
+    {
+      "from": 1,
+      "to": 2
+    }
+  ],
   "trigger": {},
   "execution": {},
   "security": {},
   "context": {},
   "scope": "personal",
   "owner": "9999",
-  "updated_at": "2026-04-20T10:13:37.943652",
+  "updated_at": "2026-04-20T10:13:55.781784",
   "created_by": "pw_user_at_kway_com_tw",
-  "created_at": "2026-04-20T10:13:19.272375"
+  "created_at": "2026-04-20T10:13:55.781784"
 }
