@@ -3614,6 +3614,46 @@
     else block.config[field] = value;
   };
 
+  // ── Helper: render the "fixed" value input with schema-aware widgets ──
+  // If the skill's parameter schema declares enum / type=integer / etc, render
+  // a <select> or <input type=number> accordingly so users can't accidentally
+  // fill "search_depth=1" (valid text, but Tavily rejects with 400).
+  function _renderFixedParamInput(blockId, pName, currentVal, paramSchema) {
+    const updateFn = `window._updateBlockParam(${blockId},'${pName}','value',this.value)`;
+    // 1. Enum → dropdown
+    if (paramSchema && Array.isArray(paramSchema.enum) && paramSchema.enum.length > 0) {
+      const def = paramSchema.default != null ? String(paramSchema.default) : "";
+      const cur = currentVal != null && currentVal !== "" ? String(currentVal) : def;
+      const opts = paramSchema.enum.map(v => {
+        const vs = String(v);
+        const sel = vs === cur ? " selected" : "";
+        return `<option value="${_escHtml(vs)}"${sel}>${_escHtml(vs)}</option>`;
+      }).join("");
+      return `<select class="wf-param-map-val" onchange="${updateFn}">${opts}</select>`;
+    }
+    // 2. Integer / number → numeric input with min/max
+    const t = paramSchema && paramSchema.type;
+    if (t === "integer" || t === "number") {
+      const min = paramSchema.minimum != null ? ` min="${paramSchema.minimum}"` : "";
+      const max = paramSchema.maximum != null ? ` max="${paramSchema.maximum}"` : "";
+      const step = t === "integer" ? ' step="1"' : "";
+      const def = paramSchema.default != null ? String(paramSchema.default) : "";
+      const cur = currentVal != null && currentVal !== "" ? _escHtml(String(currentVal)) : "";
+      const placeholder = def ? `placeholder="預設: ${_escHtml(def)}"` : 'placeholder="數字"';
+      return `<input class="wf-param-map-val" type="number"${min}${max}${step} value="${cur}" ${placeholder} onchange="${updateFn}" />`;
+    }
+    // 3. Array / object → JSON textarea with sample
+    if (t === "array" || t === "object") {
+      const cur = currentVal != null ? _escHtml(typeof currentVal === "string" ? currentVal : JSON.stringify(currentVal)) : "";
+      const sample = t === "array" ? '["item1","item2"]' : '{"key":"value"}';
+      return `<input class="wf-param-map-val" type="text" value="${cur}" placeholder="JSON: ${sample}" onchange="${updateFn}" />`;
+    }
+    // 4. Default — string text input
+    const cur = _escHtml(currentVal || "");
+    const def = paramSchema && paramSchema.default != null ? `預設: ${_escHtml(String(paramSchema.default))}` : "固定值";
+    return `<input class="wf-param-map-val" type="text" value="${cur}" onchange="${updateFn}" placeholder="${def}" />`;
+  }
+
   // ── Block Params Renderer (used by prop panel Tab 2) ──
   function _renderBlockParams(block, container, fd, skillName, schema) {
     const cfg    = block.config || {};
@@ -3686,7 +3726,7 @@
                   `value="${_escHtml(pv.value || '')}" selected`
                 )}</select>`
             : pv.source === "fixed"
-              ? `<input class="wf-param-map-val" type="text" value="${_escHtml(pv.value || "")}" onchange="window._updateBlockParam(${block.id},'${pName}','value',this.value)" placeholder="固定值" />`
+              ? _renderFixedParamInput(block.id, pName, pv.value, schema?.properties?.[pName])
               : `<span class="wf-param-map-auto-hint">${pv.source === "previous_step" ? "使用前一節點輸出" : "由 LLM 自動推斷"}</span>`}
         </div>
       </div>`;
