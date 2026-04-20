@@ -1,0 +1,53 @@
+{
+  "description": "",
+  "icon": "",
+  "tags": [],
+  "variables": {
+    "global_inputs": [],
+    "env_requirements": [],
+    "definitions": []
+  },
+  "blocks": [],
+  "connections": [],
+  "trigger": {
+    "enabled": false,
+    "mode": "confirm",
+    "priority": 10,
+    "patterns": [],
+    "schedule": ""
+  },
+  "execution": {
+    "default_model": "",
+    "timeout": 120,
+    "on_error": "retry",
+    "max_retries": 3
+  },
+  "security": {
+    "require_auth": true,
+    "allowed_roles": [],
+    "rate_limit": 0,
+    "audit_log": true
+  },
+  "context": {
+    "workflow_key": "WorkflowK_zeBBfPkT7SzKj2dUnNQW"
+  },
+  "scope": "personal",
+  "owner": "1665",
+  "updated_at": "2026-04-20T14:57:57.528180",
+  "version": "1.0",
+  "workflow_id": "wf_1776668277488",
+  "display_name": "新工作流",
+  "source": "user_defined",
+  "metadata": {
+    "created_at": "2026-04-20T14:57:57.528213",
+    "updated_at": "2026-04-20T14:57:57.528180",
+    "run_count": 0,
+    "created_by": "line_U09e3122dcc146ed9784ec91acd6d7530"
+  },
+  "steps": [],
+  "constraints": {
+    "max_steps": 10,
+    "timeout_seconds": 300,
+    "skill_whitelist": null
+  }
+}
