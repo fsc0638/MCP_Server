@@ -1,4 +1,8 @@
-from server.services.user_document_chat import resolve_document_turn
+from server.services.user_document_chat import (
+    detect_requested_processing_action,
+    resolve_document_task_request,
+    resolve_document_turn,
+)
 
 
 DOCS = [
@@ -74,3 +78,27 @@ def test_resolve_document_turn_allows_numeric_reply_after_list():
     assert result is not None
     assert result["action"] == "prompt_choice"
     assert result["document"]["doc_id"] == "doc_c"
+
+
+def test_detect_requested_processing_action_for_todo_request():
+    result = detect_requested_processing_action(
+        "幫我將【01 【2026第578次經營管理會議紀錄】_Max_0420.docx】轉換成todo list，但是先不要上傳notion"
+    )
+    assert result == "todo"
+
+
+def test_resolve_document_task_request_binds_named_doc_for_todo_conversion():
+    docs = [
+        {
+            "doc_id": "doc_minutes",
+            "display_name": "01 【2026第578次經營管理會議紀錄】_Max_0420.docx",
+            "original_filename": "01 【2026第578次經營管理會議紀錄】_Max_0420.docx",
+        }
+    ]
+    result = resolve_document_task_request(
+        "幫我將【01 【2026第578次經營管理會議紀錄】_Max_0420.docx】轉換成todo list，但是先不要上傳notion",
+        docs,
+    )
+    assert result is not None
+    assert result["action"] == "todo"
+    assert result["document"]["doc_id"] == "doc_minutes"

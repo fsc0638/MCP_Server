@@ -136,6 +136,54 @@ _STOPWORDS = {
 }
 
 _REFERENCE_VERBS = ("看", "打開", "開啟", "顯示", "叫出", "找", "預覽", "查看", "檢視", "查閱", "瀏覽")
+_TASK_ACTION_PATTERNS = (
+    (
+        "todo",
+        (
+            "todo",
+            "to do",
+            "todo list",
+            "待辦",
+            "待办",
+            "待辦事項",
+            "待办事项",
+            "任務清單",
+            "任务清单",
+            "action item",
+            "action items",
+        ),
+    ),
+    (
+        "transcript",
+        (
+            "逐字稿",
+            "逐字",
+            "聽打",
+            "听打",
+            "transcript",
+            "transcribe",
+        ),
+    ),
+    (
+        "meeting_notes",
+        (
+            "會議紀錄",
+            "會議記錄",
+            "会议纪录",
+            "会议记录",
+            "meeting notes",
+            "meeting note",
+            "minutes",
+            "meeting minutes",
+            "會議摘要",
+            "会议摘要",
+            "會議重點",
+            "会议重点",
+            "整理會議",
+            "整理会议",
+        ),
+    ),
+)
 
 
 def _normalize(text: str) -> str:
@@ -199,6 +247,16 @@ def detect_display_choice(text: str) -> str | None:
         return "text"
     if normalized in {"3", "連結", "link", "開啟連結", "提供連結", "下載連結"}:
         return "link"
+    return None
+
+
+def detect_requested_processing_action(text: str) -> str | None:
+    normalized = _normalize(text)
+    if not normalized:
+        return None
+    for action, patterns in _TASK_ACTION_PATTERNS:
+        if any(pattern in normalized for pattern in patterns):
+            return action
     return None
 
 
@@ -334,6 +392,34 @@ def _looks_like_document_reference(text: str, documents: List[Dict[str, Any]]) -
     if len(tokens) == 1:
         return True
     return len(tokens) <= 2 and len(normalized) <= 40
+
+
+def resolve_document_task_request(user_text: str, documents: List[Dict[str, Any]]) -> Dict[str, Any] | None:
+    normalized = _normalize(user_text)
+    if not normalized or not documents:
+        return None
+
+    requested_action = detect_requested_processing_action(normalized)
+    if not requested_action:
+        return None
+
+    selected = _select_candidate(normalized, documents)
+    if selected:
+        return {"document": selected, "action": requested_action}
+
+    matches = _match_documents(normalized, documents)
+    if len(matches) == 1:
+        return {"document": matches[0], "action": requested_action}
+
+    # If there is only one document in the center and the user refers to
+    # "this file" style wording, bind it directly for downstream processing.
+    if len(documents) == 1 and any(
+        pattern in normalized
+        for pattern in ("這份", "这份", "這個", "这个", "剛上傳", "刚上传", "最近", "最新")
+    ):
+        return {"document": documents[0], "action": requested_action}
+
+    return None
 
 
 def resolve_document_turn(

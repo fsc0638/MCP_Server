@@ -22,6 +22,8 @@ logger = logging.getLogger("MCP_Server.ChatCore")
 _AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".opus", ".webm"}
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".heif"}
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+_TEXT_EXTRACTABLE_DOCUMENT_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
+_INLINE_SELECTED_DOCUMENT_ACTIONS = {"meeting_notes", "transcript", "todo"}
 _USER_DOCUMENT_ACTION_ALIASES = {
     "meeting_notes": "meeting_notes",
     "meeting": "meeting_notes",
@@ -176,11 +178,74 @@ def _needs_meeting_todo_pipeline(user_text: str, file_path: str | None = None) -
     return has_audio_signal and has_todo_signal
 
 
+def _infer_user_document_selection_from_chat(req: ChatRequest) -> None:
+    if (req.user_document_id or "").strip():
+        return
+
+    raw_user_id = (req.user_id or "").strip()
+    if not raw_user_id:
+        return
+
+    try:
+        from server.services.user_document_chat import resolve_document_task_request
+        from server.services.user_document_service import sanitize_user_key, user_document_service
+
+        user_key = sanitize_user_key(raw_user_id)
+        inferred = resolve_document_task_request(
+            req.user_input,
+            user_document_service.list_documents(user_key),
+        )
+        if not inferred:
+            return
+
+        document = inferred.get("document") or {}
+        doc_id = (document.get("doc_id") or "").strip()
+        if not doc_id:
+            return
+
+        req.user_document_id = doc_id
+        if not (req.user_document_action or "").strip():
+            req.user_document_action = inferred.get("action")
+        logger.info(
+            "[ChatCore] Inferred user document selection from chat. doc_id=%s action=%s",
+            doc_id,
+            req.user_document_action,
+        )
+    except Exception as exc:
+        logger.warning(f"[ChatCore] Failed to infer user document selection: {exc}")
+
+
 def _normalize_user_document_action(action: str | None) -> str | None:
     token = (action or "").strip().lower()
     if not token:
         return None
     return _USER_DOCUMENT_ACTION_ALIASES.get(token)
+
+
+def _build_selected_user_document_content_block(
+    doc_name: str,
+    doc_text: str,
+    max_chars: int = 24000,
+) -> str:
+    content = (doc_text or "").strip()
+    if not content:
+        return ""
+
+    snippet = content
+    truncated = False
+    if len(snippet) > max_chars:
+        snippet = snippet[:max_chars].rstrip()
+        truncated = True
+
+    block = (
+        "\n\n[Selected Document Content]\n"
+        f"File: {doc_name}\n"
+        "Use the extracted text below as the primary source for this request.\n\n"
+        f"{snippet}"
+    )
+    if truncated:
+        block += f"\n\n[文件內容較長，本輪先附上前 {max_chars} 字。]"
+    return block
 
 
 def _build_user_document_action_instruction(
@@ -304,6 +369,8 @@ async def process_chat_native(req: ChatRequest):
             status_code=503,
             detail=f"{provider.capitalize()} adapter is not available",
         )
+
+    _infer_user_document_selection_from_chat(req)
 
     selected_user_doc_path = ""
     selected_user_doc: dict = {}
@@ -524,6 +591,28 @@ async def process_chat_native(req: ChatRequest):
             _doc_name,
             _media_type,
         )
+        if (
+            selected_user_doc_action in _INLINE_SELECTED_DOCUMENT_ACTIONS
+            and (selected_user_doc.get("extension") or "").lower() in _TEXT_EXTRACTABLE_DOCUMENT_EXTENSIONS
+        ):
+            try:
+                from server.services.user_document_service import sanitize_user_key, user_document_service
+
+                user_doc_key = sanitize_user_key((req.user_id or "").strip())
+                _, selected_doc_text = user_document_service.get_text_content(
+                    user_doc_key,
+                    selected_user_doc.get("doc_id", ""),
+                )
+                user_content += _build_selected_user_document_content_block(
+                    _doc_name,
+                    selected_doc_text,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[ChatCore] Failed to inline selected document content for %s: %s",
+                    _doc_name,
+                    exc,
+                )
 
     _upload_handoff = bool(req.upload_handoff)
 

@@ -1371,6 +1371,16 @@
     return [".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".webm", ".flac"].indexOf(ext) !== -1;
   }
 
+  function isTextExtractableUserDocument(doc) {
+    if (!doc) return false;
+    const ext = String(doc.extension || "").toLowerCase();
+    return [".txt", ".md", ".pdf", ".docx"].indexOf(ext) !== -1;
+  }
+
+  function supportsTodoUserDocument(doc) {
+    return isAudioUserDocument(doc) || isTextExtractableUserDocument(doc);
+  }
+
   function buildUserDocumentActionPrompt(doc, action) {
     const name = doc && (doc.display_name || doc.original_filename || doc.doc_id) || "這份檔案";
     if (action === "meeting_notes") {
@@ -1496,6 +1506,13 @@
       deleteBtn.addEventListener("click", function () {
         deleteUserDocument(doc.doc_id, doc.display_name || doc.original_filename || "文件");
       });
+      const todoBtn = document.createElement("button");
+      todoBtn.type = "button";
+      todoBtn.className = "page-chat-doc-action-btn";
+      todoBtn.textContent = "Todo";
+      todoBtn.addEventListener("click", function () {
+        triggerUserDocumentAction(doc, "todo");
+      });
 
       actions.appendChild(previewBtn);
       actions.appendChild(textBtn);
@@ -1517,16 +1534,11 @@
           triggerUserDocumentAction(doc, "transcript");
         });
 
-        const todoBtn = document.createElement("button");
-        todoBtn.type = "button";
-        todoBtn.className = "page-chat-doc-action-btn";
-        todoBtn.textContent = "Todo";
-        todoBtn.addEventListener("click", function () {
-          triggerUserDocumentAction(doc, "todo");
-        });
-
         actions.appendChild(meetingBtn);
         actions.appendChild(transcriptBtn);
+      }
+
+      if (supportsTodoUserDocument(doc)) {
         actions.appendChild(todoBtn);
       }
 
