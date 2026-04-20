@@ -150,7 +150,16 @@ class WorkflowExecutor:
         accumulated_context = user_input
         final_output = ""
 
+        # Resume support: if this run_id already has successful checkpoints, skip them.
+        from server.services.workflow_checkpoint import get_run_block_status_map, upsert_block_run
+        _ck = get_run_block_status_map(run_id)
+
         for bid in order:
+            # Skip blocks already checkpointed as success in this run
+            if _ck.get(bid) == "success":
+                results.append({"block_id": bid, "status": "skipped", "reason": "checkpoint"})
+                continue
+
             block = blocks[bid]
             block_type = block.get("type", "")
 
@@ -389,6 +398,16 @@ class WorkflowExecutor:
                             "approval_id": approval_id,
                             "risk_description": result.get("risk_description", ""),
                         })
+                        upsert_block_run(
+                            run_id=run_id,
+                            workflow_id=workflow_id,
+                            block_id=bid,
+                            skill_name=skill_name,
+                            status="requires_approval",
+                            output_preview=result.get("risk_description", "") or "",
+                            resolved_vars=resolved_vars,
+                            accumulated_context=accumulated_context,
+                        )
 
                         # Stop execution (pending)
                         success = False
@@ -429,6 +448,16 @@ class WorkflowExecutor:
                         "status": "success",
                         "output_preview": output_text[:300],
                     })
+                    upsert_block_run(
+                        run_id=run_id,
+                        workflow_id=workflow_id,
+                        block_id=bid,
+                        skill_name=skill_name,
+                        status="success",
+                        output_preview=output_text[:300],
+                        resolved_vars=resolved_vars,
+                        accumulated_context=accumulated_context,
+                    )
                     success = True
                     break
 

@@ -113,4 +113,22 @@ def init_db(conn: sqlite3.Connection) -> None:
             """
         )
 
+        # Workflow checkpoints (resume-safe)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workflow_block_runs (
+              run_id TEXT NOT NULL,
+              workflow_id TEXT NOT NULL,
+              block_id TEXT NOT NULL,
+              skill_name TEXT NOT NULL,
+              status TEXT NOT NULL,
+              output_preview TEXT NOT NULL DEFAULT '',
+              vars_sha256 TEXT NOT NULL DEFAULT '',
+              context_sha256 TEXT NOT NULL DEFAULT '',
+              ts TEXT NOT NULL,
+              PRIMARY KEY (run_id, block_id)
+            );
+            """
+        )
+
         conn.commit()
