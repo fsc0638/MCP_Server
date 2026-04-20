@@ -141,19 +141,39 @@ def list_workflows(scope: str = "", owner: str = "", dept_code: str = ""):
             try:
                 data = json.loads(f.read_text(encoding="utf-8"))
                 _ctx = data.get("context", {})
+
+                # v2-aware field reads with legacy fallbacks
+                _display = data.get("display_name") or data.get("name") or f.stem
+
+                # variables: v2 dict {global_inputs, env_requirements, definitions}
+                _vars = data.get("variables") or []
+                if isinstance(_vars, dict):
+                    _vars_count = len(_vars.get("definitions") or [])
+                else:
+                    _vars_count = len(_vars)
+
+                # trigger keywords: v2 moves to trigger.patterns
+                _trig = data.get("trigger") or {}
+                _keywords = _trig.get("patterns") if isinstance(_trig, dict) else None
+                if not _keywords:
+                    _keywords = data.get("trigger_keywords") or []  # legacy fallback
+
                 workflows.append({
-                    "id": f.stem,
-                    "name": data.get("name", f.stem),
+                    "id": data.get("workflow_id") or f.stem,
+                    "name": _display,
+                    "display_name": _display,  # explicit v2 field
+                    "workflow_id": data.get("workflow_id") or f.stem,
                     "description": data.get("description", ""),
                     "icon": data.get("icon", ""),
                     "tags": data.get("tags", []),
-                    "trigger_keywords": data.get("trigger_keywords", []),
+                    "trigger_keywords": _keywords,
                     "workflow_key": _ctx.get("workflow_key", ""),
                     "block_count": len(data.get("blocks", [])),
                     "connection_count": len(data.get("connections", [])),
-                    "variables_count": len(data.get("variables", [])),
-                    "has_trigger": bool(data.get("trigger", {}).get("enabled")),
-                    "updated_at": data.get("updated_at", ""),
+                    "variables_count": _vars_count,
+                    "has_trigger": bool(_trig.get("enabled")) if isinstance(_trig, dict) else False,
+                    "updated_at": data.get("updated_at") or data.get("metadata", {}).get("updated_at", ""),
+                    "source": data.get("source", ""),
                     "scope": wf_scope,
                 })
             except Exception:
