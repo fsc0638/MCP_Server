@@ -814,14 +814,24 @@
           body: JSON.stringify(data),
         });
 
-        // Permission / quota errors — show explicit message and DO NOT fall
-        // back to localStorage (user's data would silently vanish on refresh).
-        if (resp.status === 429 || resp.status === 403) {
+        // Permission / quota / validation errors — show explicit message and
+        // DO NOT fall back to localStorage (user's data would silently vanish
+        // on refresh).
+        if (resp.status === 422 || resp.status === 429 || resp.status === 403) {
           const errData = await resp.json().catch(() => ({}));
-          const detail = errData.detail || `伺服器回應 ${resp.status}`;
-          const icon = resp.status === 429 ? "⚠️ 配額已滿" : "❌ 權限不足";
-          if (window.showToast) window.showToast(`${icon}：${detail}`, "error");
-          else alert(`${icon}：${detail}`);
+          const det = errData.detail || {};
+          // Backend may put errors at detail.errors (Phase 2 Gate 0 shape) or detail as string (FastAPI default)
+          const messages =
+            (Array.isArray(det.errors) && det.errors) ||
+            (Array.isArray(det) && det.map(e => e.msg || JSON.stringify(e))) ||
+            (typeof det === "string" ? [det] : []) ||
+            [`伺服器回應 ${resp.status}`];
+          const icon = resp.status === 429 ? "⚠️ 配額已滿"
+                     : resp.status === 403 ? "❌ 權限不足"
+                     : "⛔ 無法儲存";
+          const body = messages.slice(0, 5).join("；");
+          if (window.showToast) window.showToast(`${icon}：${body}`, "error");
+          else alert(`${icon}：${body}`);
           return false;
         }
 
