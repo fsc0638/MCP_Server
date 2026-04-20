@@ -337,18 +337,21 @@ def migrate_legacy(
 def _slugify(text: str) -> str:
     """Convert arbitrary text to lowercase ASCII slug.
 
-    If all chars are non-ASCII (e.g. Chinese), generate a fallback id from hash
-    so the result is always a valid workflow_id.
+    Preserves both hyphens and underscores — common timestamp-based IDs like
+    `wf-1776666666` should stay intact rather than being forced to use only
+    underscores. If all chars are non-ASCII (e.g. Chinese), generate a
+    fallback id from hash so the result is always a valid workflow_id.
     """
     s = (text or "").strip().lower()
-    s = re.sub(r"[^a-z0-9]+", "_", s)
-    s = re.sub(r"_+", "_", s).strip("_")
+    # Keep a-z, 0-9, underscore, hyphen; everything else becomes underscore
+    s = re.sub(r"[^a-z0-9_-]+", "_", s)
+    # Collapse repeated separators (mixed) but preserve the rest
+    s = re.sub(r"[_-]{2,}", lambda m: m.group(0)[0], s)
+    s = s.strip("_-")
     if not s or len(s) < 3:
-        # Fallback: hash-based id
         import hashlib
         digest = hashlib.md5((text or "legacy").encode("utf-8")).hexdigest()[:10]
         s = f"wf_{digest}"
-    # Ensure starts with letter
     if not s[0].isalpha():
         s = "wf_" + s
     return s[:64]

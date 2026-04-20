@@ -15,9 +15,9 @@
     },
     "workflow_id": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_]{2,63}$",
-      "description": "Programmatic ID (lowercase ASCII + underscore). Used as filename and for sub-workflow references. 3-64 chars.",
-      "examples": ["search_and_summarize", "daily_news_digest"]
+      "pattern": "^[a-z][a-z0-9_-]{2,63}$",
+      "description": "Programmatic ID (lowercase ASCII + underscore + hyphen). Used as filename and for sub-workflow references. 3-64 chars.",
+      "examples": ["search_and_summarize", "daily_news_digest", "wf-1776666666"]
     },
     "display_name": {
       "type": "string",

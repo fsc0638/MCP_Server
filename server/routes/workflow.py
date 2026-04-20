@@ -323,9 +323,9 @@ def save_workflow(
     final_path = path
     renamed = False
     if final_slug and final_slug != workflow_id:
-        # Guard: only switch if slug looks safe (pure slug pattern)
+        # Guard: only switch if slug looks safe (pure slug pattern incl. hyphen)
         import re as _re
-        if _re.match(r"^[a-z][a-z0-9_]{2,63}$", final_slug):
+        if _re.match(r"^[a-z][a-z0-9_-]{2,63}$", final_slug):
             final_path = _workflows_dir(req.scope, req.owner) / f"{final_slug}.json"
             renamed = True
 
