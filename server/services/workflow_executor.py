@@ -238,41 +238,77 @@ class WorkflowExecutor:
         user_input: str,
         user_context: dict = None,
     ) -> Dict[str, str]:
-        """Resolve workflow variables to concrete values."""
+        """Resolve workflow variables to concrete values.
+
+        Follows the dual-layer variable naming convention (integrated report §6):
+          - _xxx        system reserved (_run_id, _started_at, _group_id, ...)
+          - ALL_CAPS    global / shared (environment, API keys)
+          - camelCase   execution-time (skill outputs, step results)
+
+        User-defined variables whose name doesn't fit any convention trigger a
+        warning in the log so they can be renamed gradually without breaking
+        existing workflows.
+        """
+        from server.services.workflow_schema import classify_variable as _classify
+
         resolved = {}
         uc = user_context or {}
 
-        # System variables (always available)
+        # ── System variables (always available) ──
+        # Naming follows the _xxx convention per the integrated report.
         now = datetime.now()
-        resolved["current_date"] = now.strftime("%Y-%m-%d")
-        resolved["current_time"] = now.strftime("%H:%M:%S")
-        resolved["user_name"] = uc.get("name", "User")
-        resolved["user_dept"] = uc.get("department", uc.get("dept_code", ""))
-        resolved["session_id"] = uc.get("session_id", "")
-        resolved["workflow_name"] = ""  # Will be set by caller
+        resolved["_current_date"] = now.strftime("%Y-%m-%d")
+        resolved["_current_time"] = now.strftime("%H:%M:%S")
+        resolved["_started_at"] = now.isoformat()
+        resolved["_user_name"] = uc.get("name", "User")
+        resolved["_user_dept"] = uc.get("department", uc.get("dept_code", ""))
+        resolved["_session_id"] = uc.get("session_id", "")
+        resolved["_workflow_name"] = ""  # Will be set by caller
+        resolved["_run_id"] = f"run_{int(now.timestamp()*1000)}"
+        # Legacy aliases — kept so existing {{current_date}} etc. keep working
+        # until all templates are updated in Phase 5. Logged once per run.
+        resolved["current_date"] = resolved["_current_date"]
+        resolved["current_time"] = resolved["_current_time"]
+        resolved["user_name"] = resolved["_user_name"]
+        resolved["user_dept"] = resolved["_user_dept"]
+        resolved["session_id"] = resolved["_session_id"]
+        resolved["workflow_name"] = resolved["_workflow_name"]
 
         for var in variables:
             name = var.get("name", "")
+            if not name:
+                continue
+
+            # ── Naming convention check (1.3) ──
+            kind = _classify(name)
+            if kind == "invalid":
+                logger.warning(
+                    f"[WFExec] Variable '{name}' doesn't follow naming conventions "
+                    f"(_system / ALL_CAPS_GLOBAL / camelCaseExecution). "
+                    f"Keeping but this may be flagged by Gate 0 in future."
+                )
+
             source = var.get("source", "user_input")
             default = var.get("default_value", "")
 
             if source == "fixed":
                 resolved[name] = default
             elif source == "system":
-                # Map system variable references
+                # Map system variable references (legacy syntax: default="{{current_date}}")
                 resolved[name] = resolved.get(default.strip("{}"), default)
             elif source == "user_input":
-                # Use the full user input as the variable value
                 resolved[name] = user_input or default
             elif source == "previous_step":
-                # Will be filled during execution
                 resolved[name] = default
             elif source == "auto":
-                # Placeholder — would need LLM to resolve
                 resolved[name] = default or user_input
             elif source == "secret":
-                # Read from environment variable
                 env_key = default.upper().replace(" ", "_") if default else name.upper()
+                # Secrets MUST be ALL_CAPS per convention — warn if not
+                if _classify(env_key) != "global":
+                    logger.warning(
+                        f"[WFExec] Secret variable '{name}' maps to non-ALL_CAPS env '{env_key}'"
+                    )
                 resolved[name] = os.getenv(env_key, "")
             else:
                 resolved[name] = default

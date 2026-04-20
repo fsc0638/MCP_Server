@@ -244,6 +244,22 @@ def save_workflow(
         "owner": req.owner,
         "updated_at": datetime.now().isoformat(),
     }
+
+    # Phase 1.5: Upgrade incoming data to v2 format before persistence.
+    # This lets both the legacy block-editor UI (sends old format) and any
+    # future v2-native callers (wizard / LLM generator) share the same store.
+    try:
+        from server.services.workflow_schema import is_legacy, migrate_legacy
+        if is_legacy(data):
+            data = migrate_legacy(data)
+            # Preserve fields the editor UI updated (name/desc may have changed)
+            data["display_name"] = req.name or data.get("display_name", workflow_id)
+            data["description"] = req.description or data.get("description", "")
+            data["scope"] = req.scope
+            data["owner"] = req.owner
+    except Exception as _mig_err:
+        logger.warning(f"[WF Save] Schema upgrade failed (non-fatal): {_mig_err}")
+
     # Track the creator for dept-scope quota counting
     _uid = (caller_ctx or {}).get("user_id", "")
     if _uid:
