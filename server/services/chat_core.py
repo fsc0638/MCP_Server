@@ -22,6 +22,15 @@ logger = logging.getLogger("MCP_Server.ChatCore")
 _AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".opus", ".webm"}
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".heif"}
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+_USER_DOCUMENT_ACTION_ALIASES = {
+    "meeting_notes": "meeting_notes",
+    "meeting": "meeting_notes",
+    "minutes": "meeting_notes",
+    "transcript": "transcript",
+    "transcribe": "transcript",
+    "todo": "todo",
+    "tasks": "todo",
+}
 
 
 def _is_audio_file_path(file_path: str | None) -> bool:
@@ -98,6 +107,79 @@ def _needs_meeting_todo_pipeline(user_text: str, file_path: str | None = None) -
     return has_audio_signal and has_todo_signal
 
 
+def _normalize_user_document_action(action: str | None) -> str | None:
+    token = (action or "").strip().lower()
+    if not token:
+        return None
+    return _USER_DOCUMENT_ACTION_ALIASES.get(token)
+
+
+def _build_user_document_action_instruction(
+    action: str | None,
+    doc_name: str,
+    media_type: str,
+) -> str:
+    base = (
+        "\n\n[Document Center Selection]\n"
+        f"User selected '{doc_name}' from document center as the input {media_type} for this turn.\n"
+        "Use existing file context directly, and do not ask the user to upload again or provide an absolute path.\n"
+    )
+    if action == "meeting_notes":
+        return (
+            base
+            + "Target output: meeting notes with agenda, key decisions, open issues, and action items.\n"
+            + "If this is audio, transcribe first before summarizing.\n"
+            + "Preferred tool order when available: mcp-transcribe -> mcp-meeting-analyzer."
+        )
+    if action == "transcript":
+        return (
+            base
+            + "Target output: a clean transcript with speaker separation and readable paragraph breaks.\n"
+            + "If timestamps are available, include them.\n"
+            + "Preferred tool when available: mcp-transcribe."
+        )
+    if action == "todo":
+        return (
+            base
+            + "Target output: TODO/task list extracted from the content.\n"
+            + "If this is audio, run transcript -> meeting analysis -> TODO extraction flow.\n"
+            + "Preferred tool order when available: mcp-transcribe -> mcp-meeting-analyzer -> mcp-notion-crud."
+        )
+    return base.strip()
+
+
+def _resolve_selected_user_document(req: ChatRequest) -> tuple[str, dict, str | None]:
+    doc_id = (req.user_document_id or "").strip()
+    if not doc_id:
+        raise HTTPException(status_code=400, detail="missing_user_document_id")
+
+    raw_user_id = (req.user_id or "").strip()
+    if not raw_user_id:
+        raise HTTPException(status_code=401, detail="user_document_requires_login")
+
+    from server.services.user_document_service import (
+        ExpiredDocumentError,
+        sanitize_user_key,
+        user_document_service,
+    )
+
+    user_key = sanitize_user_key(raw_user_id)
+    try:
+        document = user_document_service.get_document(user_key, doc_id)
+        path = user_document_service.get_document_path(user_key, doc_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ExpiredDocumentError as exc:
+        raise HTTPException(status_code=410, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Document file missing: {doc_id}")
+
+    return str(path), document, _normalize_user_document_action(req.user_document_action)
+
+
 async def process_chat_native(req: ChatRequest):
     """Handle a web chat turn through the active provider adapter."""
 
@@ -154,9 +236,16 @@ async def process_chat_native(req: ChatRequest):
     except Exception:
         session_id = "default"
 
+    selected_user_doc_path = ""
+    selected_user_doc: dict = {}
+    selected_user_doc_action = None
+    if (req.user_document_id or "").strip():
+        selected_user_doc_path, selected_user_doc, selected_user_doc_action = _resolve_selected_user_document(req)
+
     # Register file context for downstream tools (WebUI parity with LINE pipeline).
     active_original_file = None
     for candidate in (
+        selected_user_doc_path or None,
         (req.attached_file or "").strip() or None,
         _extract_file_path_from_text(req.user_input or ""),
     ):
@@ -240,6 +329,14 @@ async def process_chat_native(req: ChatRequest):
             documents = user_document_service.list_documents(user_doc_key)
             documents_by_id = {doc.get("doc_id"): doc for doc in documents}
 
+            # If this turn explicitly targets a Document Center file for downstream actions
+            # (e.g. transcript / todo pipeline), skip deterministic preview/list interception.
+            explicit_doc_action_turn = bool((req.user_document_id or "").strip())
+            if explicit_doc_action_turn:
+                session_mgr.set_metadata(session_id, PENDING_DOCUMENT_KEY, None)
+                session_mgr.set_metadata(session_id, PENDING_CANDIDATES_KEY, [])
+                raise RuntimeError("skip_document_turn_interception")
+
             pending_doc_meta = session_mgr.get_metadata(session_id, PENDING_DOCUMENT_KEY, default=None)
             pending_doc_id = pending_doc_meta.get("doc_id") if isinstance(pending_doc_meta, dict) else ""
             pending_document = documents_by_id.get(pending_doc_id) if pending_doc_id else None
@@ -316,7 +413,10 @@ async def process_chat_native(req: ChatRequest):
 
                 return _make_immediate_success_response(final_text, extra_payload=response_meta)
     except Exception as doc_turn_error:
-        logger.warning(f"[DocTurn] Fallback to normal chat due to error: {doc_turn_error}")
+        if str(doc_turn_error) == "skip_document_turn_interception":
+            logger.info("[DocTurn] bypassed due to explicit user_document_id action turn")
+        else:
+            logger.warning(f"[DocTurn] Fallback to normal chat due to error: {doc_turn_error}")
 
     logger.info(f"Chat Request: [Model: {req.model}] [Lang: {req.language}] [Detail: {req.detail_level}]")
     dynamic_prompt = get_universal_system_prompt(
@@ -329,6 +429,20 @@ async def process_chat_native(req: ChatRequest):
     session_mgr._update_system_prompt(session_id, dynamic_prompt)
 
     user_content = req.user_input
+    if selected_user_doc:
+        _doc_name = (
+            selected_user_doc.get("display_name")
+            or selected_user_doc.get("original_filename")
+            or selected_user_doc.get("doc_id")
+            or "document"
+        )
+        _media_type = _detect_media_type_label(active_original_file or selected_user_doc_path)
+        user_content += _build_user_document_action_instruction(
+            selected_user_doc_action,
+            _doc_name,
+            _media_type,
+        )
+
     _upload_handoff = bool(req.upload_handoff)
 
     # ── Workflow-First Matching ─────────────────────────────────────
@@ -594,7 +708,7 @@ async def process_chat_native(req: ChatRequest):
                     messages=outbound_history,
                     user_query=user_content,
                     session_id=session_id,
-                    attached_file=req.attached_file,
+                    attached_file=active_original_file or req.attached_file,
                     temperature=req.temperature or 0.7,
                     visual_docs=req.selected_docs or [],
                     tools_enabled=_tools_enabled,

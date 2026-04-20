@@ -17,6 +17,8 @@ class ChatRequest(BaseModel):
     injected_skill: Optional[str] = None
     execute: Optional[bool] = False
     attached_file: Optional[str] = None
+    user_document_id: Optional[str] = None
+    user_document_action: Optional[str] = None
     upload_handoff: Optional[bool] = False
     selected_docs: Optional[list[str]] = None
     temperature: Optional[float] = 0.7

@@ -1364,6 +1364,43 @@
     updateUserDocumentStats();
   }
 
+  function isAudioUserDocument(doc) {
+    if (!doc) return false;
+    if (doc.preview_type === "audio-inline") return true;
+    const ext = String(doc.extension || "").toLowerCase();
+    return [".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".webm", ".flac"].indexOf(ext) !== -1;
+  }
+
+  function buildUserDocumentActionPrompt(doc, action) {
+    const name = doc && (doc.display_name || doc.original_filename || doc.doc_id) || "這份檔案";
+    if (action === "meeting_notes") {
+      return "請使用我在文件中心指定的檔案「" + name + "」整理會議紀錄，包含重點、決策、風險與後續行動。";
+    }
+    if (action === "transcript") {
+      return "請使用我在文件中心指定的檔案「" + name + "」先產出逐字稿，盡量保留說話者分段。";
+    }
+    if (action === "todo") {
+      return "請使用我在文件中心指定的檔案「" + name + "」，整理出可執行的 Todo 清單與優先順序。";
+    }
+    return "請使用我在文件中心指定的檔案「" + name + "」協助處理。";
+  }
+
+  function triggerUserDocumentAction(doc, action) {
+    if (!doc || !doc.doc_id) return;
+    const normalizedAction = String(action || "").trim();
+    if (!normalizedAction) return;
+    if (listActiveTasksForSession(state.sessionId).length > 0) {
+      showToast("目前仍有任務執行中，請稍候再試", "info");
+      return;
+    }
+    const prompt = buildUserDocumentActionPrompt(doc, normalizedAction);
+    showToast("已使用「" + (doc.display_name || doc.original_filename || "文件") + "」啟動任務", "info");
+    sendMessage(prompt, {
+      userDocumentId: doc.doc_id,
+      userDocumentAction: normalizedAction,
+    });
+  }
+
   function renderUserDocuments(documents) {
     const list = document.getElementById("userDocumentList");
     const empty = document.getElementById("userDocumentEmpty");
@@ -1428,7 +1465,7 @@
       const textBtn = document.createElement("button");
       textBtn.type = "button";
       textBtn.className = "page-chat-doc-action-btn";
-      if (doc.preview_type === "audio-inline") {
+      if (isAudioUserDocument(doc)) {
         textBtn.textContent = "原檔";
         textBtn.addEventListener("click", function () {
           window.open(
@@ -1462,6 +1499,37 @@
 
       actions.appendChild(previewBtn);
       actions.appendChild(textBtn);
+
+      if (isAudioUserDocument(doc)) {
+        const meetingBtn = document.createElement("button");
+        meetingBtn.type = "button";
+        meetingBtn.className = "page-chat-doc-action-btn";
+        meetingBtn.textContent = "會議紀錄";
+        meetingBtn.addEventListener("click", function () {
+          triggerUserDocumentAction(doc, "meeting_notes");
+        });
+
+        const transcriptBtn = document.createElement("button");
+        transcriptBtn.type = "button";
+        transcriptBtn.className = "page-chat-doc-action-btn";
+        transcriptBtn.textContent = "逐字稿";
+        transcriptBtn.addEventListener("click", function () {
+          triggerUserDocumentAction(doc, "transcript");
+        });
+
+        const todoBtn = document.createElement("button");
+        todoBtn.type = "button";
+        todoBtn.className = "page-chat-doc-action-btn";
+        todoBtn.textContent = "Todo";
+        todoBtn.addEventListener("click", function () {
+          triggerUserDocumentAction(doc, "todo");
+        });
+
+        actions.appendChild(meetingBtn);
+        actions.appendChild(transcriptBtn);
+        actions.appendChild(todoBtn);
+      }
+
       actions.appendChild(renameBtn);
       actions.appendChild(deleteBtn);
 
@@ -3028,12 +3096,17 @@
     const opts = options || {};
     const content = (text || "").trim();
     let requestSessionId = state.sessionId;
-    const pendingAudio = state.sessionPendingAudioFile[requestSessionId] || null;
+    const explicitUserDocumentId =
+      typeof opts.userDocumentId === "string" ? opts.userDocumentId.trim() : "";
+    const explicitUserDocumentAction =
+      typeof opts.userDocumentAction === "string" ? opts.userDocumentAction.trim() : "";
+    const shouldUseQueuedAttachment = !explicitUserDocumentId;
+    const pendingAudio = shouldUseQueuedAttachment ? (state.sessionPendingAudioFile[requestSessionId] || null) : null;
     const explicitAttachedFile =
       typeof opts.attachedFile === "string" ? opts.attachedFile.trim() : "";
     // Generic attachment queued via 📎 button (takes precedence if neither of
     // explicit nor pending audio applies).
-    const pendingAttachment = !explicitAttachedFile && !(pendingAudio && pendingAudio.path)
+    const pendingAttachment = shouldUseQueuedAttachment && !explicitAttachedFile && !(pendingAudio && pendingAudio.path)
       ? _takeSessionAttachment(requestSessionId)
       : null;
     const attachedFileForTurn =
@@ -3103,6 +3176,12 @@
       };
       if (attachedFileForTurn) {
         payload.attached_file = attachedFileForTurn;
+      }
+      if (explicitUserDocumentId) {
+        payload.user_document_id = explicitUserDocumentId;
+      }
+      if (explicitUserDocumentAction) {
+        payload.user_document_action = explicitUserDocumentAction;
       }
       if (uploadHandoff) {
         payload.upload_handoff = true;
