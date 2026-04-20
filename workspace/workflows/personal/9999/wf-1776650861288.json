@@ -1,0 +1,22 @@
+{
+  "id": "wf-1776650861288",
+  "name": "新工作流",
+  "description": "",
+  "icon": "",
+  "tags": [],
+  "trigger_keywords": [],
+  "variables": [],
+  "blocks": [],
+  "connections": [],
+  "trigger": {},
+  "execution": {},
+  "security": {},
+  "context": {
+    "workflow_key": "WorkflowK_2qqBmYeHvskPbi0bMk2Z"
+  },
+  "scope": "personal",
+  "owner": "9999",
+  "updated_at": "2026-04-20T10:07:41.328577",
+  "created_by": "pw_user_at_kway_com_tw",
+  "created_at": "2026-04-20T10:07:41.328577"
+}
