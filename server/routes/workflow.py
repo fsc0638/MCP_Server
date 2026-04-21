@@ -761,7 +761,7 @@ def list_accessible_skills(
 
     out: List[Dict[str, Any]] = []
     try:
-        registry = uma.skill_registry
+        registry = uma.registry
         skills_dict = getattr(registry, "skills", {}) or {}
     except Exception as e:
         logger.warning(f"[AccessibleSkills] registry access failed: {e}")
@@ -920,13 +920,13 @@ async def llm_generate_workflow(
     from server.dependencies.uma import get_uma_instance
     uma = get_uma_instance()
     accessible: List[Dict[str, Any]] = []
-    for registry_key, entry in (uma.skill_registry.skills or {}).items():
+    for registry_key, entry in (uma.registry.skills or {}).items():
         meta = (entry or {}).get("metadata") or {}
         sid = meta.get("name") or registry_key
         # Permission check
-        if hasattr(uma.skill_registry, "can_access"):
+        if hasattr(uma.registry, "can_access"):
             try:
-                if not uma.skill_registry.can_access(sid, caller_ctx):
+                if not uma.registry.can_access(sid, caller_ctx):
                     continue
             except Exception:
                 pass
