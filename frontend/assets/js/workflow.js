@@ -2311,11 +2311,13 @@
         const stepNames = (wf.steps || []).map(s => s.skill_id || s.type).join(" → ");
         let msg = `✅ 已產生：「${wf.display_name || wf.workflow_id}」`;
         if (stepNames) msg += ` (${stepNames})`;
+        let runSuccess = false;
         if (execute && data.execution) {
           const ex = data.execution;
           if (ex.status === "success") {
-            msg += `\n🚀 執行成功 (${ex.blocks_executed || 0} 個節點)。結果已記錄 — 如需永久儲存請到聊天頁找升格卡片。`;
+            msg += `\n🚀 執行成功 (${ex.blocks_executed || 0} 個節點)`;
             statusEl.style.color = "#059669";
+            runSuccess = true;
           } else {
             msg += `\n⚠️ 執行失敗：${(ex.errors || [ex.message || "unknown"]).join("；")}`;
             statusEl.style.color = "#dc2626";
@@ -2327,12 +2329,88 @@
         previewEl.style.display = "block";
         previewEl.textContent = JSON.stringify(wf, null, 2);
 
+        // Clean up any previous save button / output div from a prior run
+        mask.querySelectorAll(".wf-llm-save-row, .wf-llm-output-div").forEach(el => el.remove());
+
         if (execute && data.execution?.status === "success" && data.execution?.final_output) {
           // Also show the actual output from the run
           const outDiv = document.createElement("div");
+          outDiv.className = "wf-llm-output-div";
           outDiv.style.cssText = "background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:10px;margin-top:10px;font-size:0.78rem;color:#14532d;max-height:200px;overflow-y:auto;white-space:pre-wrap;";
           outDiv.textContent = "最終輸出：\n" + (data.execution.final_output || "").slice(0, 1500);
           previewEl.insertAdjacentElement("afterend", outDiv);
+        }
+
+        // ── Save-as-permanent block (Phase 6 promotion inline) ──
+        // Runs successful + has run_id → expose a save button right here so
+        // user doesn't have to hop to the chat page to find the promotion card.
+        const runId = data.run_id || data.execution?.run_id || "";
+        if (runSuccess && runId) {
+          const saveRow = document.createElement("div");
+          saveRow.className = "wf-llm-save-row";
+          saveRow.style.cssText = "background:#f8f5ff;border:1px dashed #c7b9ff;border-radius:8px;padding:12px;margin-top:12px;";
+          saveRow.innerHTML = `
+            <div style="font-size:0.82rem;font-weight:700;color:#1e293b;margin-bottom:8px;">💾 這個流程很好用嗎？</div>
+            <div style="font-size:0.72rem;color:#64748b;margin-bottom:10px;">按下「儲存為我的工作流」可以永久保留，之後在聊天中用關鍵字就能觸發。</div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input id="wfLLMPromoteName" type="text" placeholder="工作流名稱" value="${_escHtml(wf.display_name || '')}"
+                style="flex:1;padding:5px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.78rem;" />
+              <select id="wfLLMPromoteScope" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.78rem;">
+                <option value="personal">👤 個人</option>
+                <option value="department">🏢 部門</option>
+                <option value="system">🌐 系統（admin）</option>
+              </select>
+              <button id="wfLLMPromoteBtn" type="button" style="padding:6px 14px;background:#6c5ce7;color:#fff;border:none;border-radius:4px;font-size:0.78rem;font-weight:600;cursor:pointer;white-space:nowrap;">儲存</button>
+            </div>
+            <div id="wfLLMPromoteStatus" style="font-size:0.72rem;margin-top:6px;min-height:16px;"></div>
+          `;
+          (mask.querySelector(".wf-llm-output-div") || previewEl).insertAdjacentElement("afterend", saveRow);
+
+          saveRow.querySelector("#wfLLMPromoteBtn").addEventListener("click", async (ev) => {
+            const nameIn = saveRow.querySelector("#wfLLMPromoteName");
+            const scopeSel = saveRow.querySelector("#wfLLMPromoteScope");
+            const statusDiv = saveRow.querySelector("#wfLLMPromoteStatus");
+            const displayName = nameIn.value.trim();
+            if (!displayName) {
+              statusDiv.textContent = "⚠️ 請先填名稱";
+              statusDiv.style.color = "#dc2626";
+              nameIn.focus();
+              return;
+            }
+            const btn = ev.currentTarget;
+            btn.disabled = true;
+            btn.textContent = "儲存中…";
+            statusDiv.style.color = "#475569";
+            statusDiv.textContent = "正在儲存…";
+            try {
+              const r = await fetch("/api/workflows/promote", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({
+                  run_id: runId,
+                  display_name: displayName,
+                  target_scope: scopeSel.value,
+                  target_owner: "",
+                }),
+              });
+              const rd = await r.json().catch(() => ({}));
+              if (!r.ok) {
+                const det = rd?.detail ? (typeof rd.detail === "string" ? rd.detail : JSON.stringify(rd.detail)) : `HTTP ${r.status}`;
+                throw new Error(det);
+              }
+              statusDiv.style.color = "#059669";
+              statusDiv.textContent = `✅ 已儲存為工作流「${displayName}」`;
+              btn.textContent = "已儲存";
+              // Also refresh landing cards if visible
+              if (typeof renderWorkflowLanding === "function") try { renderWorkflowLanding(); } catch (_) {}
+            } catch (err) {
+              statusDiv.style.color = "#dc2626";
+              statusDiv.textContent = "❌ 儲存失敗：" + (err.message || err);
+              btn.disabled = false;
+              btn.textContent = "儲存";
+            }
+          });
         }
 
         submitBtn.textContent = "✨ 重新產生";
