@@ -97,8 +97,22 @@ def _format_web_search(data) -> str:
         title = (r.get("title") or "").strip().replace("\n", " ")
         url = r.get("url") or ""
         content = (r.get("content") or "").strip()
-        # Strip markdown that would break formatting & truncate
-        content = re.sub(r"\n{3,}", "\n\n", content)
+        # Clean noisy markdown: strip images ![alt](url), strip long link
+        # lists (navigation menus), collapse blank lines, then pick the first
+        # meaningful paragraph so the user gets a real summary not a ToC.
+        content = re.sub(r"!\[[^\]]*\]\([^)]+\)", "", content)       # drop images
+        content = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", content)   # flatten [text](url) → text
+        # Collapse repeating nav/menu lines (short bullet-like items)
+        content_lines = [ln.strip() for ln in content.splitlines()]
+        content_lines = [ln for ln in content_lines if ln]
+        # Find the first line that looks like real content (longer than 30 chars)
+        body = []
+        for ln in content_lines:
+            if len(ln) < 30 and (ln.startswith(("•", "*", "-", "#"))
+                                 or ln.endswith(("│", "|"))):
+                continue
+            body.append(ln)
+        content = "\n".join(body).strip()
         if len(content) > 400:
             content = content[:400] + "…"
         if title and url:
@@ -164,25 +178,38 @@ def _format_notion_crud(data) -> str:
     total = data.get("total", len(items))
     returned = data.get("returned", len(items))
     lines = [f"_共 {total} 筆" + (f"（顯示 {returned}）" if returned != total else "") + "_", ""]
-    for i, it in enumerate(items[:20], 1):
+    def _pick(d, *keys):
+        for k in keys:
+            v = d.get(k)
+            if v not in (None, "", []):
+                return v
+        return ""
+    def _fmt(v):
+        if isinstance(v, list):
+            return "、".join(str(x) for x in v if x)
+        return str(v)
+    for i, it in enumerate(items[:15], 1):
         if not isinstance(it, dict):
             lines.append(f"{i}. {it}")
             continue
-        title = (it.get("ToDo") or it.get("title") or it.get("name")
-                 or it.get("todo_title") or "(無標題)")
-        status = it.get("status") or it.get("狀態") or ""
-        assignee = it.get("assignee") or it.get("指派") or ""
-        due = it.get("due_date") or it.get("到期日") or ""
+        title = _pick(it, "ToDo", "title", "name", "todo_title", "任務") or "(無標題)"
+        status = _pick(it, "status", "狀態")
+        assignee = _pick(it, "assignee", "指派", "負責人 / PM", "負責人", "執行人")
+        due = _pick(it, "due_date", "到期日")
+        project = _pick(it, "project", "專案")
+        hours = _pick(it, "hours", "工時")
         parts = [f"**{i}. {title}**"]
-        meta_parts = []
-        if status:   meta_parts.append(f"狀態：{status}")
-        if assignee: meta_parts.append(f"👤 {assignee}")
-        if due:      meta_parts.append(f"📅 {due}")
-        if meta_parts:
-            parts.append(" · ".join(meta_parts))
+        meta = []
+        if status:   meta.append(f"狀態：{_fmt(status)}")
+        if assignee: meta.append(f"👤 {_fmt(assignee)}")
+        if due:      meta.append(f"📅 {_fmt(due)}")
+        if project:  meta.append(f"📂 {_fmt(project)}")
+        if hours:    meta.append(f"⏱ {_fmt(hours)}h")
+        if meta:
+            parts.append(" · ".join(meta))
         lines.append("  \n".join(parts))
-    if len(items) > 20:
-        lines.append(f"\n_… 另外還有 {len(items) - 20} 筆未顯示_")
+    if len(items) > 15:
+        lines.append(f"\n_… 另外還有 {len(items) - 15} 筆未顯示_")
     return "\n\n".join(lines)
 
 
@@ -392,6 +419,11 @@ class WorkflowExecutor:
         results = []
         accumulated_context = user_input
         final_output = ""
+        # Full (un-truncated) per-block output — used by the Markdown formatter
+        # at end of run. resolved_vars gets truncated for performance
+        # (downstream blocks don't usually need 50k char blobs) but the
+        # formatter needs the complete JSON to parse correctly.
+        block_full_outputs: Dict[Any, str] = {}
 
         # ── Wave execution: blocks with satisfied predecessors run concurrently ──
         # This is the natural interpretation of the canvas: a fan-out (one block
@@ -476,14 +508,13 @@ class WorkflowExecutor:
                 out_txt = r.get("output_text") or ""
                 if out_txt:
                     # Per-block output variable — downstream blocks reference
-                    # via ${step_N_output} in their input_map. This is what
-                    # makes topology-based convergence work: a downstream
-                    # block with two upstreams can pick which output it wants.
+                    # via ${step_N_output} in their input_map. Keep truncated
+                    # for cheap propagation.
                     resolved_vars[f"step_{bid}_output"] = out_txt[:5000]
-                    # accumulated_context = most-recent completed block output.
-                    # (Within a wave, the "last" one is arbitrary — that's OK
-                    # because convergence blocks should reference upstream
-                    # outputs by name, not rely on accumulated_context.)
+                    # Keep the full output for final display formatting (JSON
+                    # parsing needs complete payload — truncated JSON blows
+                    # up json.loads and falls back to raw text).
+                    block_full_outputs[bid] = out_txt
                     accumulated_context = out_txt[:3000]
                 if r.get("should_stop"):
                     should_stop = True
@@ -498,9 +529,13 @@ class WorkflowExecutor:
                 return ""
             bid = block_result.get("block_id")
             if bid is not None:
-                full = resolved_vars.get(f"step_{bid}_output")
+                # Prefer the UN-truncated copy so JSON formatters can parse
+                full = block_full_outputs.get(bid)
                 if full:
                     return full
+                trimmed = resolved_vars.get(f"step_{bid}_output")
+                if trimmed:
+                    return trimmed
             return block_result.get("output_preview") or ""
 
         success_entries = [r for r in results if r.get("status") == "success"
