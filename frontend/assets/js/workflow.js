@@ -1572,16 +1572,72 @@
       `;
     }
 
-    // Position near block
-    const rect = block.el.getBoundingClientRect();
-    panel.style.top = Math.max(60, rect.top) + "px";
-    panel.style.left = (rect.right + 12) + "px";
+    // Anchor panel to block — follow it on canvas pan/zoom/scroll via rAF.
+    // Previous behavior positioned once and stayed fixed in viewport; if the
+    // user scrolled the canvas the panel drifted away from its target block.
+    _startPropPanelAnchor(block, panel);
     panel.classList.remove("hidden");
+
+    // Make wheel scroll inside the panel stay inside the panel — the canvas
+    // viewport has its own scroll which would otherwise compete. The panel
+    // already has overflow-y:auto so default behaviour is correct; we only
+    // need to stop the event bubbling to avoid upstream handlers firing.
+    if (!panel._wheelStopAttached) {
+      panel.addEventListener("wheel", e => e.stopPropagation(), { passive: true });
+      panel._wheelStopAttached = true;
+    }
+  }
+
+  // ── Panel anchor tracker ──────────────────────────────────────────
+  let _panelAnchorRaf = null;
+  let _panelAnchorBlock = null;
+  let _panelAnchorEl = null;
+  function _startPropPanelAnchor(block, panel) {
+    _stopPropPanelAnchor();
+    _panelAnchorBlock = block;
+    _panelAnchorEl = panel;
+    const tick = () => {
+      if (!_panelAnchorBlock || !_panelAnchorEl || _panelAnchorEl.classList.contains("hidden")) {
+        _panelAnchorRaf = null;
+        return;
+      }
+      const bEl = _panelAnchorBlock.el;
+      if (!bEl || !bEl.isConnected) {
+        _stopPropPanelAnchor();
+        return;
+      }
+      const r = bEl.getBoundingClientRect();
+      const pw = _panelAnchorEl.offsetWidth || 280;
+      const ph = _panelAnchorEl.offsetHeight || 300;
+      // Default: place to the right of the block, vertically aligned with top
+      let left = r.right + 12;
+      let top  = r.top;
+      // If overflow right → place to the left
+      if (left + pw > window.innerWidth - 8) left = Math.max(8, r.left - pw - 12);
+      // Clamp to viewport vertically, leave a little margin for toolbar
+      const maxTop = window.innerHeight - ph - 16;
+      if (top > maxTop) top = Math.max(60, maxTop);
+      if (top < 60) top = 60;
+      _panelAnchorEl.style.left = left + "px";
+      _panelAnchorEl.style.top  = top + "px";
+      _panelAnchorRaf = requestAnimationFrame(tick);
+    };
+    _panelAnchorRaf = requestAnimationFrame(tick);
+  }
+
+  function _stopPropPanelAnchor() {
+    if (_panelAnchorRaf) {
+      cancelAnimationFrame(_panelAnchorRaf);
+      _panelAnchorRaf = null;
+    }
+    _panelAnchorBlock = null;
+    _panelAnchorEl = null;
   }
 
   function closeWfPropPanel() {
     const panel = document.getElementById("wfPropPanel");
     if (panel) panel.classList.add("hidden");
+    _stopPropPanelAnchor();
   }
 
   // ── Block 3-dot context menu (設定 / 移除) ──────────────────────────
