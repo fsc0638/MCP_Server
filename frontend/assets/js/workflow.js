@@ -11,8 +11,12 @@
     start:                         { label: "開始",       icon: "▶",  color: "#34a853", category: "control" },
     end:                           { label: "結束",       icon: "⏹",  color: "#ea4335", category: "control" },
     branch:                        { label: "條件分支",    icon: "⑂",  color: "#00897b", category: "control" },
-    // Phase 4: parallel branches run concurrently; sub-workflow invokes another workflow
-    parallel:                      { label: "並行分支",    icon: "🔀", color: "#8e44ad", category: "control" },
+    // Phase 4: sub-workflow invokes another saved workflow.
+    // Parallel execution is now TOPOLOGY-based — from the same block, just
+    // draw arrows to multiple children; the executor runs them concurrently
+    // via wave execution. No dedicated parallel block needed (the old
+    // "parallel" type is still supported for backward compat with saved
+    // workflows, just not exposed in the palette).
     "sub-workflow":                { label: "子工作流",    icon: "📎", color: "#546e7a", category: "control" },
     "web-search":                  { label: "網路搜尋",    icon: "🔍", color: "#4285f4", category: "search" },
     "python-executor":             { label: "Python 執行", icon: "🐍", color: "#306998", category: "compute" },
@@ -839,6 +843,36 @@
         el.textContent = wfName ? `${wfName}  ·  ${stats}` : stats;
       }
       if (window._wfDashboard) window._wfDashboard.updateStats(this.blocks.size, this.connections.length);
+      this._refreshParallelHints();
+    }
+
+    // Annotate blocks that fan-out (trigger parallel execution) or fan-in
+    // (wait for multiple upstreams). Lets users see on the canvas exactly
+    // which nodes participate in concurrency — no need for a dedicated
+    // "parallel" block type.
+    _refreshParallelHints() {
+      if (!this.blocks) return;
+      const outCount = new Map();
+      const inCount  = new Map();
+      this.connections.forEach(c => {
+        outCount.set(c.from, (outCount.get(c.from) || 0) + 1);
+        inCount.set(c.to,   (inCount.get(c.to)   || 0) + 1);
+      });
+      this.blocks.forEach(b => {
+        const oldHint = b.el.querySelector(".wf-block-parallel-hint");
+        if (oldHint) oldHint.remove();
+        const fanOut = outCount.get(b.id) || 0;
+        const fanIn  = inCount.get(b.id) || 0;
+        const labels = [];
+        if (fanOut > 1) labels.push(`🔀 並行 ${fanOut}`);
+        if (fanIn > 1)  labels.push(`⇢ 匯合 ${fanIn}`);
+        if (!labels.length) return;
+        const hint = document.createElement("div");
+        hint.className = "wf-block-parallel-hint";
+        hint.textContent = labels.join(" · ");
+        hint.style.cssText = "position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);font-size:0.62rem;background:#8e44ad;color:#fff;padding:2px 8px;border-radius:10px;white-space:nowrap;pointer-events:none;z-index:2;box-shadow:0 1px 3px rgba(0,0,0,0.2);";
+        b.el.appendChild(hint);
+      });
     }
 
     // ── Persistence (Backend API with localStorage fallback) ──

@@ -5,6 +5,7 @@ Usage:
     result = await executor.execute(workflow_data, user_input="...", user_context={})
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -150,9 +151,109 @@ class WorkflowExecutor:
         accumulated_context = user_input
         final_output = ""
 
-        for bid in order:
-            block = blocks[bid]
-            block_type = block.get("type", "")
+        # ── Wave execution: blocks with satisfied predecessors run concurrently ──
+        # This is the natural interpretation of the canvas: a fan-out (one block
+        # with multiple outgoing arrows) means its children run in parallel; a
+        # fan-in (one block with multiple incoming arrows) makes that block wait
+        # for all of its upstreams. No more "parallel block" type needed — the
+        # topology itself expresses concurrency. The legacy `type: parallel`
+        # block handler below still works for old saved workflows.
+        completed_ids: set = set()
+        should_stop = False
+        wave_no = 0
+        preds_of: Dict[Any, List[Any]] = {bid: [] for bid in blocks}
+        for c in connections:
+            f, t = c.get("from"), c.get("to")
+            if f in blocks and t in blocks:
+                preds_of[t].append(f)
+
+        while not should_stop and len(completed_ids) < len(blocks):
+            # Find all blocks whose predecessors are all completed
+            ready_ids = [
+                bid for bid in blocks
+                if bid not in completed_ids
+                and all(p in completed_ids for p in preds_of[bid])
+            ]
+            if not ready_ids:
+                # Cycle or disconnected — shouldn't happen after topo sort
+                logger.warning(
+                    f"[WFExec] Wave loop stalled at {len(completed_ids)}/{len(blocks)} — "
+                    f"remaining: {[b for b in blocks if b not in completed_ids]}"
+                )
+                break
+            wave_no += 1
+            if len(ready_ids) > 1:
+                names = [f"{bid}({blocks[bid].get('type','?')})" for bid in ready_ids]
+                logger.info(f"[WFExec] Wave {wave_no}: {len(ready_ids)} blocks concurrently → {names}")
+
+            # For each ready block, schedule its execution. Control blocks
+            # (start/end/branch) complete immediately without touching UMA.
+            async def _runner(bid):
+                block = blocks[bid]
+                block_type = block.get("type", "")
+                # Control nodes — synthetic immediate completion
+                if block_type in ("start", "end", "branch"):
+                    return {"entry": {"block_id": bid, "type": block_type, "status": "skipped"}, "output_text": "", "should_stop": False}
+                # Delegate real work to the per-block helper
+                ctx = {
+                    "uma": uma,
+                    "resolved_vars": resolved_vars,
+                    "accumulated_context": accumulated_context,
+                    "user_input": user_input,
+                    "user_context": user_context,
+                    "model_override": model_override,
+                    "default_model": default_model,
+                    "on_error": on_error,
+                    "max_retries": max_retries,
+                    "preds_of": preds_of,
+                }
+                return await self._execute_one_block_async(bid, block, ctx)
+
+            # Run all ready blocks concurrently
+            wave_results = await asyncio.gather(
+                *[_runner(bid) for bid in ready_ids],
+                return_exceptions=True,
+            )
+
+            for bid, r in zip(ready_ids, wave_results):
+                completed_ids.add(bid)
+                if isinstance(r, Exception):
+                    logger.error(f"[WFExec] Block {bid} exception: {r}")
+                    results.append({
+                        "block_id": bid, "type": blocks[bid].get("type", ""),
+                        "status": "error", "error": str(r),
+                    })
+                    if on_error == "stop":
+                        should_stop = True
+                    continue
+                if not r:
+                    continue
+                entry = r.get("entry")
+                if entry:
+                    results.append(entry)
+                out_txt = r.get("output_text") or ""
+                if out_txt:
+                    # Per-block output variable — downstream blocks reference
+                    # via ${step_N_output} in their input_map. This is what
+                    # makes topology-based convergence work: a downstream
+                    # block with two upstreams can pick which output it wants.
+                    resolved_vars[f"step_{bid}_output"] = out_txt[:5000]
+                    # accumulated_context = most-recent completed block output.
+                    # (Within a wave, the "last" one is arbitrary — that's OK
+                    # because convergence blocks should reference upstream
+                    # outputs by name, not rely on accumulated_context.)
+                    accumulated_context = out_txt[:3000]
+                    final_output = out_txt
+                if r.get("should_stop"):
+                    should_stop = True
+
+        # Skipping legacy sequential for-loop body below — wave loop handled
+        # everything above. The rest of this if-nothing branch stays in place
+        # so the old loop's structure is preserved for reference / fallback.
+        if False:  # dead code guard — keeps existing per-block logic reachable via helper
+            for bid in order:
+                block = blocks[bid]
+                block_type = block.get("type", "")
 
             # Skip control blocks
             if block_type in ("start", "end", "branch"):
@@ -481,6 +582,213 @@ class WorkflowExecutor:
             pass
 
         return exec_result
+
+    async def _execute_one_block_async(self, bid, block, ctx):
+        """Execute a single non-control block and return {entry, output_text, should_stop}.
+
+        Used by the wave execution loop so any pair of blocks whose
+        predecessors are done can run concurrently. Handles:
+          - sub-workflow (recursive execute)
+          - legacy `parallel` block type (backward compat with old saved
+            workflows; new workflows express concurrency via topology)
+          - regular skill block (Gate 2 → params resolve → subprocess call)
+
+        ctx carries all the per-run state the wave loop owns:
+          uma, resolved_vars, accumulated_context, user_input, user_context,
+          model_override, default_model, on_error, max_retries, preds_of.
+        """
+        uma = ctx["uma"]
+        resolved_vars = ctx["resolved_vars"]
+        user_input = ctx["user_input"]
+        user_context = ctx["user_context"]
+        model_override = ctx["model_override"]
+        default_model = ctx["default_model"]
+        on_error = ctx["on_error"]
+        max_retries = ctx["max_retries"]
+        preds_of = ctx.get("preds_of") or {}
+
+        block_type = block.get("type", "")
+
+        # ── Convergence: if this block has multiple upstreams, build a
+        # merged "accumulated_context" from all of them so the block has
+        # access to everything that led to it, not just one arbitrary path.
+        upstream_ids = preds_of.get(bid) or []
+        upstream_outputs = [
+            resolved_vars.get(f"step_{uid}_output", "")
+            for uid in upstream_ids
+        ]
+        non_empty_upstream = [o for o in upstream_outputs if o]
+        if len(non_empty_upstream) > 1:
+            accumulated_context = json.dumps(
+                {f"step_{uid}_output": resolved_vars.get(f"step_{uid}_output", "")
+                 for uid in upstream_ids},
+                ensure_ascii=False,
+            )[:3000]
+        elif non_empty_upstream:
+            accumulated_context = non_empty_upstream[0][:3000]
+        else:
+            accumulated_context = ctx["accumulated_context"]
+
+        # ── Sub-workflow invocation ──
+        if block_type in ("sub-workflow", "sub_workflow"):
+            cfg = block.get("config") or {}
+            sub_id = cfg.get("sub_workflow_id") or block.get("label")
+            pass_vars_list = cfg.get("pass_vars") or []
+            if not sub_id:
+                return {"entry": {"block_id": bid, "type": block_type, "status": "error",
+                                   "error": "缺少 sub_workflow_id"},
+                        "output_text": "", "should_stop": on_error == "stop"}
+            try:
+                sub_flow = _load_workflow_by_id(sub_id)
+                if not sub_flow:
+                    return {"entry": {"block_id": bid, "type": block_type, "status": "error",
+                                       "error": f"找不到子工作流 '{sub_id}'"},
+                            "output_text": "", "should_stop": on_error == "stop"}
+                pass_data = {k: resolved_vars.get(k, "") for k in pass_vars_list}
+                child_input = json.dumps(pass_data, ensure_ascii=False) if pass_data else accumulated_context
+                child_result = await self.execute(
+                    sub_flow, user_input=child_input,
+                    user_context=user_context, model_override=model_override,
+                )
+                child_status = child_result.get("status", "error")
+                child_output = child_result.get("final_output", "")
+                return {
+                    "entry": {
+                        "block_id": bid, "type": block_type, "skill": f"sub:{sub_id}",
+                        "status": "success" if child_status == "success" else "error",
+                        "output_preview": child_output[:300] if child_output else "",
+                        "sub_run_id": child_result.get("run_id"),
+                        "error": "; ".join(child_result.get("errors") or []) if child_status != "success" else "",
+                    },
+                    "output_text": child_output or "",
+                    "should_stop": (child_status != "success" and on_error == "stop"),
+                }
+            except Exception as sub_err:
+                logger.error(f"[WFExec] Sub-workflow {sub_id} failed: {sub_err}")
+                return {"entry": {"block_id": bid, "type": block_type, "status": "error",
+                                   "error": f"子工作流執行例外：{sub_err}"},
+                        "output_text": "", "should_stop": on_error == "stop"}
+
+        # ── Legacy parallel block (kept for backward compat with old saved
+        # workflows; new workflows express fan-out via topology) ──
+        if block_type in ("parallel", "parallel-branch"):
+            branches = (block.get("config") or {}).get("branches") or []
+            merge_var = (block.get("config") or {}).get("merge_output_var") or f"block_{bid}_merged"
+            if not branches:
+                return {"entry": {"block_id": bid, "type": block_type, "status": "skipped",
+                                   "reason": "並行節點未設定 branches"},
+                        "output_text": "", "should_stop": False}
+            try:
+                branch_results = await self._run_parallel_branches(
+                    branches, resolved_vars, accumulated_context, uma, user_input,
+                )
+                merged = [br.get("output") for br in branch_results]
+                resolved_vars[merge_var] = json.dumps(merged, ensure_ascii=False)
+                _any_err = any(br.get("status") == "error" for br in branch_results)
+                return {
+                    "entry": {
+                        "block_id": bid, "type": "parallel",
+                        "skill": f"parallel({len(branches)} branches)",
+                        "status": "error" if _any_err else "success",
+                        "output_preview": resolved_vars[merge_var][:300],
+                        "branches": branch_results,
+                    },
+                    "output_text": resolved_vars[merge_var],
+                    "should_stop": (_any_err and on_error == "stop"),
+                }
+            except Exception as par_err:
+                logger.error(f"[WFExec] Parallel block {bid} failed: {par_err}")
+                return {"entry": {"block_id": bid, "type": "parallel", "status": "error",
+                                   "error": f"並行執行例外：{par_err}"},
+                        "output_text": "", "should_stop": on_error == "stop"}
+
+        # ── Regular skill block ──
+        skill_name = block_type if block_type.startswith("mcp-") else f"mcp-{block_type}"
+
+        # Gate 2 per-step safety check
+        _step_for_gate = {
+            "step_id": f"block_{bid}", "type": "sequential", "skill_id": skill_name,
+            "input_map": (block.get("config") or {}).get("params", {}),
+            "on_fail": block.get("config", {}).get("on_error") or "abort",
+        }
+        try:
+            from server.services.workflow_gates import gate_2_before_step
+            g2_ok, g2_reason = gate_2_before_step(_step_for_gate, resolved_vars, uma)
+        except Exception as _g2_err:
+            logger.warning(f"[WFExec Gate2] Internal error for block {bid}: {_g2_err}")
+            g2_ok, g2_reason = True, ""
+        if not g2_ok:
+            _on_fail = _step_for_gate["on_fail"]
+            logger.warning(f"[WFExec Gate2] Block {bid} ({skill_name}) blocked: {g2_reason} (on_fail={_on_fail})")
+            if _on_fail in ("abort", "retry_once"):
+                return {"entry": {"block_id": bid, "type": block_type, "skill": skill_name,
+                                   "status": "error", "error": g2_reason, "gate": 2},
+                        "output_text": "", "should_stop": True}
+            return {"entry": {"block_id": bid, "type": block_type, "skill": skill_name,
+                               "status": "skipped", "reason": f"gate2: {g2_reason}"},
+                    "output_text": "", "should_stop": False}
+
+        # Resolve params
+        block_config = block.get("config", {})
+        block_model = block_config.get("model") or default_model
+        block_on_error = block_config.get("on_error") or on_error
+        block_params = self._resolve_block_params(
+            block_config.get("params", {}), resolved_vars, accumulated_context, user_input,
+        )
+        if not block_params:
+            fallback_key = self._infer_primary_param_name(uma, skill_name) or "input"
+            block_params = {fallback_key: accumulated_context}
+            if fallback_key != "input":
+                logger.info(f"[WFExec] Block {bid} ({skill_name}): no params, bound accumulated_context → {fallback_key}")
+            else:
+                logger.warning(f"[WFExec] Block {bid} ({skill_name}): no params, fallback to 'input'")
+        logger.info(f"[WFExec] Block {bid} ({skill_name}): params={list(block_params.keys())}, model={block_model}")
+
+        # Execute with retry — use run_in_executor so the sync subprocess
+        # call doesn't block other concurrent blocks in the same wave.
+        loop = asyncio.get_event_loop()
+        retries = 0
+        last_error = None
+        while retries <= (max_retries if block_on_error == "retry" else 0):
+            try:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: uma.execute_tool_call(skill_name, json.dumps(block_params, ensure_ascii=False)),
+                )
+                if isinstance(result, dict) and result.get("status") == "error":
+                    raise Exception(f"Skill error: {result.get('message', result.get('error', 'unknown'))}")
+                if isinstance(result, dict):
+                    output_text = (
+                        result.get("output") or result.get("guide") or result.get("content")
+                        or json.dumps(result, ensure_ascii=False)
+                    )
+                else:
+                    output_text = str(result)
+                return {
+                    "entry": {
+                        "block_id": bid, "type": block_type, "skill": skill_name,
+                        "model_used": block_model, "status": "success",
+                        "output_preview": (output_text or "")[:300],
+                    },
+                    "output_text": output_text or "",
+                    "should_stop": False,
+                }
+            except Exception as e:
+                last_error = str(e)
+                retries += 1
+                if retries <= max_retries and block_on_error == "retry":
+                    logger.warning(f"[WFExec] Block {bid} retry {retries}/{max_retries}: {e}")
+                    continue
+                break
+        logger.error(f"[WFExec] Block {bid} ({skill_name}) failed: {last_error}")
+        return {
+            "entry": {
+                "block_id": bid, "type": block_type, "skill": skill_name,
+                "model_used": block_model, "status": "error", "error": last_error,
+            },
+            "output_text": "",
+            "should_stop": (block_on_error == "stop"),
+        }
 
     async def _run_parallel_branches(
         self,
