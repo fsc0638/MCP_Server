@@ -323,7 +323,8 @@
 
 /* ── Flow Block ──────────────────────────────────────────────── */
 .wf-block {
-  position: absolute; width: 120px; height: 80px;
+  position: absolute; width: 120px;
+  min-height: 80px;             /* grow vertically for long labels */
   display: flex; flex-direction: column;
   background: var(--bg-surface, #fff);
   border: 2px solid var(--border-subtle, #E2E8F0);
@@ -347,11 +348,22 @@
 }
 
 .wf-block-header {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: flex-start; gap: 6px;
   padding: 6px 10px;
   border-radius: 8px 8px 0 0;
   color: #fff; font-size: 0.72rem; font-weight: 700;
+  line-height: 1.35;
+  word-break: break-word;        /* Chinese labels wrap cleanly */
+  overflow-wrap: anywhere;       /* handle long English runs too */
 }
+.wf-block-header > span:nth-child(2) {
+  flex: 1 1 auto;                /* label grows, ⋯ button stays fixed width */
+  min-width: 0;                  /* allow shrinking in flex */
+}
+/* Icon stays vertically centered with the first line of label */
+.wf-block-header > span:first-child { flex-shrink: 0; line-height: 1.35; }
+/* ⋯ menu button stays top-right even when label wraps */
+.wf-block-menu-btn { align-self: flex-start; flex-shrink: 0; }
 .wf-block-menu-btn:hover {
   background: rgba(255, 255, 255, 0.2) !important;
 }
@@ -362,6 +374,13 @@
   display: flex; align-items: center; justify-content: space-between;
   flex: 1; padding: 6px 10px;
   font-size: 0.65rem; color: var(--text-tertiary, #94A3B8);
+  min-width: 0;                  /* allow subtitle to ellipsis if absurdly long */
+}
+.wf-block-subtitle {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;           /* subtitle (category / →name) on one line */
 }
 
 .wf-block-status {
