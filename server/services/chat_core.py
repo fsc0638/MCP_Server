@@ -309,11 +309,43 @@ async def process_chat_native(req: ChatRequest):
             logger.warning(f"[WF-First] Match check failed (fallback to LLM): {wf_err}")
 
     # ── Check for pending workflow confirmation ──
-    if req.user_input.strip() in ("確認", "確定", "執行", "是", "yes", "confirm"):
+    # Accept any short affirmative reply (好、好的、OK、可以、go、執行...).
+    # Guard against false positives with length + positive/negative detection:
+    #   - reply < 10 chars
+    #   - contains at least one affirmative token
+    #   - does NOT contain a negative token ("不", "取消", "算了"...)
+    _reply = (req.user_input or "").strip().lower()
+    _affirmative_tokens = (
+        "確認", "確定", "確認執行", "執行", "好", "好的", "好喔", "可以",
+        "是", "是的", "對", "沒錯", "ok", "okay", "yes", "y",
+        "go", "開始", "跑", "run", "批准", "同意", "執行吧",
+    )
+    _negative_tokens = ("不", "否", "no", "取消", "算了", "等等", "稍等", "先不要", "別")
+    _is_confirm = (
+        _reply and len(_reply) <= 10
+        and any(t in _reply for t in _affirmative_tokens)
+        and not any(t in _reply for t in _negative_tokens)
+    )
+    # If user declines (sent a negative reply) and there's pending workflow,
+    # clear it so the LLM handles the new turn normally.
+    _is_decline = (
+        _reply and len(_reply) <= 10
+        and any(t in _reply for t in _negative_tokens)
+    )
+    if _is_decline:
+        try:
+            if session_mgr.get_metadata(session_id, "pending_workflow"):
+                session_mgr.set_metadata(session_id, "pending_workflow", None)
+                logger.info(f"[WF-First] User declined pending workflow (reply='{_reply}')")
+        except Exception:
+            pass
+
+    if _is_confirm:
         try:
             pending_wf = session_mgr.get_metadata(session_id, "pending_workflow")
             if pending_wf:
                 session_mgr.set_metadata(session_id, "pending_workflow", None)
+                logger.info(f"[WF-First] User confirmed pending workflow: {pending_wf.get('workflow_id')} (reply='{_reply}')")
                 async def _wf_exec_gen():
                     yield {"data": json.dumps({"status": "task_started", "task_id": task_id,
                                                "session_id": session_id, "turn_id": turn_id}, ensure_ascii=False)}
