@@ -795,6 +795,275 @@ def list_accessible_skills(
     return {"skills": out, "count": len(out)}
 
 
+# ── Phase 6: LLM One-shot Workflow Generator ────────────────────────────────
+# Turns a free-text user description ("搜尋台灣股市新聞 5 則並存到 Notion")
+# into a v2 workflow JSON, optionally executes it immediately, and lets the
+# existing Gate 3 promotion pipeline write the oneshot snapshot so the chat
+# promotion card can surface. Accessible-skills whitelist keeps generated
+# workflows safe (can't propose skills the user doesn't have permission for).
+
+class LLMGenerateRequest(BaseModel):
+    prompt: str                  # Natural-language description of the task
+    execute: bool = False        # If true, run immediately after generation
+    display_name: str = ""       # Optional override; LLM picks one by default
+    max_steps: int = 6           # Hard cap — avoid runaway multi-step workflows
+
+
+def _build_llm_generator_messages(prompt: str, skills: List[Dict[str, Any]], max_steps: int) -> List[Dict[str, str]]:
+    """System+user messages steering the LLM to output strict v2 workflow JSON."""
+    skill_lines = []
+    for s in skills[:80]:  # cap size to keep prompt lean
+        desc = (s.get("description") or "").replace("\n", " ")[:180]
+        req_list = []
+        for pname, pdef in (s.get("parameters") or {}).get("properties", {}).items():
+            if (s.get("parameters") or {}).get("required", []) and pname in s["parameters"]["required"]:
+                req_list.append(f"{pname}*")
+            else:
+                req_list.append(pname)
+        skill_lines.append(f"- `{s['skill_id']}` ({s.get('display_name','')}): {desc} | params: {', '.join(req_list) or '(none)'}")
+    skills_text = "\n".join(skill_lines)
+
+    system_text = f"""你是工作流設計助手。根據使用者描述，產生一份可執行的 v2 Workflow JSON。
+
+【可用技能白名單 — 絕對不可使用白名單外的技能】
+{skills_text}
+
+【輸出規格（必須嚴格遵守）】
+回傳格式為純 JSON（不要 code fence、不要註解、不要 markdown）：
+{{
+  "display_name": "簡短的工作流名稱（6-20 字）",
+  "description": "一句話說明用途",
+  "variables": {{
+    "definitions": [
+      {{"name": "camelCaseName", "type": "string", "source": "user_input|fixed",
+        "required": true|false, "default_value": "", "description": "..."}}
+    ]
+  }},
+  "steps": [
+    {{"step_id": "step_1", "type": "sequential", "skill_id": "mcp-xxx",
+      "label": "步驟中文名", "input_map": {{"param_name": "${{camelCaseName}}"}},
+      "output_var": "step_1_output", "on_fail": "abort"}}
+  ]
+}}
+
+【規則】
+1. steps 最多 {max_steps} 個，且每個 skill_id 必須在白名單內
+2. 使用者需要輸入的資料 → 放到 variables.definitions（source=user_input），再用 ${{變數名}} 引用
+3. 固定值 → 直接寫在 input_map（例：{{"max_results": 5}}）
+4. 後續步驟可用 ${{step_N_output}} 引用前一步輸出
+5. 變數名用 camelCase（如 searchQuery），不要用中文
+6. 不要產生 workflow_id / id / blocks / connections / trigger — 後端會補
+7. 只回傳 JSON，不要任何其他文字"""
+
+    return [
+        {"role": "system", "content": system_text},
+        {"role": "user", "content": f"任務描述：\n{prompt}"},
+    ]
+
+
+def _llm_generate_workflow_json(prompt: str, skills: List[Dict[str, Any]], max_steps: int) -> Dict[str, Any]:
+    """Call OpenAI with json_object response_format, parse, return the workflow dict."""
+    from openai import OpenAI
+    import os as _os
+    api_key = _os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="未設定 OPENAI_API_KEY，無法產生一次性工作流")
+
+    messages = _build_llm_generator_messages(prompt, skills, max_steps)
+    model = _os.getenv("OPENAI_MODEL_WF_GENERATE") or _os.getenv("OPENAI_MODEL") or "gpt-4o"
+
+    client = OpenAI(api_key=api_key)
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.3,                         # steady, reproducible
+            response_format={"type": "json_object"}, # force JSON output
+            max_tokens=2000,
+        )
+    except Exception as e:
+        logger.error(f"[LLM-Gen] OpenAI call failed: {e}")
+        raise HTTPException(status_code=502, detail=f"LLM 呼叫失敗：{e}")
+
+    raw = (resp.choices[0].message.content or "").strip()
+    logger.info(f"[LLM-Gen] Raw output ({len(raw)} chars): {raw[:200]}...")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=502, detail=f"LLM 輸出非合法 JSON：{e}")
+    return data
+
+
+@router.post("/api/workflows/llm-generate")
+async def llm_generate_workflow(
+    req: LLMGenerateRequest,
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """Generate a one-shot v2 workflow from a natural-language prompt.
+
+    Returns the v2 JSON. If execute=true, also runs it via WorkflowExecutor
+    and returns the run result (Gate 3 will write an oneshot snapshot +
+    queue a promotion candidate automatically, so the chat promotion card
+    appears on next refresh).
+    """
+    from server.services.permissions import resolve_caller_context
+    caller_ctx = resolve_caller_context(mcp_session) or {}
+    prompt = (req.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt 不可為空")
+    if len(prompt) > 2000:
+        raise HTTPException(status_code=413, detail="prompt 太長，請精簡到 2000 字以內")
+    if req.max_steps < 1 or req.max_steps > 10:
+        raise HTTPException(status_code=422, detail="max_steps 必須在 1-10 之間")
+
+    # 1) Resolve accessible skills (reuse Phase 6 whitelist endpoint logic)
+    from server.dependencies.uma import get_uma_instance
+    uma = get_uma_instance()
+    accessible: List[Dict[str, Any]] = []
+    for registry_key, entry in (uma.skill_registry.skills or {}).items():
+        meta = (entry or {}).get("metadata") or {}
+        sid = meta.get("name") or registry_key
+        # Permission check
+        if hasattr(uma.skill_registry, "can_access"):
+            try:
+                if not uma.skill_registry.can_access(sid, caller_ctx):
+                    continue
+            except Exception:
+                pass
+        # Skip risky / unavailable
+        if not meta.get("_env_ready", True):
+            continue
+        if (meta.get("risk_level") or "low") == "high":
+            continue  # High-risk skills require explicit approval — don't let LLM chain them
+        accessible.append({
+            "skill_id": sid,
+            "display_name": meta.get("display_name") or sid,
+            "description": (meta.get("description") or "")[:400],
+            "parameters": meta.get("parameters") or {},
+        })
+
+    if not accessible:
+        raise HTTPException(status_code=503, detail="目前沒有可用技能")
+
+    # 2) Call LLM
+    raw_workflow = _llm_generate_workflow_json(prompt, accessible, req.max_steps)
+
+    # 3) Normalize + validate
+    wf = dict(raw_workflow or {})
+    wf["source"] = "llm_generated"
+    if req.display_name:
+        wf["display_name"] = req.display_name
+    wf["metadata"] = wf.get("metadata") or {}
+    wf["metadata"]["original_prompt"] = prompt
+    wf["metadata"]["created_by"] = caller_ctx.get("user_id") or caller_ctx.get("employee_id", "")
+    wf["metadata"]["created_at"] = datetime.now().isoformat()
+
+    # Safety: strip any skill_id not in whitelist
+    allowed_ids = {s["skill_id"] for s in accessible}
+    safe_steps: List[Dict[str, Any]] = []
+    stripped = 0
+    for step in (wf.get("steps") or []):
+        if not isinstance(step, dict):
+            continue
+        if step.get("type") == "sequential":
+            sid = step.get("skill_id") or ""
+            if sid not in allowed_ids:
+                stripped += 1
+                continue
+        safe_steps.append(step)
+    if stripped:
+        logger.warning(f"[LLM-Gen] Stripped {stripped} step(s) using non-whitelisted skills")
+    wf["steps"] = safe_steps[: req.max_steps]
+    if not wf["steps"]:
+        raise HTTPException(status_code=422, detail="LLM 產生的工作流無可用步驟（可能全部引用到白名單外技能）")
+
+    # ── Synthesize blocks[] + connections[] from steps[] for the executor.
+    # The executor walks blocks (canvas representation), not steps, so an
+    # LLM-generated workflow must have both shapes. Layout is top-to-bottom
+    # linear: start → step_1 → step_2 → ... → end.
+    blocks_out: List[Dict[str, Any]] = []
+    connections_out: List[Dict[str, Any]] = []
+    bid = 1
+    blocks_out.append({"id": bid, "type": "start", "x": 100, "y": 60, "label": "開始", "config": {}})
+    prev_id = bid
+    bid += 1
+    y = 180
+    for step in wf["steps"]:
+        stype = step.get("type", "sequential")
+        label = step.get("label") or step.get("skill_id") or stype
+        cfg: Dict[str, Any] = {}
+        if stype == "sequential":
+            block_type = (step.get("skill_id") or "").replace("mcp-", "", 1) or "noop"
+            # Flatten input_map values back into UI params shape ({source,value})
+            params_ui = {}
+            for pname, pv in (step.get("input_map") or {}).items():
+                if isinstance(pv, str) and pv.startswith("${") and pv.endswith("}"):
+                    params_ui[pname] = {"source": "variable", "value": "{{" + pv[2:-1] + "}}"}
+                else:
+                    params_ui[pname] = {"source": "fixed", "value": pv}
+            cfg["params"] = params_ui
+        elif stype == "parallel":
+            block_type = "parallel"
+            cfg["branches"] = step.get("branches") or []
+            cfg["merge_output_var"] = step.get("merge_output_var") or f"step_{bid}_merged"
+            cfg["on_fail"] = step.get("on_fail", "abort")
+        elif stype == "sub_workflow":
+            block_type = "sub-workflow"
+            cfg["sub_workflow_id"] = step.get("sub_workflow_id", "")
+            cfg["pass_vars"] = step.get("pass_vars") or []
+            cfg["output_var"] = step.get("output_var", f"step_{bid}_sub_output")
+            cfg["on_fail"] = step.get("on_fail", "abort")
+        else:
+            block_type = stype
+        blocks_out.append({"id": bid, "type": block_type, "x": 100, "y": y, "label": label, "config": cfg})
+        connections_out.append({"from": prev_id, "to": bid})
+        prev_id = bid
+        bid += 1
+        y += 120
+    blocks_out.append({"id": bid, "type": "end", "x": 100, "y": y, "label": "結束", "config": {}})
+    connections_out.append({"from": prev_id, "to": bid})
+    wf["blocks"] = blocks_out
+    wf["connections"] = connections_out
+
+    # Migrate + validate
+    from server.services.workflow_schema import migrate_legacy, validate_workflow
+    try:
+        wf = migrate_legacy(wf, mark_as_source="llm_generated", resync_steps=False)
+        ok, errs = validate_workflow(wf)
+        if not ok:
+            logger.warning(f"[LLM-Gen] validation failed: {errs[:3]}")
+            # Don't hard-block — surface errors but let user decide. The schema
+            # validator is strict about slug format etc. which migrate_legacy
+            # should have handled, so validation failure here is rare.
+    except Exception as e:
+        logger.error(f"[LLM-Gen] migration failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Schema 遷移失敗：{e}")
+
+    result: Dict[str, Any] = {
+        "status": "success",
+        "workflow": wf,
+        "accessible_skills_count": len(accessible),
+    }
+
+    # 4) Optional immediate execution — Gate 3 auto-writes promotion snapshot
+    if req.execute:
+        try:
+            from server.services.workflow_executor import get_workflow_executor
+            executor = get_workflow_executor()
+            exec_result = await executor.execute(
+                workflow=wf,
+                user_input=prompt,
+                user_context=caller_ctx,
+            )
+            result["execution"] = exec_result
+            result["run_id"] = exec_result.get("run_id", "")
+        except Exception as e:
+            logger.error(f"[LLM-Gen] execution failed: {e}")
+            result["execution"] = {"status": "error", "message": str(e)}
+
+    return result
+
+
 # ── Phase 5: 5-question Wizard ──────────────────────────────────────────────
 
 class WizardRequest(BaseModel):

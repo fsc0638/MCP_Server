@@ -1681,7 +1681,9 @@
     // ── Center Cards (upgraded with description, trigger, updated_at) ──
     if (grid) {
       let html = `<div class="wf-landing-card-new" onclick="_showNewWorkflowScopePicker()">
-        <div class="wf-landing-card-new-inner"><div class="wf-landing-card-new-icon">+</div><div class="wf-landing-card-new-label">新增工作流</div></div></div>`;
+        <div class="wf-landing-card-new-inner"><div class="wf-landing-card-new-icon">+</div><div class="wf-landing-card-new-label">新增工作流</div></div></div>
+        <div class="wf-landing-card-new" style="background:linear-gradient(135deg,#8e44ad 0%,#6c5ce7 100%);color:#fff;" onclick="_showLLMGenerateModal()">
+        <div class="wf-landing-card-new-inner" style="color:#fff;"><div class="wf-landing-card-new-icon" style="color:#fff;">✨</div><div class="wf-landing-card-new-label" style="color:#fff;">一次性智能流程</div></div></div>`;
       workflows.forEach((wf, i) => {
         const color = _WF_COLORS[i % _WF_COLORS.length];
         const scope = wf.scope || "personal";
@@ -1961,6 +1963,142 @@
         if (window.showToast) window.showToast("刪除錯誤: " + e.message, "error");
       }
     });
+  };
+
+  // ── Phase 6: LLM One-shot Workflow Generator Modal ───────────────────
+  // Lets the user type a natural-language task; server spins up a v2
+  // workflow + runs it immediately. Gate 3 writes an oneshot snapshot
+  // so if the run succeeds a promotion card can appear later in chat.
+  window._showLLMGenerateModal = function () {
+    document.getElementById("wfLLMGenModal")?.remove();
+    const mask = document.createElement("div");
+    mask.id = "wfLLMGenModal";
+    mask.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;";
+    mask.innerHTML = `
+      <div style="background:#fff;width:620px;max-width:94vw;max-height:90vh;overflow-y:auto;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.3);padding:22px 24px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+          <span style="font-size:1.3rem;">✨</span>
+          <h3 style="margin:0;font-size:1.05rem;">一次性智能流程</h3>
+        </div>
+        <div style="font-size:0.8rem;color:#64748b;margin-bottom:14px;">
+          描述一個任務，系統用可用技能自動組合出一個流程並立即執行。執行後若覺得好用，可以在結果卡片上一鍵永久儲存。
+        </div>
+
+        <label style="display:block;font-size:0.78rem;font-weight:600;color:#1e293b;margin-bottom:4px;">任務描述 <span style="color:#dc2626;">*</span></label>
+        <textarea id="wfLLMGenPrompt" rows="5" placeholder="例：搜尋台灣股市新聞 5 則，寫成摘要存到 Notion ToDo"
+          style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;resize:vertical;margin-bottom:12px;"></textarea>
+
+        <details style="margin-bottom:12px;">
+          <summary style="cursor:pointer;font-size:0.78rem;color:#475569;">進階選項</summary>
+          <div style="margin-top:10px;padding-left:10px;border-left:2px solid #e2e8f0;">
+            <label style="display:block;font-size:0.72rem;color:#475569;margin-bottom:3px;">流程名稱（留空由 LLM 決定）</label>
+            <input id="wfLLMGenName" type="text" placeholder="例：每日股市 → Notion"
+              style="width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.78rem;margin-bottom:10px;" />
+
+            <label style="display:block;font-size:0.72rem;color:#475569;margin-bottom:3px;">最多步驟數 (1-10)</label>
+            <input id="wfLLMGenMaxSteps" type="number" min="1" max="10" value="6"
+              style="width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.78rem;margin-bottom:10px;" />
+
+            <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:#475569;">
+              <input id="wfLLMGenExecute" type="checkbox" checked />
+              立即執行（取消勾選僅產生預覽不執行）
+            </label>
+          </div>
+        </details>
+
+        <div id="wfLLMGenStatus" style="font-size:0.78rem;color:#475569;margin-bottom:12px;min-height:20px;"></div>
+        <div id="wfLLMGenPreview" style="display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;font-family:monospace;font-size:0.72rem;color:#334155;max-height:260px;overflow-y:auto;margin-bottom:12px;white-space:pre-wrap;"></div>
+
+        <div style="text-align:right;">
+          <button id="wfLLMGenCancel" type="button" style="padding:8px 18px;border-radius:8px;background:transparent;color:#64748b;border:1px solid #e2e8f0;cursor:pointer;margin-right:8px;">取消</button>
+          <button id="wfLLMGenSubmit" type="button" style="padding:8px 18px;border-radius:8px;background:linear-gradient(135deg,#8e44ad 0%,#6c5ce7 100%);color:#fff;border:none;font-weight:600;cursor:pointer;">✨ 產生並執行</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(mask);
+
+    const cleanup = () => mask.remove();
+    mask.addEventListener("click", e => { if (e.target === mask) cleanup(); });
+    mask.querySelector("#wfLLMGenCancel").onclick = cleanup;
+
+    const submitBtn = mask.querySelector("#wfLLMGenSubmit");
+    const statusEl  = mask.querySelector("#wfLLMGenStatus");
+    const previewEl = mask.querySelector("#wfLLMGenPreview");
+
+    submitBtn.onclick = async () => {
+      const promptText = mask.querySelector("#wfLLMGenPrompt").value.trim();
+      if (!promptText) {
+        statusEl.textContent = "⚠️ 請先描述任務";
+        statusEl.style.color = "#dc2626";
+        return;
+      }
+      const displayName = mask.querySelector("#wfLLMGenName").value.trim();
+      const maxSteps    = parseInt(mask.querySelector("#wfLLMGenMaxSteps").value) || 6;
+      const execute     = mask.querySelector("#wfLLMGenExecute").checked;
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = "產生中...";
+      statusEl.style.color = "#475569";
+      statusEl.textContent = "🧠 LLM 正在根據你的需求組裝工作流…";
+      previewEl.style.display = "none";
+
+      try {
+        const resp = await fetch("/api/workflows/llm-generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            prompt: promptText,
+            display_name: displayName,
+            max_steps: maxSteps,
+            execute,
+          }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          const detail = (data && data.detail) ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : `HTTP ${resp.status}`;
+          throw new Error(detail);
+        }
+        const wf = data.workflow || {};
+        const stepNames = (wf.steps || []).map(s => s.skill_id || s.type).join(" → ");
+        let msg = `✅ 已產生：「${wf.display_name || wf.workflow_id}」`;
+        if (stepNames) msg += ` (${stepNames})`;
+        if (execute && data.execution) {
+          const ex = data.execution;
+          if (ex.status === "success") {
+            msg += `\n🚀 執行成功 (${ex.blocks_executed || 0} 個節點)。結果已記錄 — 如需永久儲存請到聊天頁找升格卡片。`;
+            statusEl.style.color = "#059669";
+          } else {
+            msg += `\n⚠️ 執行失敗：${(ex.errors || [ex.message || "unknown"]).join("；")}`;
+            statusEl.style.color = "#dc2626";
+          }
+        }
+        statusEl.textContent = msg;
+
+        // Show the generated JSON preview
+        previewEl.style.display = "block";
+        previewEl.textContent = JSON.stringify(wf, null, 2);
+
+        if (execute && data.execution?.status === "success" && data.execution?.final_output) {
+          // Also show the actual output from the run
+          const outDiv = document.createElement("div");
+          outDiv.style.cssText = "background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:10px;margin-top:10px;font-size:0.78rem;color:#14532d;max-height:200px;overflow-y:auto;white-space:pre-wrap;";
+          outDiv.textContent = "最終輸出：\n" + (data.execution.final_output || "").slice(0, 1500);
+          previewEl.insertAdjacentElement("afterend", outDiv);
+        }
+
+        submitBtn.textContent = "✨ 重新產生";
+        submitBtn.disabled = false;
+      } catch (e) {
+        statusEl.style.color = "#dc2626";
+        statusEl.textContent = "❌ 產生失敗：" + (e.message || e);
+        submitBtn.disabled = false;
+        submitBtn.textContent = "✨ 產生並執行";
+      }
+    };
+
+    // Auto-focus the prompt field
+    setTimeout(() => mask.querySelector("#wfLLMGenPrompt")?.focus(), 50);
   };
 
   // ── Scope Picker Dialog ──
