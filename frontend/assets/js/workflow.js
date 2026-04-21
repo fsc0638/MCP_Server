@@ -1552,10 +1552,10 @@
 
     const menu = document.createElement("div");
     menu.id = "wfBlockCtxMenu";
-    menu.style.cssText = "position:fixed;z-index:9800;min-width:130px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:4px;font-size:0.82rem;";
+    menu.style.cssText = "position:fixed;z-index:9800;min-width:110px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:2px;font-size:0.82rem;";
     menu.innerHTML = `
-      <button type="button" data-act="config" style="display:block;width:100%;text-align:left;padding:8px 12px;background:transparent;border:none;border-radius:4px;cursor:pointer;color:#1e293b;">⚙️ 設定</button>
-      <button type="button" data-act="remove" style="display:block;width:100%;text-align:left;padding:8px 12px;background:transparent;border:none;border-radius:4px;cursor:pointer;color:#dc2626;">🗑 移除</button>
+      <button type="button" data-act="config" style="display:block;width:100%;text-align:left;padding:5px 12px;background:transparent;border:none;border-radius:4px;cursor:pointer;color:#1e293b;">設定</button>
+      <button type="button" data-act="remove" style="display:block;width:100%;text-align:left;padding:5px 12px;background:transparent;border:none;border-radius:4px;cursor:pointer;color:#dc2626;">移除</button>
     `;
 
     // Position just below the anchor button, kept inside viewport
@@ -1610,11 +1610,54 @@
         if (window.showToast) window.showToast("「" + label + "」是必要節點，無法移除", "error");
         return;
       }
-      if (!confirm(`確定要移除「${label}」這個節點嗎？連接到它的線也會一併刪除。`)) return;
-      fd.deleteBlock(blockId);
-      // Close the property panel if it was showing this block
-      closeWfPropPanel();
+      _confirmDeleteBlock(label, () => {
+        fd.deleteBlock(blockId);
+        closeWfPropPanel();
+      });
     });
+  }
+
+  // Custom confirm dialog for block deletion — replaces browser-native
+  // confirm() which looks out of place and can't be styled.
+  function _confirmDeleteBlock(label, onConfirm) {
+    document.getElementById("wfBlockDeleteConfirm")?.remove();
+    const mask = document.createElement("div");
+    mask.id = "wfBlockDeleteConfirm";
+    mask.style.cssText = "position:fixed;inset:0;z-index:9900;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;";
+    const safeLabel = (label || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    mask.innerHTML = `
+      <div style="background:#fff;width:380px;max-width:92vw;border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,0.25);padding:20px 22px;">
+        <div style="font-size:1rem;font-weight:700;color:#1e293b;margin-bottom:10px;">移除節點</div>
+        <div style="font-size:0.85rem;color:#475569;line-height:1.55;margin-bottom:18px;">
+          確定要移除「<strong>${safeLabel}</strong>」這個節點嗎？<br>
+          連接到它的線會一併刪除。
+        </div>
+        <div style="text-align:right;">
+          <button id="wfBlockDelCancel" type="button" style="padding:7px 16px;margin-right:8px;background:transparent;color:#64748b;border:1px solid #e2e8f0;border-radius:6px;font-size:0.82rem;cursor:pointer;">取消</button>
+          <button id="wfBlockDelOk" type="button" style="padding:7px 16px;background:#dc2626;color:#fff;border:none;border-radius:6px;font-size:0.82rem;font-weight:600;cursor:pointer;">移除</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(mask);
+
+    const cleanup = () => {
+      mask.remove();
+      document.removeEventListener("keydown", keyHandler, true);
+    };
+    const keyHandler = (e) => {
+      if (e.key === "Escape") cleanup();
+      else if (e.key === "Enter") { cleanup(); onConfirm(); }
+    };
+    setTimeout(() => document.addEventListener("keydown", keyHandler, true), 0);
+
+    mask.addEventListener("click", e => { if (e.target === mask) cleanup(); });
+    mask.querySelector("#wfBlockDelCancel").addEventListener("click", cleanup);
+    mask.querySelector("#wfBlockDelOk").addEventListener("click", () => {
+      cleanup();
+      try { onConfirm(); } catch (_) {}
+    });
+    // Focus the cancel button by default (safer default)
+    setTimeout(() => mask.querySelector("#wfBlockDelCancel")?.focus(), 50);
   }
 
   // ── View Toggle ───────────────────────────────────────────────
