@@ -1,0 +1,140 @@
+{
+  "description": "當需要執行網路搜尋時，使用此工作流",
+  "icon": "",
+  "tags": [],
+  "variables": {
+    "global_inputs": [],
+    "env_requirements": [],
+    "definitions": [
+      {
+        "name": "webSearch",
+        "type": "string",
+        "source": "fixed",
+        "default_value": "搜尋台灣今日股市新聞10則",
+        "description": "提供skill執行哪個部份的搜尋",
+        "required": true
+      }
+    ]
+  },
+  "blocks": [
+    {
+      "id": 1,
+      "type": "start",
+      "x": 20,
+      "y": 20,
+      "label": "開始",
+      "config": {}
+    },
+    {
+      "id": 2,
+      "type": "web-search",
+      "x": 40,
+      "y": 150,
+      "label": "網路搜尋",
+      "config": {
+        "params": {
+          "query": {
+            "source": "variable",
+            "value": "{{webSearch}}"
+          },
+          "search_depth": {
+            "source": "fixed",
+            "value": "advanced"
+          },
+          "max_results": {
+            "source": "fixed",
+            "value": "10"
+          },
+          "target_url": {
+            "source": "fixed",
+            "value": ""
+          },
+          "include_domains": {
+            "source": "fixed",
+            "value": ""
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "end",
+      "x": 50,
+      "y": 280,
+      "label": "結束",
+      "config": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": 1,
+      "to": 2
+    },
+    {
+      "from": 2,
+      "to": 3
+    }
+  ],
+  "trigger": {
+    "enabled": true,
+    "mode": "confirm",
+    "priority": 10,
+    "cron": "",
+    "patterns": [
+      "每日新聞，新聞搜尋",
+      "每日新聞",
+      "新聞搜尋"
+    ],
+    "schedule": ""
+  },
+  "execution": {
+    "default_model": "",
+    "timeout": 120,
+    "on_error": "retry",
+    "max_retries": 3,
+    "token_budget": 0
+  },
+  "security": {
+    "require_auth": true,
+    "allowed_roles": [],
+    "rate_limit": 0,
+    "audit_log": true,
+    "encrypt_variables": false
+  },
+  "context": {},
+  "scope": "personal",
+  "owner": "1665",
+  "updated_at": "2026-04-21T11:43:13.592493",
+  "version": "1.0",
+  "workflow_id": "wf_a80f6247bc",
+  "display_name": "網路搜尋工作流",
+  "source": "user_defined",
+  "metadata": {
+    "created_at": "2026-04-21T11:43:13.592573",
+    "updated_at": "2026-04-21T11:43:13.592493",
+    "run_count": 0,
+    "created_by": "line_U09e3122dcc146ed9784ec91acd6d7530"
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "type": "sequential",
+      "skill_id": "mcp-web-search",
+      "label": "網路搜尋",
+      "input_map": {
+        "query": "${webSearch}",
+        "search_depth": "advanced",
+        "max_results": "10",
+        "target_url": "",
+        "include_domains": ""
+      },
+      "output_var": "step_1_output",
+      "on_fail": "abort"
+    }
+  ],
+  "constraints": {
+    "max_steps": 10,
+    "timeout_seconds": 300,
+    "skill_whitelist": null
+  }
+}

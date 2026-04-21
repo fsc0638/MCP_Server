@@ -1,0 +1,293 @@
+{
+  "description": "本工作流專為高效能人士設計，核心採用「並行分支 (Parallel Branch)」架構。它能同步啟動三項關鍵技能：全網新聞檢索（財經與台股）、Google 日曆行程調取及 Notion 未完成任務盤點。透過並行運算大幅降低多維資料獲取的等待時間，並具備「容錯續行 (Failure-Continue)」機制，確保資訊獲取的穩定性與每日決策的完整度。",
+  "icon": "",
+  "tags": [],
+  "variables": {
+    "global_inputs": [],
+    "env_requirements": [],
+    "definitions": [
+      {
+        "name": "webSearch",
+        "type": "string",
+        "source": "fixed",
+        "default_value": "AI發展與量子技術各五則",
+        "description": "",
+        "required": true
+      },
+      {
+        "name": "Today",
+        "type": "string",
+        "source": "fixed",
+        "default_value": "今日",
+        "description": "",
+        "required": true
+      }
+    ]
+  },
+  "blocks": [
+    {
+      "id": 1,
+      "type": "start",
+      "x": 40,
+      "y": 40,
+      "label": "開始",
+      "config": {}
+    },
+    {
+      "id": 3,
+      "type": "google-calendar",
+      "x": 240,
+      "y": 160,
+      "label": "Google 日曆",
+      "config": {
+        "params": {
+          "input": {
+            "source": "fixed",
+            "value": "{{Today}}"
+          },
+          "action": {
+            "source": "fixed",
+            "value": "today"
+          },
+          "start": {
+            "source": "fixed",
+            "value": ""
+          },
+          "end": {
+            "source": "fixed",
+            "value": ""
+          },
+          "title": {
+            "source": "fixed",
+            "value": ""
+          },
+          "description": {
+            "source": "fixed",
+            "value": ""
+          },
+          "event_id": {
+            "source": "fixed",
+            "value": ""
+          },
+          "attendees": {
+            "source": "fixed",
+            "value": ""
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "notion-crud",
+      "x": 240,
+      "y": 280,
+      "label": "Notion ToDo 資料庫完整操作工具",
+      "config": {
+        "params": {
+          "action": {
+            "source": "auto",
+            "value": "list"
+          },
+          "keyword": {
+            "source": "fixed",
+            "value": ""
+          },
+          "filter_status": {
+            "source": "fixed",
+            "value": ""
+          },
+          "filter_assignee": {
+            "source": "fixed",
+            "value": ""
+          },
+          "filter_project": {
+            "source": "fixed",
+            "value": ""
+          },
+          "filter_date": {
+            "source": "fixed",
+            "value": ""
+          },
+          "filter_due_date": {
+            "source": "fixed",
+            "value": ""
+          },
+          "limit": {
+            "source": "fixed",
+            "value": "20"
+          },
+          "offset": {
+            "source": "fixed",
+            "value": "0"
+          },
+          "todo_title": {
+            "source": "fixed",
+            "value": ""
+          },
+          "page_id": {
+            "source": "fixed",
+            "value": ""
+          },
+          "set_status": {
+            "source": "fixed",
+            "value": ""
+          },
+          "set_assignee": {
+            "source": "fixed",
+            "value": ""
+          },
+          "confirm": {
+            "source": "fixed",
+            "value": "false"
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "end",
+      "x": 440,
+      "y": 40,
+      "label": "結束",
+      "config": {}
+    },
+    {
+      "id": 6,
+      "type": "sub-workflow",
+      "x": 240,
+      "y": 40,
+      "label": "子工作流",
+      "config": {
+        "sub_workflow_id": "wf_a80f6247bc",
+        "on_fail": "continue"
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": 1,
+      "to": 3
+    },
+    {
+      "from": 1,
+      "to": 4
+    },
+    {
+      "from": 3,
+      "to": 5
+    },
+    {
+      "from": 4,
+      "to": 5
+    },
+    {
+      "from": 1,
+      "to": 6
+    },
+    {
+      "from": 6,
+      "to": 5
+    }
+  ],
+  "trigger": {
+    "enabled": true,
+    "mode": "confirm",
+    "priority": 10,
+    "cron": "",
+    "patterns": [
+      "早安",
+      "早上好",
+      "開始晨報工作流",
+      "彙整我今天的行程與任務",
+      "同步新聞",
+      "日曆與 Notion"
+    ],
+    "schedule": ""
+  },
+  "execution": {
+    "default_model": "",
+    "timeout": 120,
+    "token_budget": 0,
+    "on_error": "abort",
+    "max_retries": 3
+  },
+  "security": {
+    "require_auth": false,
+    "allowed_roles": [],
+    "rate_limit": 0,
+    "audit_log": true,
+    "encrypt_variables": false
+  },
+  "context": {},
+  "scope": "personal",
+  "owner": "1665",
+  "updated_at": "2026-04-21T11:44:22.432719",
+  "version": "1.0",
+  "workflow_id": "wf_51ebd2d381",
+  "display_name": "情境同步自動化助理",
+  "source": "user_defined",
+  "metadata": {
+    "created_at": "2026-04-21T11:44:22.432769",
+    "updated_at": "2026-04-21T11:44:22.432719",
+    "run_count": 0,
+    "created_by": "line_U09e3122dcc146ed9784ec91acd6d7530"
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "type": "sequential",
+      "skill_id": "mcp-google-calendar",
+      "label": "Google 日曆",
+      "input_map": {
+        "input": "{{Today}}",
+        "action": "today",
+        "start": "",
+        "end": "",
+        "title": "",
+        "description": "",
+        "event_id": "",
+        "attendees": ""
+      },
+      "output_var": "step_1_output",
+      "on_fail": "abort"
+    },
+    {
+      "step_id": "step_2",
+      "type": "sequential",
+      "skill_id": "mcp-notion-crud",
+      "label": "Notion ToDo 資料庫完整操作工具",
+      "input_map": {
+        "action": "list",
+        "keyword": "",
+        "filter_status": "",
+        "filter_assignee": "",
+        "filter_project": "",
+        "filter_date": "",
+        "filter_due_date": "",
+        "limit": "20",
+        "offset": "0",
+        "todo_title": "",
+        "page_id": "",
+        "set_status": "",
+        "set_assignee": "",
+        "confirm": "false"
+      },
+      "output_var": "step_2_output",
+      "on_fail": "abort"
+    },
+    {
+      "step_id": "step_3",
+      "type": "sub_workflow",
+      "label": "子工作流",
+      "sub_workflow_id": "wf_a80f6247bc",
+      "pass_vars": [],
+      "output_var": "step_3_sub_output",
+      "on_fail": "continue"
+    }
+  ],
+  "constraints": {
+    "max_steps": 10,
+    "timeout_seconds": 300,
+    "skill_whitelist": null
+  }
+}
