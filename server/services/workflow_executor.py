@@ -19,6 +19,248 @@ from typing import Dict, Any, Optional, List
 logger = logging.getLogger("MCP_Server.WorkflowExecutor")
 
 
+# ─────────────────────────────────────────────────────────────────────
+# Output formatting — skills return JSON; we pretty-print to markdown for
+# display in chat. Keeps the raw JSON intact in resolved_vars (downstream
+# blocks still see it), but the "最終輸出" area uses markdown.
+# ─────────────────────────────────────────────────────────────────────
+
+_SKILL_FRIENDLY_NAMES = {
+    "mcp-web-search":              "🔍 網路搜尋",
+    "mcp-google-calendar":         "📅 Google 日曆",
+    "mcp-notion-crud":             "📝 Notion ToDo",
+    "mcp-schedule-manager":        "⏰ 排程管理",
+    "mcp-python-executor":         "🐍 Python 執行",
+    "mcp-image-generator":         "🎨 圖像生成",
+    "mcp-meeting-analyzer":        "🎙️ 會議分析",
+    "mcp-meeting-to-notion":       "📋 會議→Notion",
+    "mcp-pdf-llm-analyzer":        "📕 PDF 分析",
+    "mcp-docx-llm-analyzer":       "📘 Word 分析",
+    "mcp-txt-llm-analyzer":        "📄 文字檔分析",
+    "mcp-spreadsheet-llm-analyzer":"📊 試算表分析",
+    "mcp-transcribe":              "🎤 音訊逐字稿",
+    "mcp-gai-worksheet-facilitator":"📋 GAI 學習單",
+    "mcp-groovenauts-meeting-analyst":"🎙️ 跨國會議分析",
+}
+
+
+def _skill_friendly_name(skill_id: str) -> str:
+    return _SKILL_FRIENDLY_NAMES.get(skill_id, skill_id or "步驟")
+
+
+def _format_skill_output_as_markdown(skill_id: str, raw_output: str) -> str:
+    """Convert a skill's raw JSON output into readable markdown.
+
+    Per-skill formatters handle the common shapes (web-search results,
+    calendar events, notion items). Unknown JSON falls back to a generic
+    key:value listing. Non-JSON strings are returned as-is.
+    """
+    if not raw_output:
+        return ""
+    # Non-JSON → return as-is, but trim
+    stripped = raw_output.strip()
+    if not (stripped.startswith("{") or stripped.startswith("[")):
+        return stripped[:3000]
+    try:
+        data = json.loads(stripped)
+    except Exception:
+        return stripped[:3000]
+
+    # Per-skill dispatcher
+    formatter = _SKILL_MARKDOWN_FORMATTERS.get(skill_id)
+    if formatter:
+        try:
+            md = formatter(data)
+            if md:
+                return md
+        except Exception as e:
+            logger.debug(f"[Output format] {skill_id} formatter failed: {e}")
+
+    # Generic fallback
+    return _format_generic_json(data)
+
+
+def _format_web_search(data) -> str:
+    if not isinstance(data, dict):
+        return ""
+    if data.get("status") == "error":
+        return f"❌ 搜尋失敗：{data.get('message', '未知錯誤')}"
+    results = data.get("results") or []
+    if not results:
+        msg = data.get("message") or "沒有找到結果"
+        return f"*{msg}*"
+    mode = data.get("mode", "search")
+    lines = [f"_模式：{mode} · 共 {len(results)} 筆結果_", ""]
+    for i, r in enumerate(results, 1):
+        if not isinstance(r, dict):
+            continue
+        title = (r.get("title") or "").strip().replace("\n", " ")
+        url = r.get("url") or ""
+        content = (r.get("content") or "").strip()
+        # Strip markdown that would break formatting & truncate
+        content = re.sub(r"\n{3,}", "\n\n", content)
+        if len(content) > 400:
+            content = content[:400] + "…"
+        if title and url:
+            lines.append(f"**{i}. [{title}]({url})**")
+        elif title:
+            lines.append(f"**{i}. {title}**")
+        else:
+            lines.append(f"**{i}. {url or '(無標題)'}**")
+        if content:
+            lines.append(content)
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _format_calendar(data) -> str:
+    if not isinstance(data, dict):
+        return ""
+    if data.get("status") == "error":
+        return f"❌ 日曆查詢失敗：{data.get('message', '未知錯誤')}"
+    # Calendar skill often returns formatted_text already
+    ft = data.get("formatted_text")
+    if ft:
+        count = data.get("count")
+        head = f"_共 {count} 個行程_\n\n" if count is not None else ""
+        return head + str(ft).strip()
+    events = data.get("events") or data.get("items") or []
+    if not events:
+        return "*沒有行程*"
+    lines = [f"_共 {len(events)} 個行程_", ""]
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        title = ev.get("summary") or ev.get("title") or "(無標題)"
+        start = ev.get("start") or ev.get("startTime") or ""
+        end   = ev.get("end")   or ev.get("endTime")   or ""
+        time_str = f"{start}" + (f" ~ {end}" if end else "")
+        lines.append(f"- **{title}**" + (f" — {time_str}" if time_str else ""))
+    return "\n".join(lines)
+
+
+def _format_notion_crud(data) -> str:
+    if not isinstance(data, dict):
+        return ""
+    if data.get("status") == "error":
+        return f"❌ Notion 操作失敗：{data.get('message', '未知錯誤')}"
+    action = data.get("action", "")
+    items = data.get("items") or data.get("tasks") or data.get("results") or []
+
+    # summary action
+    if action == "summary":
+        summary = data.get("summary") or data.get("message") or ""
+        return str(summary)
+
+    # Preview / create / update / delete — just show the message
+    if action in ("create", "create_batch", "update", "update_batch", "delete", "delete_batch") and not items:
+        msg = data.get("message") or f"{action} 操作完成"
+        return f"✅ {msg}"
+
+    # list / find_duplicates — render items as a table-ish markdown
+    if not items:
+        msg = data.get("message") or "目前沒有符合條件的項目"
+        return f"*{msg}*"
+    total = data.get("total", len(items))
+    returned = data.get("returned", len(items))
+    lines = [f"_共 {total} 筆" + (f"（顯示 {returned}）" if returned != total else "") + "_", ""]
+    for i, it in enumerate(items[:20], 1):
+        if not isinstance(it, dict):
+            lines.append(f"{i}. {it}")
+            continue
+        title = (it.get("ToDo") or it.get("title") or it.get("name")
+                 or it.get("todo_title") or "(無標題)")
+        status = it.get("status") or it.get("狀態") or ""
+        assignee = it.get("assignee") or it.get("指派") or ""
+        due = it.get("due_date") or it.get("到期日") or ""
+        parts = [f"**{i}. {title}**"]
+        meta_parts = []
+        if status:   meta_parts.append(f"狀態：{status}")
+        if assignee: meta_parts.append(f"👤 {assignee}")
+        if due:      meta_parts.append(f"📅 {due}")
+        if meta_parts:
+            parts.append(" · ".join(meta_parts))
+        lines.append("  \n".join(parts))
+    if len(items) > 20:
+        lines.append(f"\n_… 另外還有 {len(items) - 20} 筆未顯示_")
+    return "\n\n".join(lines)
+
+
+def _format_python_executor(data) -> str:
+    if not isinstance(data, dict):
+        return str(data)
+    if data.get("status") == "error":
+        err = data.get("message") or data.get("error") or "Python 執行失敗"
+        return f"❌ {err}"
+    out = data.get("output") or data.get("stdout") or ""
+    file_path = data.get("file_path") or ""
+    parts = []
+    if out:
+        trimmed = out.strip()[:1500]
+        parts.append(f"```\n{trimmed}\n```")
+    if file_path:
+        parts.append(f"📎 產生檔案：`{file_path}`")
+    return "\n\n".join(parts) if parts else "_(無輸出)_"
+
+
+def _format_image_generator(data) -> str:
+    if not isinstance(data, dict):
+        return ""
+    if data.get("status") == "error":
+        return f"❌ 圖像生成失敗：{data.get('message', '未知錯誤')}"
+    fp = data.get("file_path") or data.get("url") or ""
+    if not fp:
+        return "_(未取得圖片路徑)_"
+    return f"🖼️ 圖片已生成：`{fp}`"
+
+
+def _format_generic_json(data) -> str:
+    """Fallback: render any JSON as readable markdown."""
+    if isinstance(data, list):
+        if not data:
+            return "_(空清單)_"
+        lines = []
+        for i, item in enumerate(data[:15], 1):
+            if isinstance(item, (dict, list)):
+                lines.append(f"{i}. `{json.dumps(item, ensure_ascii=False)[:200]}`")
+            else:
+                lines.append(f"{i}. {item}")
+        if len(data) > 15:
+            lines.append(f"_… 另外還有 {len(data) - 15} 項未顯示_")
+        return "\n".join(lines)
+    if not isinstance(data, dict):
+        return str(data)
+    # Skip noisy internal keys
+    skip = {"status", "_internal_hash", "call_id", "response_id", "instruction"}
+    lines = []
+    for k, v in data.items():
+        if k in skip:
+            continue
+        if isinstance(v, (dict, list)):
+            # Short-form list/dict
+            vs = json.dumps(v, ensure_ascii=False)
+            if len(vs) > 300:
+                vs = vs[:300] + "…"
+            lines.append(f"- **{k}**：`{vs}`")
+        elif v in (None, ""):
+            continue
+        else:
+            sv = str(v)
+            if len(sv) > 400:
+                sv = sv[:400] + "…"
+            lines.append(f"- **{k}**：{sv}")
+    return "\n".join(lines) if lines else "_(無結構化資料)_"
+
+
+_SKILL_MARKDOWN_FORMATTERS = {
+    "mcp-web-search":       _format_web_search,
+    "mcp-google-calendar":  _format_calendar,
+    "mcp-notion-crud":      _format_notion_crud,
+    "mcp-python-executor":  _format_python_executor,
+    "mcp-image-generator":  _format_image_generator,
+}
+
+
 class WorkflowExecutor:
     """Executes a matched workflow: resolves variables, runs blocks via UMA.
 
@@ -247,17 +489,13 @@ class WorkflowExecutor:
                     should_stop = True
 
         # ── Build final_output ──
-        # In sequential workflows we could just use the last block's output,
-        # but with wave execution multiple blocks can finish in the same wave
-        # and there's no single "last" output. Aggregate ALL successful skill
-        # outputs into a labeled summary so the user sees everything, not
-        # just whichever branch finished first.
+        # Aggregate ALL successful skill outputs into a labeled markdown
+        # summary so the user sees everything, not just whichever branch
+        # finished first. Each skill's raw JSON is passed through a per-skill
+        # markdown formatter for readability.
         def _extract_text(block_result) -> str:
-            """Pull a human-readable string out of a block result entry."""
             if not isinstance(block_result, dict):
                 return ""
-            # Prefer the full output_text stored under step_N_output;
-            # fall back to output_preview (truncated to 300 chars)
             bid = block_result.get("block_id")
             if bid is not None:
                 full = resolved_vars.get(f"step_{bid}_output")
@@ -270,16 +508,19 @@ class WorkflowExecutor:
         if len(success_entries) == 0:
             final_output = ""
         elif len(success_entries) == 1:
-            final_output = _extract_text(success_entries[0])
+            e = success_entries[0]
+            final_output = _format_skill_output_as_markdown(
+                e.get("skill") or e.get("type", ""), _extract_text(e),
+            )
         else:
-            # Multi-block summary — label each by skill name
             _parts = []
             for e in success_entries:
-                label = e.get("skill") or e.get("type") or f"block_{e.get('block_id')}"
-                txt = _extract_text(e)
-                if txt:
-                    _parts.append(f"【{label}】\n{txt}")
-            final_output = "\n\n".join(_parts)
+                skill = e.get("skill") or e.get("type") or f"block_{e.get('block_id')}"
+                label = e.get("label") or _skill_friendly_name(skill)
+                md = _format_skill_output_as_markdown(skill, _extract_text(e))
+                if md:
+                    _parts.append(f"### {label}\n\n{md}")
+            final_output = "\n\n---\n\n".join(_parts)
 
         # Determine overall status based on step results
         _any_error = any(r.get("status") == "error" for r in results)
