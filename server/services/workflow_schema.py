@@ -384,6 +384,26 @@ def _steps_from_blocks(blocks: List[Dict], connections: List[Dict]) -> List[Dict
             if indeg[nxt] == 0:
                 queue.append(nxt)
 
+    def _params_to_input_map(params: Dict[str, Any]) -> Dict[str, Any]:
+        """Translate UI-shape params ({source, value}) → v2 input_map strings."""
+        out: Dict[str, Any] = {}
+        for pname, pv in (params or {}).items():
+            if isinstance(pv, dict):
+                src = pv.get("source")
+                val = pv.get("value", "")
+                if src == "variable":
+                    val = str(val).replace("{{", "${").replace("}}", "}")
+                    out[pname] = val
+                elif src == "fixed":
+                    out[pname] = val
+                elif src == "previous_step":
+                    out[pname] = "${_previous_output}"
+                else:
+                    out[pname] = val
+            else:
+                out[pname] = pv
+        return out
+
     steps: List[Dict[str, Any]] = []
     idx = 1
     for bid in order:
@@ -392,33 +412,61 @@ def _steps_from_blocks(blocks: List[Dict], connections: List[Dict]) -> List[Dict
         if btype in ("start", "end", "branch"):
             continue  # control nodes don't map to executor steps
 
-        skill_id = btype if btype.startswith("mcp-") else f"mcp-{btype}"
-        params = (block.get("config") or {}).get("params") or {}
-        # Convert new-style {source,value} entries to ${...} expressions
-        input_map: Dict[str, Any] = {}
-        for pname, pv in params.items():
-            if isinstance(pv, dict):
-                src = pv.get("source")
-                val = pv.get("value", "")
-                if src == "variable":
-                    # value is already "${xxx}" or "{{xxx}}"; normalize to ${xxx}
-                    val = str(val).replace("{{", "${").replace("}}", "}")
-                    input_map[pname] = val
-                elif src == "fixed":
-                    input_map[pname] = val
-                elif src == "previous_step":
-                    input_map[pname] = "${_previous_output}"
-                else:
-                    input_map[pname] = val  # auto / unknown
-            else:
-                input_map[pname] = pv
+        cfg = block.get("config") or {}
+        label = block.get("label") or btype
 
+        # Phase 4: parallel branches
+        if btype in ("parallel", "parallel-branch"):
+            ui_branches = cfg.get("branches") or []
+            v2_branches: List[Dict[str, Any]] = []
+            for i, br in enumerate(ui_branches):
+                if not isinstance(br, dict):
+                    continue
+                br_skill = br.get("skill_id") or br.get("type") or ""
+                if br_skill and not br_skill.startswith("mcp-"):
+                    br_skill = f"mcp-{br_skill}"
+                v2_branches.append({
+                    "branch_id": br.get("branch_id") or f"branch_{idx}_{i+1}",
+                    "skill_id": br_skill,
+                    "label": br.get("label") or br_skill,
+                    "input_map": _params_to_input_map(br.get("params") or {}),
+                    "output_var": br.get("output_var") or f"step_{idx}_branch_{i+1}",
+                })
+            steps.append({
+                "step_id": f"step_{idx}",
+                "type": "parallel",
+                "label": label,
+                "branches": v2_branches,
+                "merge_output_var": cfg.get("merge_output_var") or f"step_{idx}_merged",
+                "on_fail": cfg.get("on_fail", "abort"),
+            })
+            idx += 1
+            continue
+
+        # Phase 4: sub-workflow invocation
+        if btype in ("sub-workflow", "sub_workflow"):
+            sub_id = cfg.get("sub_workflow_id") or ""
+            pass_vars = cfg.get("pass_vars") or []
+            steps.append({
+                "step_id": f"step_{idx}",
+                "type": "sub_workflow",
+                "label": label,
+                "sub_workflow_id": sub_id,
+                "pass_vars": list(pass_vars) if isinstance(pass_vars, (list, tuple)) else [],
+                "output_var": cfg.get("output_var") or f"step_{idx}_sub_output",
+                "on_fail": cfg.get("on_fail", "abort"),
+            })
+            idx += 1
+            continue
+
+        # Default: sequential skill node
+        skill_id = btype if btype.startswith("mcp-") else f"mcp-{btype}"
         steps.append({
             "step_id": f"step_{idx}",
             "type": "sequential",
             "skill_id": skill_id,
-            "label": block.get("label") or btype,
-            "input_map": input_map,
+            "label": label,
+            "input_map": _params_to_input_map(cfg.get("params")),
             "output_var": f"step_{idx}_output",
             "on_fail": "abort",
         })

@@ -11,6 +11,9 @@
     start:                         { label: "開始",       icon: "▶",  color: "#34a853", category: "control" },
     end:                           { label: "結束",       icon: "⏹",  color: "#ea4335", category: "control" },
     branch:                        { label: "條件分支",    icon: "⑂",  color: "#00897b", category: "control" },
+    // Phase 4: parallel branches run concurrently; sub-workflow invokes another workflow
+    parallel:                      { label: "並行分支",    icon: "🔀", color: "#8e44ad", category: "control" },
+    "sub-workflow":                { label: "子工作流",    icon: "📎", color: "#546e7a", category: "control" },
     "web-search":                  { label: "網路搜尋",    icon: "🔍", color: "#4285f4", category: "search" },
     "python-executor":             { label: "Python 執行", icon: "🐍", color: "#306998", category: "compute" },
     "image-generator":             { label: "圖像生成",    icon: "🖼", color: "#ad1457", category: "compute" },
@@ -139,10 +142,20 @@
       this._updateInfo();
       // Skill blocks: async-prefill params from skill schema so the user
       // sees a populated params tab instead of an empty one. Control nodes
-      // (start/end/branch) don't have schemas so skip.
-      if (type !== "start" && type !== "end" && type !== "branch") {
+      // (start/end/branch/parallel/sub-workflow) don't map to a single
+      // skill so skip.
+      const skipPrefill = ["start", "end", "branch", "parallel", "sub-workflow"];
+      if (!skipPrefill.includes(type)) {
         const skillName = type.startsWith("mcp-") ? type : `mcp-${type}`;
         _prefillBlockParamsFromSchema(block, skillName);
+      }
+      // Parallel blocks need empty config bootstrap so the first render of
+      // the params tab doesn't crash on missing .branches
+      if (type === "parallel") {
+        block.config = block.config || {};
+        block.config.branches = block.config.branches || [];
+        block.config.merge_output_var = block.config.merge_output_var || `parallel_${id}_merged`;
+        block.config.on_fail = block.config.on_fail || "abort";
       }
       return block;
     }
@@ -1441,6 +1454,12 @@
       const isControl = ["start", "end", "branch"].includes(block.type);
       if (isControl) {
         paramsDiv.innerHTML = `<div style="padding:10px;font-size:0.72rem;color:var(--text-tertiary);">控制節點無參數</div>`;
+      } else if (block.type === "parallel") {
+        // Phase 4: parallel branches editor
+        _renderParallelBlockEditor(block, paramsDiv, fd);
+      } else if (block.type === "sub-workflow") {
+        // Phase 4: sub-workflow picker
+        _renderSubWorkflowBlockEditor(block, paramsDiv, fd);
       } else {
         const skillName = block.type.startsWith("mcp-") ? block.type : "mcp-" + block.type;
 
@@ -3748,6 +3767,238 @@
     const def = paramSchema && paramSchema.default != null ? `預設: ${_escHtml(String(paramSchema.default))}` : "固定值";
     return `<input class="wf-param-map-val" type="text" value="${cur}" onchange="${updateFn}" placeholder="${def}" />`;
   }
+
+  // ── Phase 4: Parallel Block Editor ──────────────────────────────────
+  // A parallel block has config.branches = [{skill_id, params, output_var}, ...]
+  // plus config.merge_output_var and config.on_fail. Users add/remove branches
+  // and pick a skill per branch. Each branch's skill params are read from
+  // SKILL.md (same machinery as sequential blocks, but flattened into one row
+  // per param for space).
+  function _renderParallelBlockEditor(block, container, fd) {
+    if (!block.config) block.config = {};
+    if (!Array.isArray(block.config.branches)) block.config.branches = [];
+    if (!block.config.merge_output_var) block.config.merge_output_var = `parallel_${block.id}_merged`;
+    if (!block.config.on_fail) block.config.on_fail = "abort";
+
+    const skillOpts = Object.entries(_dynamicSkills || {})
+      .filter(([name]) => !["start", "end", "branch", "parallel", "sub-workflow"].includes(name))
+      .map(([name, info]) => `<option value="${_escHtml(name)}">${_escHtml(name)}${info.ready === false ? " (未就緒)" : ""}</option>`)
+      .join("");
+
+    const branchRows = block.config.branches.map((br, i) => {
+      const paramCount = Object.keys(br.params || {}).length;
+      return `<div class="wf-parallel-branch" data-bi="${i}" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-bottom:8px;background:#fff;">
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+          <span style="background:#ede7f6;color:#8e44ad;font-size:0.7rem;font-weight:700;padding:2px 8px;border-radius:4px;">分支 ${i + 1}</span>
+          <input type="text" placeholder="標籤（選填）" value="${_escHtml(br.label || "")}" style="flex:1;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
+            onchange="window._updateParallelBranch(${block.id}, ${i}, 'label', this.value)" />
+          <button title="移除分支" onclick="window._removeParallelBranch(${block.id}, ${i})"
+            style="background:transparent;border:none;color:#dc2626;cursor:pointer;font-size:0.9rem;">✕</button>
+        </div>
+        <label style="font-size:0.7rem;color:#6b7280;display:block;margin-bottom:3px;">技能</label>
+        <select style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;margin-bottom:6px;"
+          onchange="window._updateParallelBranch(${block.id}, ${i}, 'skill_id', this.value)">
+          <option value="">選擇技能</option>
+          ${skillOpts.replace(`value="${_escHtml(br.skill_id || "")}"`, `value="${_escHtml(br.skill_id || "")}" selected`)}
+        </select>
+        <label style="font-size:0.7rem;color:#6b7280;display:block;margin-bottom:3px;">輸出變數名稱</label>
+        <input type="text" placeholder="例：news_result" value="${_escHtml(br.output_var || "")}"
+          style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;margin-bottom:6px;"
+          onchange="window._updateParallelBranch(${block.id}, ${i}, 'output_var', this.value)" />
+        <div style="font-size:0.68rem;color:#9ca3af;">
+          參數設定：${paramCount} 個（打開此分支的屬性面板編輯，或直接改 JSON）
+          <button style="float:right;background:transparent;border:1px solid #e5e7eb;border-radius:4px;padding:2px 8px;font-size:0.68rem;cursor:pointer;"
+            onclick="window._editParallelBranchParams(${block.id}, ${i})">參數...</button>
+        </div>
+      </div>`;
+    }).join("");
+
+    container.innerHTML = `
+      <div style="background:#f3e5f5;padding:8px 10px;border-radius:6px;margin-bottom:10px;font-size:0.72rem;color:#6a1b9a;">
+        🔀 <strong>並行分支</strong>：以下分支會<strong>同時</strong>執行，全部完成後結果會匯合到下方的「匯合變數」。
+      </div>
+      ${branchRows || '<div style="padding:10px;text-align:center;color:#9ca3af;font-size:0.72rem;">尚無分支 — 點下方「+ 新增分支」</div>'}
+      <button style="width:100%;padding:6px;background:#8e44ad;color:#fff;border:none;border-radius:6px;font-size:0.72rem;cursor:pointer;margin-bottom:10px;"
+        onclick="window._addParallelBranch(${block.id})">+ 新增分支</button>
+      <div style="margin-bottom:8px;">
+        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">匯合後變數名稱</label>
+        <input type="text" value="${_escHtml(block.config.merge_output_var)}"
+          style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
+          onchange="window._updateBlockConfig(${block.id}, 'merge_output_var', this.value)" />
+        <div style="font-size:0.66rem;color:#9ca3af;margin-top:3px;">後續節點可用 <code>\${${_escHtml(block.config.merge_output_var)}}</code> 引用匯合結果 (JSON)</div>
+      </div>
+      <div>
+        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">分支失敗策略</label>
+        <select style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
+          onchange="window._updateBlockConfig(${block.id}, 'on_fail', this.value)">
+          <option value="abort" ${block.config.on_fail === "abort" ? "selected" : ""}>中止整個工作流 (abort)</option>
+          <option value="continue" ${block.config.on_fail === "continue" ? "selected" : ""}>繼續（此分支標記失敗）(continue)</option>
+          <option value="skip" ${block.config.on_fail === "skip" ? "selected" : ""}>跳過此分支 (skip)</option>
+        </select>
+      </div>
+    `;
+  }
+
+  window._addParallelBranch = function (blockId) {
+    const fd = window._wfDesigner;
+    const block = fd?.blocks?.get(blockId);
+    if (!block) return;
+    if (!Array.isArray(block.config.branches)) block.config.branches = [];
+    const idx = block.config.branches.length + 1;
+    block.config.branches.push({
+      branch_id: `branch_${blockId}_${idx}`,
+      skill_id: "",
+      label: "",
+      params: {},
+      output_var: `branch_${blockId}_${idx}_output`,
+    });
+    _renderParallelBlockEditor(block, document.getElementById("wfPropTabParams"), fd);
+  };
+
+  window._removeParallelBranch = function (blockId, branchIdx) {
+    const fd = window._wfDesigner;
+    const block = fd?.blocks?.get(blockId);
+    if (!block || !Array.isArray(block.config?.branches)) return;
+    block.config.branches.splice(branchIdx, 1);
+    _renderParallelBlockEditor(block, document.getElementById("wfPropTabParams"), fd);
+  };
+
+  window._updateParallelBranch = function (blockId, branchIdx, field, value) {
+    const fd = window._wfDesigner;
+    const block = fd?.blocks?.get(blockId);
+    if (!block || !Array.isArray(block.config?.branches)) return;
+    if (!block.config.branches[branchIdx]) return;
+    block.config.branches[branchIdx][field] = value;
+  };
+
+  // Inline params editor for a single branch — small modal with JSON textarea
+  // (complete param UI like sequential blocks is overkill for parallel since
+  // most branches use simple fixed/variable mappings)
+  window._editParallelBranchParams = function (blockId, branchIdx) {
+    const fd = window._wfDesigner;
+    const block = fd?.blocks?.get(blockId);
+    if (!block?.config?.branches?.[branchIdx]) return;
+    const branch = block.config.branches[branchIdx];
+    const existing = document.getElementById("wf-branch-params-modal");
+    if (existing) existing.remove();
+    const mask = document.createElement("div");
+    mask.id = "wf-branch-params-modal";
+    mask.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center;";
+    const current = JSON.stringify(branch.params || {}, null, 2);
+    mask.innerHTML = `
+      <div style="background:#fff;width:520px;max-width:92vw;border-radius:10px;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.25);">
+        <h3 style="margin:0 0 8px;font-size:15px;">分支 ${branchIdx + 1} 參數 (${_escHtml(branch.skill_id || "未選技能")})</h3>
+        <div style="font-size:12px;color:#666;margin-bottom:10px;">JSON 格式。每個 key 是技能的參數名，value 是 {source, value} 或直接字串。</div>
+        <textarea id="wf-branch-params-ta" style="width:100%;height:240px;font-family:monospace;font-size:12px;padding:10px;border:1px solid #ddd;border-radius:6px;">${_escHtml(current)}</textarea>
+        <div style="text-align:right;margin-top:12px;">
+          <button id="wf-branch-params-cancel" style="padding:6px 14px;margin-right:8px;background:transparent;color:#666;border:1px solid #ddd;border-radius:4px;cursor:pointer;">取消</button>
+          <button id="wf-branch-params-save" style="padding:6px 14px;background:#8e44ad;color:#fff;border:none;border-radius:4px;cursor:pointer;">儲存</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+    mask.querySelector("#wf-branch-params-cancel").onclick = () => mask.remove();
+    mask.addEventListener("click", e => { if (e.target === mask) mask.remove(); });
+    mask.querySelector("#wf-branch-params-save").onclick = () => {
+      const text = document.getElementById("wf-branch-params-ta").value;
+      try {
+        const parsed = JSON.parse(text);
+        if (typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("必須是物件");
+        branch.params = parsed;
+        mask.remove();
+        _renderParallelBlockEditor(block, document.getElementById("wfPropTabParams"), fd);
+      } catch (e) {
+        if (window.showToast) window.showToast("❌ JSON 格式錯誤：" + e.message, "error");
+      }
+    };
+  };
+
+  // ── Phase 4: Sub-Workflow Block Editor ──────────────────────────────
+  // A sub-workflow block has config.sub_workflow_id pointing to another
+  // workflow that should be executed as a step here. Cycle detection
+  // (_execution_stack in executor) prevents A→B→A loops automatically.
+  async function _renderSubWorkflowBlockEditor(block, container, fd) {
+    if (!block.config) block.config = {};
+    container.innerHTML = `<div style="padding:10px;color:#6b7280;font-size:0.72rem;">載入工作流清單...</div>`;
+
+    // Fetch available workflows (all scopes) and filter out self to prevent
+    // the most obvious cycle at UI level.
+    let workflows = [];
+    try {
+      const user = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+      const q = new URLSearchParams();
+      if (user.department_code) q.set("dept_code", user.department_code);
+      if (user.employee_id || user.id) q.set("owner", user.employee_id || user.id);
+      const r = await fetch(`/api/workflows?${q.toString()}`);
+      if (r.ok) {
+        const data = await r.json();
+        workflows = data.workflows || [];
+      }
+    } catch (_) {}
+
+    const selfId = fd?._currentWfId || "";
+    const options = workflows
+      .filter(w => (w.workflow_id || w.id) !== selfId)
+      .map(w => {
+        const wid = w.workflow_id || w.id;
+        const name = w.display_name || w.name || wid;
+        const scope = w.scope ? ` [${w.scope}]` : "";
+        const sel = block.config.sub_workflow_id === wid ? " selected" : "";
+        return `<option value="${_escHtml(wid)}"${sel}>${_escHtml(name)}${scope}</option>`;
+      }).join("");
+
+    const passVars = Array.isArray(block.config.pass_vars) ? block.config.pass_vars : [];
+    const wfVars = _getVariableList(fd._wfData);
+
+    container.innerHTML = `
+      <div style="background:#eceff1;padding:8px 10px;border-radius:6px;margin-bottom:10px;font-size:0.72rem;color:#455a64;">
+        📎 <strong>子工作流</strong>：呼叫另一個已儲存的工作流作為本步驟。系統會偵測循環呼叫 (A→B→A)，最多允許 5 層巢狀。
+      </div>
+      <div style="margin-bottom:10px;">
+        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">選擇子工作流</label>
+        <select style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
+          onchange="window._updateBlockConfig(${block.id}, 'sub_workflow_id', this.value)">
+          <option value="">— 請選擇 —</option>
+          ${options}
+        </select>
+        ${!options ? '<div style="font-size:0.66rem;color:#dc2626;margin-top:4px;">⚠️ 沒有可選的工作流（自己無法引用自己）</div>' : ""}
+      </div>
+      <div style="margin-bottom:10px;">
+        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">傳入變數 (以逗號分隔的變數名)</label>
+        <input type="text" value="${_escHtml(passVars.join(", "))}"
+          placeholder="例：topic, lang"
+          style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
+          onchange="window._updateSubWorkflowPassVars(${block.id}, this.value)" />
+        <div style="font-size:0.66rem;color:#9ca3af;margin-top:3px;">
+          本工作流目前可傳入的變數：${wfVars.map(v => `<code style="background:#f1f5f9;padding:1px 4px;border-radius:3px;margin:0 2px;">${_escHtml(v.name)}</code>`).join("") || "（尚未定義）"}
+        </div>
+      </div>
+      <div style="margin-bottom:10px;">
+        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">接收輸出的變數名</label>
+        <input type="text" value="${_escHtml(block.config.output_var || "")}"
+          placeholder="例：sub_result"
+          style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
+          onchange="window._updateBlockConfig(${block.id}, 'output_var', this.value)" />
+      </div>
+      <div>
+        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">子工作流失敗策略</label>
+        <select style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
+          onchange="window._updateBlockConfig(${block.id}, 'on_fail', this.value)">
+          <option value="abort" ${block.config.on_fail === "abort" || !block.config.on_fail ? "selected" : ""}>中止整個工作流 (abort)</option>
+          <option value="continue" ${block.config.on_fail === "continue" ? "selected" : ""}>繼續執行主流程 (continue)</option>
+          <option value="skip" ${block.config.on_fail === "skip" ? "selected" : ""}>跳過 (skip)</option>
+        </select>
+      </div>
+    `;
+  }
+
+  window._updateSubWorkflowPassVars = function (blockId, raw) {
+    const fd = window._wfDesigner;
+    const block = fd?.blocks?.get(blockId);
+    if (!block) return;
+    const list = (raw || "").split(/[,，、;；]+/).map(s => s.trim()).filter(Boolean);
+    if (!block.config) block.config = {};
+    block.config.pass_vars = list;
+  };
 
   // ── Block Params Renderer (used by prop panel Tab 2) ──
   function _renderBlockParams(block, container, fd, skillName, schema) {
