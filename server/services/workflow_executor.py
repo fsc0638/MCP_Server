@@ -817,6 +817,31 @@ class WorkflowExecutor:
                 logger.warning(f"[WFExec] Block {bid} ({skill_name}): no params, fallback to 'input'")
         logger.info(f"[WFExec] Block {bid} ({skill_name}): params={list(block_params.keys())}, model={block_model}")
 
+        # ── Inject session context for schedule-manager & similar skills ──
+        # Matches what openai_adapter does for LINE chat so workflow-triggered
+        # schedules save into the correct per-user file (workspace/schedules/
+        # {session_id}.json), not '.json' (empty prefix).
+        if skill_name == "mcp-schedule-manager":
+            _uc = user_context or {}
+            _sid = (
+                _uc.get("user_id")
+                or _uc.get("session_id")
+                or (f"line_{_uc.get('line_user_id')}" if _uc.get("line_user_id") else "")
+                or _uc.get("employee_id")
+                or ""
+            )
+            if _sid:
+                os.environ["SESSION_ID"] = str(_sid)
+                # Derive chat_id: line_Uxxx → Uxxx (LINE raw user ID for push)
+                if _sid.startswith("line_group_"):
+                    os.environ["CHAT_ID"] = _sid[len("line_group_"):]
+                elif _sid.startswith("line_"):
+                    os.environ["CHAT_ID"] = _sid[len("line_"):]
+                else:
+                    os.environ["CHAT_ID"] = str(_sid)
+            if user_input:
+                os.environ["USER_ORIGINAL_REQUEST"] = user_input
+
         # Execute with retry — use run_in_executor so the sync subprocess
         # call doesn't block other concurrent blocks in the same wave.
         loop = asyncio.get_event_loop()

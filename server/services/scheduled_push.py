@@ -1100,6 +1100,15 @@ class ScheduledPushService:
         dow_map = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
         for config_file in self.schedules_dir.glob("*.json"):
+            # Defensive: skip files with empty stem (e.g. ".json") — indicates
+            # a skill was called without SESSION_ID set. Safer to drop the file
+            # than push to whoever ends up with an empty chat_id.
+            if not config_file.stem:
+                logger.warning(
+                    f"[ScheduledPush] Empty-name schedule file detected: {config_file} — "
+                    f"skipping (likely from a workflow path that didn't inject SESSION_ID)"
+                )
+                continue
             try:
                 config = json.loads(config_file.read_text(encoding="utf-8"))
             except Exception:

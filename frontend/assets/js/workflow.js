@@ -2402,8 +2402,11 @@
               statusDiv.style.color = "#059669";
               statusDiv.textContent = `✅ 已儲存為工作流「${displayName}」`;
               btn.textContent = "已儲存";
-              // Also refresh landing cards if visible
-              if (typeof renderWorkflowLanding === "function") try { renderWorkflowLanding(); } catch (_) {}
+              // Refresh the landing cards so the new workflow shows up
+              // without requiring a full page reload.
+              if (typeof _showWorkflowLanding === "function") {
+                try { _showWorkflowLanding(); } catch (_) {}
+              }
             } catch (err) {
               statusDiv.style.color = "#dc2626";
               statusDiv.textContent = "❌ 儲存失敗：" + (err.message || err);
