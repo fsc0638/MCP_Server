@@ -176,7 +176,7 @@
             style="margin-left:auto;background:transparent;border:none;color:rgba(255,255,255,0.85);cursor:pointer;font-size:14px;line-height:1;padding:2px 4px;border-radius:3px;">⋯</button>
         </div>
         <div class="wf-block-body">
-          <span>${CATEGORIES[def.category]?.label || def.category}</span>
+          <span class="wf-block-subtitle">${CATEGORIES[def.category]?.label || def.category}</span>
           <span class="wf-block-status"></span>
         </div>
         ${type !== "start" ? '<div class="wf-port wf-port-left" data-port="in" data-side="left"></div>' : ""}
@@ -1045,6 +1045,19 @@
         const block = this.addBlock(b.type, b.x, b.y, b.label);
         if (block && b.config) block.config = b.config;
       });
+      // Refresh sub-workflow block subtitles — if any are present, fetch the
+      // workflow list once to populate _wfNameCache so labels show names
+      // instead of IDs without the user having to open each block first.
+      const _hasSub = Array.from(this.blocks.values()).some(bl =>
+        bl.type === "sub-workflow" && bl.config?.sub_workflow_id
+      );
+      if (_hasSub) {
+        _primeSubWorkflowNameCache(this).then(() => {
+          this.blocks.forEach(bl => {
+            if (bl.type === "sub-workflow") _updateSubWorkflowBlockLabel(bl, this);
+          });
+        });
+      }
       // Store workflow-level data for settings (include name for display)
       // v2 files use display_name; legacy used name. Accept either so the
       // settings modal doesn't ask user to re-enter the name.
@@ -4321,6 +4334,18 @@
       }
     } catch (_) {}
 
+    // Cache the name→id map on designer so the block subtitle can look up
+    // the display name without re-fetching every time.
+    if (fd) {
+      fd._wfNameCache = fd._wfNameCache || {};
+      workflows.forEach(w => {
+        const wid = w.workflow_id || w.id;
+        if (wid) fd._wfNameCache[wid] = w.display_name || w.name || wid;
+      });
+    }
+    // Refresh THIS block's subtitle now that cache is populated
+    _updateSubWorkflowBlockLabel(block, fd);
+
     const selfId = fd?._currentWfId || "";
     const options = workflows
       .filter(w => (w.workflow_id || w.id) !== selfId)
@@ -4342,7 +4367,7 @@
       <div style="margin-bottom:10px;">
         <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">選擇子工作流</label>
         <select style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
-          onchange="window._updateBlockConfig(${block.id}, 'sub_workflow_id', this.value)">
+          onchange="window._updateSubWorkflowId(${block.id}, this.value, this.options[this.selectedIndex]?.textContent || '')">
           <option value="">— 請選擇 —</option>
           ${options}
         </select>
@@ -4385,6 +4410,71 @@
     if (!block.config) block.config = {};
     block.config.pass_vars = list;
   };
+
+  // When user picks a sub-workflow, update config AND refresh the block's
+  // subtitle so the canvas shows the target workflow's name instead of the
+  // generic "控制" category label.
+  window._updateSubWorkflowId = function (blockId, wfId, optionLabel) {
+    const fd = window._wfDesigner;
+    const block = fd?.blocks?.get(blockId);
+    if (!block) return;
+    if (!block.config) block.config = {};
+    block.config.sub_workflow_id = wfId;
+    // Cache the display name so refresh works after save/reload
+    if (wfId && optionLabel) {
+      fd._wfNameCache = fd._wfNameCache || {};
+      // Option label was "顯示名 [scope]" — strip the scope suffix
+      const cleanLabel = String(optionLabel).replace(/\s*\[[^\]]*\]\s*$/, "").trim();
+      fd._wfNameCache[wfId] = cleanLabel || wfId;
+    }
+    _updateSubWorkflowBlockLabel(block, fd);
+  };
+
+  // Pre-populate _wfNameCache with all visible workflows so block subtitles
+  // render their target names immediately on page load (without having to
+  // open the sub-workflow block's config first).
+  async function _primeSubWorkflowNameCache(fd) {
+    if (!fd) return;
+    if (fd._wfNameCachePrimed) return;
+    fd._wfNameCache = fd._wfNameCache || {};
+    try {
+      const user = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+      const q = new URLSearchParams();
+      if (user.department_code) q.set("dept_code", user.department_code);
+      if (user.employee_id || user.id) q.set("owner", user.employee_id || user.id);
+      const r = await fetch(`/api/workflows?${q.toString()}`);
+      if (!r.ok) return;
+      const data = await r.json();
+      (data.workflows || []).forEach(w => {
+        const wid = w.workflow_id || w.id;
+        if (wid) fd._wfNameCache[wid] = w.display_name || w.name || wid;
+      });
+      fd._wfNameCachePrimed = true;
+    } catch (_) { /* non-fatal */ }
+  }
+
+  // Read block.config.sub_workflow_id, look up its friendly name in the
+  // workflow cache, and rewrite the subtitle span. Falls back to the
+  // default category label when no selection is made.
+  function _updateSubWorkflowBlockLabel(block, fd) {
+    if (!block || !block.el) return;
+    const sub = document.querySelector(`.wf-block[data-id="${block.id}"] .wf-block-subtitle`);
+    if (!sub) return;
+    if (block.type !== "sub-workflow") return;
+    const wfId = block.config?.sub_workflow_id;
+    if (!wfId) {
+      // Reset to default category label
+      const def = BLOCK_DEFS[block.type];
+      sub.textContent = CATEGORIES[def.category]?.label || def.category;
+      sub.style.color = "";
+      sub.title = "";
+      return;
+    }
+    const name = fd?._wfNameCache?.[wfId] || wfId;
+    sub.textContent = "→ " + name;
+    sub.style.color = "#8e44ad";
+    sub.title = `子工作流 ID: ${wfId}`;
+  }
 
   // Simple-mode row: native widget (text/number/select/checkbox) + variable-pick button.
   // No "source" dropdown. User writes literal values or ${varName}.
