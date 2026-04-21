@@ -167,6 +167,9 @@
       el.innerHTML = `
         <div class="wf-block-header" style="background:${def.color}">
           <span>${def.icon}</span> <span>${label || def.label}</span>
+          <button class="wf-block-menu-btn" type="button" title="節點選單"
+            data-block-menu="${id}"
+            style="margin-left:auto;background:transparent;border:none;color:rgba(255,255,255,0.85);cursor:pointer;font-size:14px;line-height:1;padding:2px 4px;border-radius:3px;">⋯</button>
         </div>
         <div class="wf-block-body">
           <span>${CATEGORIES[def.category]?.label || def.category}</span>
@@ -200,12 +203,26 @@
         };
       });
 
-      // Click (no drag movement) → select + open property panel
+      // Click on block body → just SELECT (highlight only).
+      // Settings / remove are now behind the ⋯ menu button.
       el.addEventListener("click", e => {
         if (e.target.closest(".wf-port")) return;
+        if (e.target.closest(".wf-block-menu-btn")) return;  // menu handles itself
         if (e.target.closest("input, textarea, select, button")) return;
-        this.select(id);
+        this.select(id, { openPanel: false });
       });
+
+      // 3-dot menu button → popup with 設定 / 移除
+      const menuBtn = el.querySelector(".wf-block-menu-btn");
+      if (menuBtn) {
+        menuBtn.addEventListener("mousedown", e => e.stopPropagation());
+        menuBtn.addEventListener("click", e => {
+          e.stopPropagation();
+          e.preventDefault();
+          this.select(id, { openPanel: false });
+          _showBlockContextMenu(menuBtn, id, this);
+        });
+      }
 
       // Port mousedown → start connection
       el.querySelectorAll(".wf-port").forEach(port => {
@@ -234,14 +251,18 @@
       this._updateInfo();
     }
 
-    select(id) {
+    select(id, opts = {}) {
+      // opts.openPanel (default true) — whether to open the property panel.
+      // Clicks on the block body only highlight; the 3-dot menu's "設定" is
+      // what opens the panel.
+      const openPanel = opts.openPanel !== false;
       this.blocks.forEach(b => b.el.classList.remove("selected"));
       this.selectedId = id;
       if (id != null) {
         const b = this.blocks.get(id);
         if (b) {
           b.el.classList.add("selected");
-          showWfPropPanel(b, this);
+          if (openPanel) showWfPropPanel(b, this);
         }
       } else {
         closeWfPropPanel();
@@ -1520,6 +1541,80 @@
   function closeWfPropPanel() {
     const panel = document.getElementById("wfPropPanel");
     if (panel) panel.classList.add("hidden");
+  }
+
+  // ── Block 3-dot context menu (設定 / 移除) ──────────────────────────
+  // Anchored to the ⋯ button in the block header. Only one can be open at a
+  // time; any outside click or ESC closes it. Keeps the block interaction
+  // simple: single click = highlight, ⋯ = actions.
+  function _showBlockContextMenu(anchorBtn, blockId, fd) {
+    document.getElementById("wfBlockCtxMenu")?.remove();
+
+    const menu = document.createElement("div");
+    menu.id = "wfBlockCtxMenu";
+    menu.style.cssText = "position:fixed;z-index:9800;min-width:130px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:4px;font-size:0.82rem;";
+    menu.innerHTML = `
+      <button type="button" data-act="config" style="display:block;width:100%;text-align:left;padding:8px 12px;background:transparent;border:none;border-radius:4px;cursor:pointer;color:#1e293b;">⚙️ 設定</button>
+      <button type="button" data-act="remove" style="display:block;width:100%;text-align:left;padding:8px 12px;background:transparent;border:none;border-radius:4px;cursor:pointer;color:#dc2626;">🗑 移除</button>
+    `;
+
+    // Position just below the anchor button, kept inside viewport
+    const rect = anchorBtn.getBoundingClientRect();
+    document.body.appendChild(menu);
+    const mw = menu.offsetWidth || 140;
+    const mh = menu.offsetHeight || 80;
+    let left = rect.right - mw;
+    let top  = rect.bottom + 4;
+    if (left < 4) left = 4;
+    if (left + mw > window.innerWidth - 4) left = window.innerWidth - mw - 4;
+    if (top + mh > window.innerHeight - 4) top = rect.top - mh - 4;  // flip above
+    menu.style.left = left + "px";
+    menu.style.top  = top + "px";
+
+    // Hover highlight
+    menu.querySelectorAll("button").forEach(btn => {
+      btn.addEventListener("mouseenter", () => { btn.style.background = btn.dataset.act === "remove" ? "#fef2f2" : "#f1f5f9"; });
+      btn.addEventListener("mouseleave", () => { btn.style.background = "transparent"; });
+    });
+
+    const close = () => {
+      menu.remove();
+      document.removeEventListener("mousedown", outsideHandler, true);
+      document.removeEventListener("keydown", escHandler, true);
+    };
+    const outsideHandler = (e) => {
+      if (!menu.contains(e.target) && e.target !== anchorBtn) close();
+    };
+    const escHandler = (e) => { if (e.key === "Escape") close(); };
+    // Defer binding so the triggering click doesn't immediately close us
+    setTimeout(() => {
+      document.addEventListener("mousedown", outsideHandler, true);
+      document.addEventListener("keydown", escHandler, true);
+    }, 0);
+
+    menu.querySelector('[data-act="config"]').addEventListener("click", (e) => {
+      e.stopPropagation();
+      close();
+      const b = fd.blocks.get(blockId);
+      if (b) showWfPropPanel(b, fd);
+    });
+
+    menu.querySelector('[data-act="remove"]').addEventListener("click", (e) => {
+      e.stopPropagation();
+      close();
+      const b = fd.blocks.get(blockId);
+      if (!b) return;
+      const label = b.label || b.type;
+      // Prevent deleting start/end — they're structurally required
+      if (b.type === "start" || b.type === "end") {
+        if (window.showToast) window.showToast("「" + label + "」是必要節點，無法移除", "error");
+        return;
+      }
+      if (!confirm(`確定要移除「${label}」這個節點嗎？連接到它的線也會一併刪除。`)) return;
+      fd.deleteBlock(blockId);
+      // Close the property panel if it was showing this block
+      closeWfPropPanel();
+    });
   }
 
   // ── View Toggle ───────────────────────────────────────────────

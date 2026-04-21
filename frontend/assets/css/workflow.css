@@ -352,6 +352,12 @@
   border-radius: 8px 8px 0 0;
   color: #fff; font-size: 0.72rem; font-weight: 700;
 }
+.wf-block-menu-btn:hover {
+  background: rgba(255, 255, 255, 0.2) !important;
+}
+.wf-block-menu-btn:active {
+  background: rgba(255, 255, 255, 0.35) !important;
+}
 .wf-block-body {
   display: flex; align-items: center; justify-content: space-between;
   flex: 1; padding: 6px 10px;
