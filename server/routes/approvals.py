@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Cookie
+from fastapi import APIRouter, HTTPException, Cookie, BackgroundTasks
 
 from server.services.permissions import resolve_caller_context
 from server.services.approvals_service import get_approval, resolve_approval
@@ -82,7 +82,7 @@ def read_approval(approval_id: str):
 
 
 @router.post("/api/approvals/{approval_id}/approve")
-def approve(approval_id: str, mcp_session: str = Cookie(default="")):
+def approve(approval_id: str, background_tasks: BackgroundTasks, mcp_session: str = Cookie(default="")):
     ctx = resolve_caller_context(mcp_session)
     if not ctx:
         raise HTTPException(status_code=403, detail="Not signed in")
@@ -109,7 +109,17 @@ def approve(approval_id: str, mcp_session: str = Cookie(default="")):
         reason_code="OK" if ok else "NOT_PENDING_OR_EXPIRED",
         reason="Approved" if ok else "Approval not pending or expired",
     )
-    return {"status": "success" if ok else "error", "approved": ok}
+
+    # Option 2: server-orchestrated resume (best-effort background task).
+    if ok:
+        try:
+            from server.routes.workflow_resume import resume_workflow
+            background_tasks.add_task(resume_workflow, approval_id, mcp_session)
+        except Exception:
+            # Fail-open: approval stays approved; manual resume endpoint remains available.
+            pass
+
+    return {"status": "success" if ok else "error", "approved": ok, "resume_scheduled": bool(ok)}
 
 
 @router.post("/api/approvals/{approval_id}/reject")
