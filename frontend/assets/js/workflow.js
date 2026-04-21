@@ -3996,39 +3996,40 @@
     }
   }
 
-  // Populate config.params with sensible defaults derived from the skill's
-  // JSON-Schema: every required param + every param that declares a `default`
-  // gets pre-created. Required without default → source=auto (LLM will fill);
-  // required string with enum → source=fixed with first enum value; other
-  // params with default → source=fixed with that default. The user can then
-  // tweak / delete from the block's params tab — but they no longer have to
-  // remember WHICH params exist, or guess what values are valid.
+  // Opinionated per-skill "quick start" presets that pick sensible typical
+  // values when the JSON schema doesn't have defaults. Keeps the first-time
+  // experience frictionless — user drops a block and most fields are already
+  // filled with the most common choice; they only need to tweak what matters.
+  const _SKILL_QUICK_PRESETS = {
+    "mcp-web-search":      { max_results: 5, search_depth: "basic" },
+    "mcp-notion-crud":     { action: "list" },           // safest default — no writes
+    "mcp-google-calendar": { action: "today" },
+    "mcp-schedule-manager":{ action: "list" },
+  };
+
+  // Populate config.params with every schema property so user SEES all the
+  // fields and can decide which to fill. Values come from (in order):
+  //   1. Existing value (don't clobber)
+  //   2. Quick-preset map above (typical value for common skills)
+  //   3. schema.default
+  //   4. Empty string (user fills in)
+  // Required fields without a default are kept empty so the UI can highlight
+  // them red and prompt the user.
   async function _prefillBlockParamsFromSchema(block, skillName) {
     const schema = await _fetchSkillSchema(skillName);
     if (!schema || !schema.properties) return;
     if (!block || !block.config) return;
     if (!block.config.params) block.config.params = {};
-    const required = new Set(schema.required || []);
+    const presets = _SKILL_QUICK_PRESETS[skillName] || {};
     Object.entries(schema.properties).forEach(([pname, pdef]) => {
-      if (block.config.params[pname]) return;  // don't clobber existing
+      if (block.config.params[pname]) return;
       pdef = pdef || {};
-      const isReq = required.has(pname);
-      const hasDefault = pdef.default !== undefined && pdef.default !== null && pdef.default !== "";
-      if (!isReq && !hasDefault) return;        // skip optional-no-default
-      if (isReq && hasDefault) {
-        block.config.params[pname] = { source: "fixed", value: String(pdef.default) };
-      } else if (isReq && Array.isArray(pdef.enum) && pdef.enum.length) {
-        block.config.params[pname] = { source: "fixed", value: String(pdef.enum[0]) };
-      } else if (isReq) {
-        // required but no default / enum → auto (LLM will supply) or leave
-        // blank and let the user either bind to a variable or type a fixed
-        // value. Default to `auto` which is the most forgiving.
-        block.config.params[pname] = { source: "auto", value: "" };
-      } else if (hasDefault) {
-        block.config.params[pname] = { source: "fixed", value: String(pdef.default) };
-      }
+      let val = "";
+      if (presets[pname] !== undefined) val = String(presets[pname]);
+      else if (pdef.default !== undefined && pdef.default !== null) val = String(pdef.default);
+      // Always create an entry (even if empty) so UI shows the field
+      block.config.params[pname] = { source: "fixed", value: val };
     });
-    // Mark designer dirty so user is prompted to save
     if (window._wfDesigner && typeof window._wfDesigner._markDirty === "function") {
       try { window._wfDesigner._markDirty(); } catch (_) {}
     }
@@ -4310,90 +4311,260 @@
     block.config.pass_vars = list;
   };
 
-  // ── Block Params Renderer (used by prop panel Tab 2) ──
+  // Simple-mode row: native widget (text/number/select/checkbox) + variable-pick button.
+  // No "source" dropdown. User writes literal values or ${varName}.
+  function _renderParamRowSimple(block, pName, pv, pSchema, wfVars, extraStyle) {
+    const bid = block.id;
+    const val = pv.value == null ? "" : pv.value;
+    const updateFn = `window._updateBlockParamSimple(${bid}, '${_escHtml(pName)}', this.value)`;
+    const varPickBtn = wfVars.length > 0
+      ? `<button type="button" title="插入變數" onclick="window._openVarPicker(event, ${bid}, '${_escHtml(pName)}')" style="padding:4px 8px;background:#eef2ff;color:#4338ca;border:1px solid #c7d2fe;border-radius:4px;font-size:0.68rem;cursor:pointer;white-space:nowrap;">📎 變數</button>`
+      : "";
+
+    // 1. Enum → dropdown
+    if (pSchema?.enum && Array.isArray(pSchema.enum) && pSchema.enum.length > 0) {
+      const def = pSchema.default != null ? String(pSchema.default) : "";
+      const cur = val !== "" ? String(val) : def;
+      const isValid = pSchema.enum.map(String).includes(cur);
+      const invalidOpt = (!isValid && val) ? `<option value="${_escHtml(String(val))}" selected style="color:#dc2626;background:#fef2f2;">⚠️ ${_escHtml(String(val))}（不合法）</option>` : "";
+      const opts = pSchema.enum.map(v => {
+        const vs = String(v);
+        const sel = isValid && vs === cur ? " selected" : "";
+        return `<option value="${_escHtml(vs)}"${sel}>${_escHtml(vs)}</option>`;
+      }).join("");
+      const placeholder = !cur ? '<option value="">— 請選擇 —</option>' : '';
+      return `<select onchange="${updateFn}" ${extraStyle} style="width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.8rem;">${placeholder}${invalidOpt}${opts}</select>`;
+    }
+
+    // 2. Integer / number → number input with min/max
+    if (pSchema?.type === "integer" || pSchema?.type === "number") {
+      const min = pSchema.minimum != null ? ` min="${pSchema.minimum}"` : "";
+      const max = pSchema.maximum != null ? ` max="${pSchema.maximum}"` : "";
+      const step = pSchema.type === "integer" ? ' step="1"' : "";
+      const ph = pSchema.default != null ? `預設 ${pSchema.default}` : "數字";
+      return `<input type="number"${min}${max}${step} value="${_escHtml(String(val))}" placeholder="${ph}" onchange="${updateFn}" ${extraStyle} style="width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.8rem;box-sizing:border-box;" />`;
+    }
+
+    // 3. Boolean → checkbox
+    if (pSchema?.type === "boolean") {
+      const checked = val === true || val === "true" || val === 1 ? "checked" : "";
+      return `<label style="display:flex;align-items:center;gap:6px;font-size:0.8rem;cursor:pointer;">
+        <input type="checkbox" ${checked} onchange="window._updateBlockParamSimple(${bid}, '${_escHtml(pName)}', this.checked)" />
+        啟用
+      </label>`;
+    }
+
+    // 4. String / default → text input with variable-insert button
+    const ph = pSchema?.default != null ? `預設：${_escHtml(String(pSchema.default))}` : "輸入值，或用 ${變數名} 引用其他變數";
+    return `<div style="display:flex;gap:6px;align-items:stretch;">
+      <input type="text" data-param-input="${_escHtml(pName)}" value="${_escHtml(String(val))}" placeholder="${ph}" onchange="${updateFn}" oninput="${updateFn}" ${extraStyle} style="flex:1;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.8rem;" />
+      ${varPickBtn}
+    </div>`;
+  }
+
+  // Advanced-mode row: show source dropdown + legacy UI
+  function _renderParamRowAdvanced(block, pName, pv, pSchema, wfVars) {
+    const bid = block.id;
+    const varOpts = wfVars.map(v => `<option value="{{${v.name}}}">${v.name}</option>`).join("");
+    const selectedVarOpts = pv.source === "variable" && pv.value
+      ? varOpts.replace(`value="${_escHtml(pv.value)}"`, `value="${_escHtml(pv.value)}" selected`)
+      : varOpts;
+    return `<div style="display:flex;gap:6px;align-items:stretch;">
+      <select onchange="window._updateBlockParam(${bid},'${_escHtml(pName)}','source',this.value)" style="padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.72rem;flex:0 0 110px;">
+        <option value="fixed" ${pv.source === "fixed" ? "selected" : ""}>固定值</option>
+        <option value="variable" ${pv.source === "variable" ? "selected" : ""}>綁定變數</option>
+        <option value="previous_step" ${pv.source === "previous_step" ? "selected" : ""}>前一步輸出</option>
+        <option value="auto" ${pv.source === "auto" ? "selected" : ""}>自動 (LLM)</option>
+      </select>
+      ${pv.source === "variable"
+        ? `<select onchange="window._updateBlockParam(${bid},'${_escHtml(pName)}','value',this.value)" style="flex:1;padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.72rem;">
+            <option value="">選擇變數</option>${selectedVarOpts}</select>`
+        : pv.source === "fixed"
+          ? _renderFixedParamInput(bid, pName, pv.value, pSchema)
+          : `<span style="flex:1;padding:5px 8px;color:#64748b;font-size:0.72rem;">${pv.source === "previous_step" ? "自動帶入前一節點的輸出" : "由 LLM 根據描述推斷"}</span>`}
+    </div>`;
+  }
+
+  // Simple-mode updater — always stores as source=fixed. Executor interpolates
+  // ${varName} at runtime, so users don't need to pick a "source".
+  window._updateBlockParamSimple = function (blockId, paramName, value) {
+    const fd = window._wfDesigner;
+    const block = fd?.blocks?.get(blockId);
+    if (!block) return;
+    if (!block.config) block.config = {};
+    if (!block.config.params) block.config.params = {};
+    block.config.params[paramName] = { source: "fixed", value };
+    // Don't re-render whole panel on every keystroke — just clear red border
+    // if value is now non-empty
+    const card = document.querySelector(`.wf-param-card[data-param="${CSS.escape(paramName)}"]`);
+    if (card && value !== "" && value != null) {
+      card.querySelectorAll("input, select").forEach(el => {
+        el.style.borderColor = "#cbd5e1";
+        el.style.background = "";
+      });
+    }
+  };
+
+  window._toggleBlockParamsAdvanced = function (blockId, on) {
+    const fd = window._wfDesigner;
+    const block = fd?.blocks?.get(blockId);
+    if (!block) return;
+    block._paramsAdvanced = !!on;
+    // Re-render
+    const skillName = block.type.startsWith("mcp-") ? block.type : "mcp-" + block.type;
+    const container = document.getElementById("wfPropTabParams");
+    _fetchSkillSchema(skillName).then(schema => {
+      _renderBlockParams(block, container, fd, skillName, schema);
+    });
+  };
+
+  // Variable picker popover — anchored to the button that triggered it.
+  // Lists defined workflow variables + system vars; click inserts ${name}
+  // into the nearest text input.
+  window._openVarPicker = function (evt, blockId, paramName) {
+    evt.stopPropagation();
+    evt.preventDefault();
+    document.getElementById("wfVarPickerPopup")?.remove();
+    const fd = window._wfDesigner;
+    const wfVars = _getVariableList(fd._wfData || {});
+    const systemVars = ["_current_date", "_current_time", "_user_name", "_user_dept", "_session_id"];
+    const rows = [];
+    if (wfVars.length) {
+      rows.push(`<div style="padding:4px 10px;font-size:0.65rem;color:#6b7280;background:#f9fafb;">自訂變數</div>`);
+      wfVars.forEach(v => {
+        rows.push(`<button type="button" data-var="${_escHtml(v.name)}" style="display:block;width:100%;text-align:left;padding:6px 12px;background:transparent;border:none;cursor:pointer;font-size:0.75rem;color:#1e293b;">
+          <strong>\${${_escHtml(v.name)}}</strong>
+          ${v.description ? `<span style="color:#94a3b8;font-size:0.68rem;"> — ${_escHtml(v.description).slice(0, 40)}</span>` : ""}
+        </button>`);
+      });
+    }
+    rows.push(`<div style="padding:4px 10px;font-size:0.65rem;color:#6b7280;background:#f9fafb;">系統變數</div>`);
+    systemVars.forEach(v => {
+      rows.push(`<button type="button" data-var="${_escHtml(v)}" style="display:block;width:100%;text-align:left;padding:6px 12px;background:transparent;border:none;cursor:pointer;font-size:0.75rem;color:#1e293b;">
+        <strong>\${${_escHtml(v)}}</strong>
+      </button>`);
+    });
+
+    const popup = document.createElement("div");
+    popup.id = "wfVarPickerPopup";
+    popup.style.cssText = "position:fixed;z-index:9900;min-width:220px;max-height:320px;overflow-y:auto;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.15);padding:4px 0;";
+    popup.innerHTML = rows.join("");
+    document.body.appendChild(popup);
+
+    const btn = evt.currentTarget || evt.target;
+    const rect = btn.getBoundingClientRect();
+    let left = rect.left;
+    let top = rect.bottom + 4;
+    const pw = popup.offsetWidth || 220;
+    const ph = popup.offsetHeight || 200;
+    if (left + pw > window.innerWidth - 4) left = window.innerWidth - pw - 4;
+    if (top + ph > window.innerHeight - 4) top = rect.top - ph - 4;
+    popup.style.left = left + "px";
+    popup.style.top = top + "px";
+
+    const close = () => {
+      popup.remove();
+      document.removeEventListener("mousedown", outside, true);
+      document.removeEventListener("keydown", escHandler, true);
+    };
+    const outside = (e) => { if (!popup.contains(e.target) && e.target !== btn) close(); };
+    const escHandler = (e) => { if (e.key === "Escape") close(); };
+    setTimeout(() => {
+      document.addEventListener("mousedown", outside, true);
+      document.addEventListener("keydown", escHandler, true);
+    }, 0);
+
+    popup.querySelectorAll("button[data-var]").forEach(b => {
+      b.addEventListener("mouseenter", () => { b.style.background = "#f1f5f9"; });
+      b.addEventListener("mouseleave", () => { b.style.background = "transparent"; });
+      b.addEventListener("click", () => {
+        const varName = b.dataset.var;
+        const inp = document.querySelector(`input[data-param-input="${CSS.escape(paramName)}"]`);
+        if (!inp) { close(); return; }
+        const cur = inp.value || "";
+        const pos = inp.selectionStart != null ? inp.selectionStart : cur.length;
+        const newVal = cur.slice(0, pos) + "${" + varName + "}" + cur.slice(pos);
+        inp.value = newVal;
+        inp.focus();
+        inp.setSelectionRange(pos + varName.length + 3, pos + varName.length + 3);
+        // trigger update
+        window._updateBlockParamSimple(blockId, paramName, newVal);
+        close();
+      });
+    });
+  };
+
+  // ── Block Params Renderer — Simple Mode by default ─────────────────
+  // Non-programmer UX: each param is ONE row with label + native widget.
+  // No "source" dropdown visible by default. Text inputs accept ${varName}
+  // for variable substitution (executor auto-interpolates). Advanced toggle
+  // reveals the source dropdown for edge cases (previous_step / auto LLM).
   function _renderBlockParams(block, container, fd, skillName, schema) {
     const cfg    = block.config || {};
     const params = cfg.params || {};
     const wfVars = _getVariableList(fd._wfData);
-    const varOpts = wfVars.map(v => `<option value="{{${v.name}}}">${v.name}</option>`).join("");
 
-    // Determine which param names to display:
-    // Priority: 1) already-configured params  2) skill schema properties  3) generic fallback
     let schemaParams = [];
-    if (schema?.properties) {
-      schemaParams = Object.keys(schema.properties);
-    }
+    if (schema?.properties) schemaParams = Object.keys(schema.properties);
     const configuredParams = Object.keys(params);
-    // Union: configured first, then any schema-defined ones not yet configured
-    const allParams = [...new Set([...configuredParams, ...schemaParams])];
-    // If nothing, show one editable empty row
-    if (allParams.length === 0) allParams.push("input");
+    const allParams = [...new Set([...schemaParams, ...configuredParams])];
+    if (allParams.length === 0 && schema !== undefined) allParams.push("input");
 
-    // Schema hint header
-    let schemaHint = "";
-    if (schema?.properties && schemaParams.length > 0) {
-      const reqList = schema.required || [];
-      const hints = schemaParams.map(p => {
-        const def = schema.properties[p] || {};
-        const req = reqList.includes(p) ? '<span style="color:#e53e3e;">*</span>' : "";
-        const desc = def.description ? ` — ${def.description}` : "";
-        return `<li><code>${p}</code>${req}${desc}</li>`;
-      }).join("");
-      schemaHint = `<div class="wf-param-schema-hint">
-        <div style="font-size:0.68rem;font-weight:700;color:#4a90d9;margin-bottom:4px;">📋 此 Skill 支援的參數</div>
-        <ul style="margin:0;padding-left:16px;font-size:0.67rem;color:var(--text-secondary);">${hints}</ul>
-        <div style="font-size:0.63rem;color:var(--text-tertiary);margin-top:4px;"><span style="color:#e53e3e;">*</span> 必填</div>
+    // Header — brief description instead of long schema listing
+    let header = "";
+    if (schema === undefined) {
+      header = `<div style="font-size:0.7rem;color:var(--text-tertiary);padding:4px 0;">載入參數設定中…</div>`;
+    } else if (!schema?.properties || schemaParams.length === 0) {
+      header = `<div style="background:#fff8e1;border:1px solid #ffd980;border-radius:6px;padding:8px;margin-bottom:8px;font-size:0.7rem;color:#8b5a00;">
+        ⚠️ 此技能尚未宣告參數規格。如需設定請切換到進階模式手動新增參數。
       </div>`;
-    } else if (schema === undefined) {
-      // Still loading (initial render, before fetch resolves)
-      schemaHint = `<div style="font-size:0.67rem;color:var(--text-tertiary);padding:4px 0;">載入參數定義中...</div>`;
     } else {
-      // schema fetched but SKILL.md has no parameters block — guide user
-      schemaHint = `<div class="wf-param-schema-hint" style="background:#fff8e1;border-color:#ffd980;">
-        <div style="font-size:0.68rem;font-weight:700;color:#b45309;margin-bottom:4px;">⚠️ 此 Skill 尚未在 SKILL.md 宣告參數</div>
-        <div style="font-size:0.67rem;color:var(--text-secondary);">請依 skill 的 <code>scripts/main.py</code> 實際讀取的 key 手動新增參數（例如 <code>query</code>、<code>target_url</code>）。</div>
+      const reqCount = (schema.required || []).length;
+      header = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:0.7rem;color:#1e40af;">
+        📋 這個技能總共 ${schemaParams.length} 個參數，其中 <strong>${reqCount}</strong> 個必填。帶 <span style="color:#dc2626;">*</span> 的請務必填寫。
       </div>`;
     }
 
-    // Build param rows
-    let pHtml = `<div style="margin-bottom:8px;">${schemaHint}</div>`;
+    // Advanced-mode toggle
+    const isAdv = !!block._paramsAdvanced;
+    const advToggle = `<div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;margin-bottom:6px;font-size:0.68rem;color:#64748b;">
+      <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
+        <input type="checkbox" ${isAdv ? "checked" : ""} onchange="window._toggleBlockParamsAdvanced(${block.id}, this.checked)" />
+        進階模式
+      </label>
+    </div>`;
+
+    // Build rows — simple mode uses single widget per param
+    let pHtml = header + advToggle;
     allParams.forEach(pName => {
-      const pv = params[pName] || { source: "auto", value: "" };
-      const isFromSchema = schemaParams.includes(pName);
-      const badge = isFromSchema
-        ? `<span style="font-size:0.6rem;background:#e8f4fd;color:#4a90d9;border-radius:4px;padding:1px 5px;margin-left:5px;">Skill</span>`
-        : `<span style="font-size:0.6rem;background:#f0fdf4;color:#16a34a;border-radius:4px;padding:1px 5px;margin-left:5px;">自訂</span>`;
-      pHtml += `<div class="wf-param-map-card" data-param-key="${pName}">
-        <div class="wf-param-map-name">${pName}${badge}
-          <button title="移除此參數" onclick="window._removeBlockParam(${block.id},'${pName}')"
-            style="float:right;border:none;background:none;color:#aaa;cursor:pointer;font-size:0.75rem;padding:0;">✕</button>
+      const pv = params[pName] || { source: "fixed", value: "" };
+      const pSchema = schema?.properties?.[pName] || null;
+      const isReq = (schema?.required || []).includes(pName);
+      const desc = pSchema?.description || "";
+      // Check if value is empty → highlight required-empty
+      const isEmpty = (pv.value === "" || pv.value == null) && pv.source !== "auto" && pv.source !== "previous_step";
+      const emptyClass = isReq && isEmpty ? 'style="border-color:#dc2626;background:#fef2f2;"' : "";
+
+      pHtml += `<div class="wf-param-card" data-param="${pName}" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+          <label style="font-size:0.8rem;font-weight:600;color:#1e293b;">${_escHtml(pName)}${isReq ? ' <span style="color:#dc2626;">*</span>' : ''}</label>
+          ${!schemaParams.includes(pName) ? `<button title="移除此參數" onclick="window._removeBlockParam(${block.id},'${_escHtml(pName)}')" style="margin-left:auto;border:none;background:transparent;color:#94a3b8;cursor:pointer;font-size:0.85rem;padding:0;">✕</button>` : '<span style="margin-left:auto;"></span>'}
         </div>
-        <div class="wf-param-map-row">
-          <select class="wf-param-map-source" data-param="${pName}" onchange="window._updateBlockParam(${block.id},'${pName}','source',this.value)">
-            <option value="auto" ${pv.source === "auto" ? "selected" : ""}>自動 (LLM)</option>
-            <option value="variable" ${pv.source === "variable" ? "selected" : ""}>變數</option>
-            <option value="fixed" ${pv.source === "fixed" ? "selected" : ""}>固定值</option>
-            <option value="previous_step" ${pv.source === "previous_step" ? "selected" : ""}>上一步輸出</option>
-          </select>
-          ${pv.source === "variable"
-            ? `<select class="wf-param-map-val" onchange="window._updateBlockParam(${block.id},'${pName}','value',this.value)">
-                <option value="">選擇變數</option>${varOpts.replace(
-                  `value="${_escHtml(pv.value || '')}"`,
-                  `value="${_escHtml(pv.value || '')}" selected`
-                )}</select>`
-            : pv.source === "fixed"
-              ? _renderFixedParamInput(block.id, pName, pv.value, schema?.properties?.[pName])
-              : `<span class="wf-param-map-auto-hint">${pv.source === "previous_step" ? "使用前一節點輸出" : "由 LLM 自動推斷"}</span>`}
-        </div>
+        ${desc ? `<div style="font-size:0.68rem;color:#64748b;margin-bottom:6px;">${_escHtml(desc)}</div>` : ""}
+        ${isAdv
+          ? _renderParamRowAdvanced(block, pName, pv, pSchema, wfVars)
+          : _renderParamRowSimple(block, pName, pv, pSchema, wfVars, emptyClass)}
       </div>`;
     });
 
-    // Add new param row
-    pHtml += `<div style="margin-top:8px;display:flex;gap:6px;align-items:center;">
-      <input id="wfNewParamKey_${block.id}" style="flex:1;padding:4px 8px;border:1px solid var(--border-subtle);border-radius:6px;font-size:0.72rem;" placeholder="新增參數名 (如 query)" />
-      <button onclick="window._addBlockParam(${block.id})"
-        style="padding:4px 10px;border-radius:6px;border:none;background:var(--kway-blue,#4a90d9);color:#fff;font-size:0.72rem;cursor:pointer;">+</button>
-    </div>`;
+    // Custom param add (still available but de-emphasized)
+    pHtml += `<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:0.7rem;color:#64748b;">+ 新增自訂參數</summary>
+      <div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
+        <input id="wfNewParamKey_${block.id}" style="flex:1;padding:4px 8px;border:1px solid #e5e7eb;border-radius:6px;font-size:0.72rem;" placeholder="參數名稱（英文）" />
+        <button onclick="window._addBlockParam(${block.id})"
+          style="padding:4px 10px;border-radius:6px;border:none;background:#4a90d9;color:#fff;font-size:0.72rem;cursor:pointer;">新增</button>
+      </div>
+    </details>`;
 
     container.innerHTML = pHtml;
 

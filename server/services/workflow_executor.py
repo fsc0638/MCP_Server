@@ -736,26 +736,49 @@ class WorkflowExecutor:
         accumulated_context: str,
         user_input: str,
     ) -> Dict[str, str]:
-        """Resolve block parameter mappings to concrete values."""
-        result = {}
+        """Resolve block parameter mappings to concrete values.
 
+        Simple-mode improvement: fixed / auto values with `${varName}` or
+        `{{varName}}` placeholders are transparently interpolated. This lets
+        non-programmer users just write `${searchQuery}` in a normal text
+        input — no need to flip the source dropdown to "variable".
+        """
+        def _interpolate(raw: Any) -> Any:
+            if not isinstance(raw, str) or "{" not in raw:
+                return raw
+            # Support both ${name} and {{name}} placeholders
+            out = re.sub(
+                r"\$\{([A-Za-z_][A-Za-z0-9_.]*)\}|\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\}\}",
+                lambda m: str(resolved_vars.get(m.group(1) or m.group(2), m.group(0))),
+                raw,
+            )
+            return out
+
+        result = {}
         for param_name, param_def in param_config.items():
             source = param_def.get("source", "auto") if isinstance(param_def, dict) else "auto"
-            value = param_def.get("value", "") if isinstance(param_def, dict) else ""
+            value = param_def.get("value", "") if isinstance(param_def, dict) else param_def
 
             if source == "variable":
-                # Look up variable (strip {{ }})
-                var_name = value.strip("{} ")
-                result[param_name] = resolved_vars.get(var_name, value)
+                # Explicit variable binding — value is the bare var name or wrapped in {{}}/${}
+                var_name = str(value).strip("{}$ ")
+                result[param_name] = resolved_vars.get(var_name, _interpolate(value))
             elif source == "fixed":
-                result[param_name] = value
+                # Fixed value — but still interpolate ${x}/{{x}} placeholders
+                # so users who just write `${topic}` inline get variable
+                # substitution without having to learn the "variable" source.
+                result[param_name] = _interpolate(value) if isinstance(value, str) else value
             elif source == "previous_step":
                 result[param_name] = accumulated_context
             elif source == "auto":
-                # Let the value be the accumulated context (LLM will handle)
-                result[param_name] = accumulated_context
+                # If user typed something, interpolate; otherwise fall back to
+                # accumulated_context (legacy behaviour)
+                if value not in (None, ""):
+                    result[param_name] = _interpolate(value) if isinstance(value, str) else value
+                else:
+                    result[param_name] = accumulated_context
             else:
-                result[param_name] = value or accumulated_context
+                result[param_name] = _interpolate(value) if isinstance(value, str) else (value or accumulated_context)
 
         return result
 
