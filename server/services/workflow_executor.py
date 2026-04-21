@@ -243,9 +243,43 @@ class WorkflowExecutor:
                     # because convergence blocks should reference upstream
                     # outputs by name, not rely on accumulated_context.)
                     accumulated_context = out_txt[:3000]
-                    final_output = out_txt
                 if r.get("should_stop"):
                     should_stop = True
+
+        # ── Build final_output ──
+        # In sequential workflows we could just use the last block's output,
+        # but with wave execution multiple blocks can finish in the same wave
+        # and there's no single "last" output. Aggregate ALL successful skill
+        # outputs into a labeled summary so the user sees everything, not
+        # just whichever branch finished first.
+        def _extract_text(block_result) -> str:
+            """Pull a human-readable string out of a block result entry."""
+            if not isinstance(block_result, dict):
+                return ""
+            # Prefer the full output_text stored under step_N_output;
+            # fall back to output_preview (truncated to 300 chars)
+            bid = block_result.get("block_id")
+            if bid is not None:
+                full = resolved_vars.get(f"step_{bid}_output")
+                if full:
+                    return full
+            return block_result.get("output_preview") or ""
+
+        success_entries = [r for r in results if r.get("status") == "success"
+                           and r.get("type") not in ("start", "end", "branch")]
+        if len(success_entries) == 0:
+            final_output = ""
+        elif len(success_entries) == 1:
+            final_output = _extract_text(success_entries[0])
+        else:
+            # Multi-block summary — label each by skill name
+            _parts = []
+            for e in success_entries:
+                label = e.get("skill") or e.get("type") or f"block_{e.get('block_id')}"
+                txt = _extract_text(e)
+                if txt:
+                    _parts.append(f"【{label}】\n{txt}")
+            final_output = "\n\n".join(_parts)
 
         # Determine overall status based on step results
         _any_error = any(r.get("status") == "error" for r in results)
@@ -266,7 +300,8 @@ class WorkflowExecutor:
             "blocks_executed": len(results),
             "results": results,
             "step_results": results,               # alias for Gate 3
-            "final_output": final_output[:2000],
+            # Allow more room for multi-skill aggregated output (was 2000)
+            "final_output": final_output[:8000],
             "executed_at": datetime.now().isoformat(),
             "started_at": started_at,
             "ended_at": ended_at,
