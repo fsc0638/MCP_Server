@@ -660,7 +660,7 @@ def list_promotion_candidates(
     return {"candidates": mine[:20]}
 
 
-@router.post("/api/workflows/promote")
+@router.post("/api/workflows/_actions/promote")
 def promote_oneshot(
     req: PromoteRequest,
     mcp_session: str = Cookie(default="", alias="mcp_session"),
@@ -911,7 +911,18 @@ d. 檔案命名有意義且 ≤ 15 字中文或 30 字英數
 【設計習慣】
 - 先想「資料流」：每個 step 產出什麼 (output_var)，下一步需要什麼 (input_map)
 - 步驟盡量少：能一步搞定就別拆兩步
-- 若任務是「定期推送」類，最後一步用 mcp-schedule-manager 設排程，不要自己寫 while 迴圈"""
+- 若任務是「定期推送」類，最後一步用 mcp-schedule-manager 設排程，不要自己寫 while 迴圈
+
+【搜尋技巧 — mcp-web-search】
+- query 要用使用者描述的原語言 + 具體關鍵字：
+  中文任務 → 中文 query（例：「今日 台灣 經濟新聞」，不要用 "latest economic news"）
+  需要即時性 → 加「今日」「最新」「本週」等時效詞
+- max_results：用使用者指定的數量，沒指定預設 5；Tavily 可能回少於該數
+- search_depth="advanced" 回傳的內文更豐富（但比較慢），適合要「詳細摘要」的任務
+- include_domains 可指定可信來源，例：
+    台灣財經：['cnyes.com','ltn.com.tw','money.udn.com','wealth.com.tw']
+    台灣新聞：['udn.com','ltn.com.tw','cna.com.tw','ltn.com.tw']
+  若任務提到「台灣」「本地」可用此機制過濾雜訊"""
 
     return [
         {"role": "system", "content": system_text},

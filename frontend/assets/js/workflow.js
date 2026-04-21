@@ -2383,7 +2383,7 @@
             statusDiv.style.color = "#475569";
             statusDiv.textContent = "正在儲存…";
             try {
-              const r = await fetch("/api/workflows/promote", {
+              const r = await fetch("/api/workflows/_actions/promote", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",

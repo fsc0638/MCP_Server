@@ -1144,7 +1144,7 @@
       const confirmBtn = mask.querySelector("#wf-promote-confirm");
       confirmBtn.disabled = true; confirmBtn.textContent = "儲存中...";
       try {
-        const res = await fetch("/api/workflows/promote", {
+        const res = await fetch("/api/workflows/_actions/promote", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
