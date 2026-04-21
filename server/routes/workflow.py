@@ -897,6 +897,8 @@ d. 檔案命名有意義且 ≤ 15 字中文或 30 字英數
 - add 新增排程：需要 name、cron、type（news/work_summary/language/custom/reminder）、content
 - cron 格式：'0 8 * * 1-5' = 週一到五上午 8 點；'every +10m' = 每 10 分鐘
 - 不要用 time / frequency 這類非白名單欄位
+- **必須**帶 original_request = 使用者的完整原始描述（從對話取得），不可省略，否則
+  skill 會拒絕執行（安全守門）。後端會自動補上，但請你還是明示寫在 input_map 裡。
 
 【錯誤避免清單】
 ✗ `"code": "print(${{newsSummaries}})"` ← ${{}} 插到 Python 字串中會爆
@@ -1032,6 +1034,19 @@ async def llm_generate_workflow(
     wf["steps"] = safe_steps[: req.max_steps]
     if not wf["steps"]:
         raise HTTPException(status_code=422, detail="LLM 產生的工作流無可用步驟（可能全部引用到白名單外技能）")
+
+    # ── Auto-inject original_request for skills that require it ──
+    # mcp-schedule-manager rejects add with empty/confirm-like original_request
+    # as a safety check. LLM often forgets to include it, so we post-process
+    # and inject the user's prompt here so the user doesn't see a confusing
+    # "original_request 為空" error.
+    for step in wf["steps"]:
+        if not isinstance(step, dict):
+            continue
+        if step.get("skill_id") == "mcp-schedule-manager":
+            step.setdefault("input_map", {})
+            if not step["input_map"].get("original_request"):
+                step["input_map"]["original_request"] = prompt
 
     # ── Synthesize blocks[] + connections[] from steps[] for the executor.
     # The executor walks blocks (canvas representation), not steps, so an
