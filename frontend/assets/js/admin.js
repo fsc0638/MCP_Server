@@ -1491,6 +1491,73 @@
     return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px;"></span>${_esc(status||'')}`;
   }
 
+  let _adminOpenRunId = '';
+  let _adminRunDetails = null;
+
+  async function _adminToggleRunDetails(runId) {
+    if (!runId) return;
+    if (_adminOpenRunId === runId) {
+      _adminOpenRunId = '';
+      _adminRunDetails = null;
+      _adminRenderApprovalsTable();
+      return;
+    }
+
+    _adminOpenRunId = runId;
+    _adminRunDetails = null;
+    _adminRenderApprovalsTable();
+
+    try {
+      const resp = await fetch(`/api/workflows/runs/${encodeURIComponent(runId)}`);
+      if (!resp.ok) throw new Error('fetch failed');
+      const data = await resp.json();
+      _adminRunDetails = data;
+    } catch (_) {
+      _adminRunDetails = { status: 'error', run_id: runId, overall: 'error', blocks: [] };
+    }
+
+    _adminRenderApprovalsTable();
+  }
+
+  function _adminRenderRunDetailsRow() {
+    if (!_adminOpenRunId) return '';
+    const d = _adminRunDetails;
+    if (!d) {
+      return `<tr><td colspan="8" style="padding:12px;color:var(--text-tertiary);">run=${_esc(_adminOpenRunId)} 載入中...</td></tr>`;
+    }
+    const blocks = d.blocks || [];
+    const header = `<div style="display:flex;gap:10px;align-items:center;">
+      <div style="font-weight:700;">Run 詳細</div>
+      <div style="font-family:monospace;font-size:0.75rem;color:var(--text-secondary);">${_esc(d.run_id||'')}</div>
+      <div style="font-size:0.75rem;color:var(--text-secondary);">overall=${_esc(d.overall||'')}</div>
+    </div>`;
+
+    if (!blocks.length) {
+      return `<tr><td colspan="8" style="padding:12px;">
+        ${header}
+        <div style="margin-top:8px;color:var(--text-tertiary);font-size:0.75rem;">尚無 checkpoint 資料</div>
+      </td></tr>`;
+    }
+
+    const rows = blocks.map(b => {
+      const st = (b.status||'');
+      const color = st === 'success' ? 'var(--color-success)' : st === 'requires_approval' ? 'var(--color-warning)' : st === 'error' ? 'var(--color-error)' : 'var(--text-tertiary)';
+      return `<div style="display:flex;gap:10px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--border-subtle);">
+        <div style="width:10px;height:10px;border-radius:50%;background:${color};margin-top:4px;"></div>
+        <div style="flex:1;">
+          <div style="font-family:monospace;font-size:0.72rem;">block=${_esc(b.block_id||'')} | skill=${_esc(b.skill_name||'')}</div>
+          <div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">status=${_esc(st)} | ${_esc(_fmtTs(b.ts||''))}</div>
+          ${b.output_preview ? `<div style="margin-top:4px;font-size:0.72rem;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:900px;">${_esc(b.output_preview)}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<tr><td colspan="8" style="padding:12px;">
+      ${header}
+      <div style="margin-top:8px;">${rows}</div>
+    </td></tr>`;
+  }
+
   async function _adminApprove(id) {
     if (!confirm('確認批准？')) return;
     await fetch(`/api/approvals/${id}/approve`, { method: 'POST' });
@@ -1527,7 +1594,8 @@
     const tab = (window._adminApprovalTab || 'pending');
     const isPending = tab === 'pending';
 
-    body.innerHTML = rows.map(ap => {
+    const html = [];
+    for (const ap of rows) {
       const actions = isPending
         ? `<div class="admin-table-actions">
              <button class="admin-table-action" onclick="(${_adminApprove.toString()})('${ap.approval_id}')">批准</button>
@@ -1536,9 +1604,12 @@
         : `<span style="font-size:0.72rem;color:var(--text-tertiary);">—</span>`;
 
       const run = ap.correlation_id || '';
-      const runHtml = run ? `<span style="font-family:monospace;font-size:0.72rem;">${_esc(run)}</span>` : `<span style="color:var(--text-tertiary);">—</span>`;
+      const isOpen = run && (_adminOpenRunId === run);
+      const runHtml = run
+        ? `<button class="admin-table-action" style="padding:4px 8px;${isOpen ? 'background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.35);' : ''}" onclick="(${_adminToggleRunDetails.toString()})('${_esc(run)}')">${_esc(run)}</button>`
+        : `<span style="color:var(--text-tertiary);">—</span>`;
 
-      return `<tr>
+      html.push(`<tr>
         <td>${_statusDot(ap.status)}</td>
         <td style="font-family:monospace;font-size:0.72rem;">${_esc(ap.action||'')}</td>
         <td style="max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(ap.request_summary||'')}</td>
@@ -1547,8 +1618,14 @@
         <td>${_fmtTs(ap.ts_requested)}</td>
         <td>${_fmtTs(ap.ts_expires)} ${_ttlBadge(ap)}</td>
         <td>${actions}</td>
-      </tr>`;
-    }).join('');
+      </tr>`);
+
+      if (isOpen) {
+        html.push(_adminRenderRunDetailsRow());
+      }
+    }
+
+    body.innerHTML = html.join('');
   }
 
   // ══════════════════════════════════════════════════════════

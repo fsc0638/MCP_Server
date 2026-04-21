@@ -6,7 +6,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from server.routes import models, documents, chat, skills, workspace, resources, auth, workflow, approvals, workflow_resume, audit
+from server.routes import models, documents, chat, skills, workspace, resources, auth, workflow, approvals, workflow_resume, audit, workflow_runs
 from server.integrations.line_connector import router as line_router
 from main import PROJECT_ROOT
 from server.dependencies.uma import get_uma_instance as get_uma
@@ -34,6 +34,7 @@ app.include_router(resources.router)
 app.include_router(auth.router)
 app.include_router(workflow.router)
 app.include_router(workflow_resume.router)
+app.include_router(workflow_runs.router)
 app.include_router(approvals.router)
 app.include_router(audit.router)
 app.include_router(line_router)
