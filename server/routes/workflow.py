@@ -674,11 +674,20 @@ def promote_oneshot(
     )
     caller_ctx = resolve_caller_context(mcp_session)
 
-    # Resolve empty owner from caller context (frontend sends "" for convenience)
+    # Resolve empty owner from caller context (frontend sends "" for convenience).
+    # IMPORTANT: personal folders are keyed by employee_id (e.g. "1665") to match
+    # the rest of the system — NOT by user_id (which is "line_Uxxx...", the raw
+    # LINE identifier). user_id is only a last-resort fallback for users who
+    # never bound an employee record (rare edge case).
     target_owner = req.target_owner or ""
     if not target_owner:
         if req.target_scope == "personal":
-            target_owner = (caller_ctx or {}).get("user_id", "") or (caller_ctx or {}).get("employee_id", "")
+            ctx = caller_ctx or {}
+            target_owner = (
+                ctx.get("employee_id")
+                or ctx.get("id")
+                or ctx.get("user_id", "")
+            )
         elif req.target_scope == "department":
             target_owner = (caller_ctx or {}).get("department_code", "")
 
