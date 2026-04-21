@@ -1002,6 +1002,10 @@ async def llm_generate_workflow(
                 else:
                     params_ui[pname] = {"source": "fixed", "value": pv}
             cfg["params"] = params_ui
+            # Propagate output_var so executor can store result under that name
+            # (enables downstream Gate 2 + ${output_var} interpolation)
+            if step.get("output_var"):
+                cfg["output_var"] = step["output_var"]
         elif stype == "parallel":
             block_type = "parallel"
             cfg["branches"] = step.get("branches") or []

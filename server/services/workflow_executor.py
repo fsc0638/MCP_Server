@@ -511,6 +511,13 @@ class WorkflowExecutor:
                     # via ${step_N_output} in their input_map. Keep truncated
                     # for cheap propagation.
                     resolved_vars[f"step_{bid}_output"] = out_txt[:5000]
+                    # Also honour user-declared output_var names (e.g.
+                    # "newsSummaries") — the step / block config can name
+                    # the output for downstream Gate 2 and interpolation.
+                    _block = blocks.get(bid) or {}
+                    _ov = (_block.get("config") or {}).get("output_var")
+                    if _ov and isinstance(_ov, str) and _ov.strip():
+                        resolved_vars[_ov.strip()] = out_txt[:5000]
                     # Keep the full output for final display formatting (JSON
                     # parsing needs complete payload — truncated JSON blows
                     # up json.loads and falls back to raw text).
