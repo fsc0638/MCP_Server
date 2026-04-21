@@ -1363,6 +1363,7 @@
             <th>狀態</th>
             <th>Action</th>
             <th>摘要</th>
+            <th>Run</th>
             <th>請求者</th>
             <th>請求時間</th>
             <th>到期</th>
@@ -1370,6 +1371,11 @@
           </tr></thead>
           <tbody id="adminApprovalTableBody"></tbody>
         </table>
+      </div>
+
+      <div class="admin-chart-card" style="margin-top:16px;">
+        <div class="admin-chart-title" style="margin-bottom:10px;">最近續跑活動</div>
+        <div class="admin-feed" id="adminApprovalFeed"></div>
       </div>
     `;
 
@@ -1411,7 +1417,7 @@
   async function _adminLoadApprovals() {
     const tab = window._adminApprovalTab || 'pending';
     const body = document.getElementById('adminApprovalTableBody');
-    if (body) body.innerHTML = `<tr><td colspan="7" style="padding:18px;color:var(--text-tertiary);">載入中...</td></tr>`;
+    if (body) body.innerHTML = `<tr><td colspan="8" style="padding:18px;color:var(--text-tertiary);">載入中...</td></tr>`;
 
     try {
       const resp = await fetch(`/api/approvals?status=${encodeURIComponent(tab)}&limit=100`);
@@ -1422,7 +1428,40 @@
       _allApprovals = [];
     }
 
+    await _adminLoadApprovalFeed();
     _adminRenderApprovalsTable();
+  }
+
+  async function _adminLoadApprovalFeed() {
+    const feed = document.getElementById('adminApprovalFeed');
+    if (!feed) return;
+    feed.innerHTML = '<div style="padding:10px 0;color:var(--text-tertiary);font-size:0.75rem;">載入中...</div>';
+    try {
+      const resp = await fetch('/api/audit/recent?limit=30');
+      if (!resp.ok) throw new Error('fetch failed');
+      const data = await resp.json();
+      const evs = (data.events || []).filter(e => {
+        const a = (e.action || '');
+        return a.startsWith('approval.') || a.startsWith('workflow.resume');
+      }).slice(0, 12);
+      if (!evs.length) {
+        feed.innerHTML = '<div style="padding:10px 0;color:var(--text-tertiary);font-size:0.75rem;">尚無活動</div>';
+        return;
+      }
+      feed.innerHTML = evs.map(e => {
+        const dot = (e.action||'').startsWith('approval.') ? 'var(--color-warning)' : 'var(--color-info)';
+        return `<div class="admin-feed-item">
+          <div class="admin-feed-dot" style="background:${dot}"></div>
+          <div class="admin-feed-text">
+            <div style="font-weight:600;color:var(--text-primary);">${_esc(e.action||'')}</div>
+            <div style="margin-top:2px;color:var(--text-secondary);font-size:0.72rem;">run=${_esc(e.correlation_id||'')} | ${_esc(e.reason||'')}</div>
+          </div>
+          <div class="admin-feed-time">${_fmtTs(e.ts||'')}</div>
+        </div>`;
+      }).join('');
+    } catch (_) {
+      feed.innerHTML = '<div style="padding:10px 0;color:var(--text-tertiary);font-size:0.75rem;">無法取得活動</div>';
+    }
   }
 
   function _fmtTs(ts) {
@@ -1481,7 +1520,7 @@
     if (count) count.textContent = `共 ${rows.length} 筆`;
 
     if (!rows.length) {
-      body.innerHTML = `<tr><td colspan="7" style="padding:18px;color:var(--text-tertiary);">目前沒有資料</td></tr>`;
+      body.innerHTML = `<tr><td colspan="8" style="padding:18px;color:var(--text-tertiary);">目前沒有資料</td></tr>`;
       return;
     }
 
@@ -1496,10 +1535,14 @@
            </div>`
         : `<span style="font-size:0.72rem;color:var(--text-tertiary);">—</span>`;
 
+      const run = ap.correlation_id || '';
+      const runHtml = run ? `<span style="font-family:monospace;font-size:0.72rem;">${_esc(run)}</span>` : `<span style="color:var(--text-tertiary);">—</span>`;
+
       return `<tr>
         <td>${_statusDot(ap.status)}</td>
         <td style="font-family:monospace;font-size:0.72rem;">${_esc(ap.action||'')}</td>
         <td style="max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(ap.request_summary||'')}</td>
+        <td>${runHtml}</td>
         <td style="font-family:monospace;font-size:0.72rem;">${_esc(ap.requested_by_subject_id||'')}</td>
         <td>${_fmtTs(ap.ts_requested)}</td>
         <td>${_fmtTs(ap.ts_expires)} ${_ttlBadge(ap)}</td>
