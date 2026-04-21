@@ -1521,11 +1521,18 @@
         // Render params immediately with current config (loading state)
         _renderBlockParams(block, paramsDiv, fd, skillName, undefined);
 
-        // Async: fetch skill parameter schema and re-render with real param names
+        // Async: fetch skill parameter schema and re-render with real param names.
+        // If the block has NO params yet, also retro-apply the quick-preset
+        // prefill so legacy blocks (created before the prefill feature, or
+        // before SKILL.md had a parameters schema) show typical defaults.
         fetch(`/skills/${skillName}`)
           .then(r => r.ok ? r.json() : null)
-          .then(skillData => {
+          .then(async (skillData) => {
             const schema = skillData?.metadata?.parameters || null;
+            const hasParams = block.config?.params && Object.keys(block.config.params).length > 0;
+            if (!hasParams) {
+              await _prefillBlockParamsFromSchema(block, skillName);
+            }
             _renderBlockParams(block, paramsDiv, fd, skillName, schema);
           })
           .catch(() => {
@@ -4015,21 +4022,33 @@
   //   4. Empty string (user fills in)
   // Required fields without a default are kept empty so the UI can highlight
   // them red and prompt the user.
+  //
+  // Even when the skill's SKILL.md has NO `parameters:` block, we still apply
+  // the quick-preset keys so common skills don't render an empty panel.
   async function _prefillBlockParamsFromSchema(block, skillName) {
     const schema = await _fetchSkillSchema(skillName);
-    if (!schema || !schema.properties) return;
     if (!block || !block.config) return;
     if (!block.config.params) block.config.params = {};
     const presets = _SKILL_QUICK_PRESETS[skillName] || {};
-    Object.entries(schema.properties).forEach(([pname, pdef]) => {
+
+    // 1) From schema (if available)
+    if (schema && schema.properties) {
+      Object.entries(schema.properties).forEach(([pname, pdef]) => {
+        if (block.config.params[pname]) return;
+        pdef = pdef || {};
+        let val = "";
+        if (presets[pname] !== undefined) val = String(presets[pname]);
+        else if (pdef.default !== undefined && pdef.default !== null) val = String(pdef.default);
+        block.config.params[pname] = { source: "fixed", value: val };
+      });
+    }
+
+    // 2) From presets (guarantees common fields appear even without schema)
+    Object.entries(presets).forEach(([pname, pval]) => {
       if (block.config.params[pname]) return;
-      pdef = pdef || {};
-      let val = "";
-      if (presets[pname] !== undefined) val = String(presets[pname]);
-      else if (pdef.default !== undefined && pdef.default !== null) val = String(pdef.default);
-      // Always create an entry (even if empty) so UI shows the field
-      block.config.params[pname] = { source: "fixed", value: val };
+      block.config.params[pname] = { source: "fixed", value: String(pval) };
     });
+
     if (window._wfDesigner && typeof window._wfDesigner._markDirty === "function") {
       try { window._wfDesigner._markDirty(); } catch (_) {}
     }
