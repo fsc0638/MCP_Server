@@ -894,7 +894,7 @@ def _llm_generate_workflow_json(prompt: str, skills: List[Dict[str, Any]], max_s
     return data
 
 
-@router.post("/api/workflows/llm-generate")
+@router.post("/api/workflows/_actions/llm-generate")
 async def llm_generate_workflow(
     req: LLMGenerateRequest,
     mcp_session: str = Cookie(default="", alias="mcp_session"),

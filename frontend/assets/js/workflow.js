@@ -2291,7 +2291,7 @@
       previewEl.style.display = "none";
 
       try {
-        const resp = await fetch("/api/workflows/llm-generate", {
+        const resp = await fetch("/api/workflows/_actions/llm-generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
