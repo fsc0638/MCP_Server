@@ -814,16 +814,28 @@ def _build_llm_generator_messages(prompt: str, skills: List[Dict[str, Any]], max
     skill_lines = []
     for s in skills[:80]:  # cap size to keep prompt lean
         desc = (s.get("description") or "").replace("\n", " ")[:180]
-        req_list = []
-        for pname, pdef in (s.get("parameters") or {}).get("properties", {}).items():
-            if (s.get("parameters") or {}).get("required", []) and pname in s["parameters"]["required"]:
-                req_list.append(f"{pname}*")
-            else:
-                req_list.append(pname)
-        skill_lines.append(f"- `{s['skill_id']}` ({s.get('display_name','')}): {desc} | params: {', '.join(req_list) or '(none)'}")
+        # Expand each param with type + enum + default so LLM picks correctly
+        props = (s.get("parameters") or {}).get("properties", {}) or {}
+        req_set = set((s.get("parameters") or {}).get("required", []))
+        param_lines = []
+        for pname, pdef in props.items():
+            if not isinstance(pdef, dict):
+                continue
+            star = "*" if pname in req_set else ""
+            type_ = pdef.get("type", "string")
+            enum_ = pdef.get("enum")
+            default_ = pdef.get("default")
+            detail_parts = [type_]
+            if enum_: detail_parts.append(f"enum={enum_}")
+            if default_ is not None: detail_parts.append(f"default={default_!r}")
+            param_lines.append(f"{pname}{star}: {' '.join(detail_parts)}")
+        params_str = " | ".join(param_lines) if param_lines else "(none)"
+        skill_lines.append(
+            f"- `{s['skill_id']}` ({s.get('display_name','')}): {desc}\n    params: {params_str}"
+        )
     skills_text = "\n".join(skill_lines)
 
-    system_text = f"""你是工作流設計助手。根據使用者描述，產生一份可執行的 v2 Workflow JSON。
+    system_text = f"""你是工作流設計助手。根據使用者描述，產生一份**可真正執行**的 v2 Workflow JSON。
 
 【可用技能白名單 — 絕對不可使用白名單外的技能】
 {skills_text}
@@ -842,18 +854,62 @@ def _build_llm_generator_messages(prompt: str, skills: List[Dict[str, Any]], max
   "steps": [
     {{"step_id": "step_1", "type": "sequential", "skill_id": "mcp-xxx",
       "label": "步驟中文名", "input_map": {{"param_name": "${{camelCaseName}}"}},
-      "output_var": "step_1_output", "on_fail": "abort"}}
+      "output_var": "meaningfulName", "on_fail": "abort"}}
   ]
 }}
 
-【規則】
-1. steps 最多 {max_steps} 個，且每個 skill_id 必須在白名單內
-2. 使用者需要輸入的資料 → 放到 variables.definitions（source=user_input），再用 ${{變數名}} 引用
-3. 固定值 → 直接寫在 input_map（例：{{"max_results": 5}}）
-4. 後續步驟可用 ${{step_N_output}} 引用前一步輸出
-5. 變數名用 camelCase（如 searchQuery），不要用中文
-6. 不要產生 workflow_id / id / blocks / connections / trigger — 後端會補
-7. 只回傳 JSON，不要任何其他文字"""
+【核心規則】
+1. steps ≤ {max_steps}，每個 skill_id 必須在白名單內
+2. 變數名用 camelCase，**不要用中文或連字號**（searchQuery✓，search-query✗，搜尋詞✗）
+3. 每個 step 的 output_var 取有意義的英文名（newsResults、summaryText...），不要用 step_N_output
+4. **下一步引用上一步輸出** → 直接用 ${{上一步的 output_var}}（不要用 step_N_output）
+5. enum 型別參數只能選 enum 裡列出的值（例：action 只能選白名單給的）
+6. 固定值 → input_map 直接寫字面值；要引用變數 → ${{varName}}
+7. 不要產生 workflow_id / blocks / connections / trigger — 後端會補
+8. 只回傳 JSON，不要前後加任何解釋文字
+
+【Python / PDF 生成 — 極重要】
+當步驟要用 `mcp-python-executor` 生成檔案，code 字串必須：
+a. 透過環境變數 SKILL_PARAM_* 讀取上游資料，**不要**在 code 字串中直接插入 ${{var}}，
+   因為那會把 JSON 字面塞進 Python 語法造成 SyntaxError。
+   正確作法：把上游資料放在 input_map 其他 param (例如 input_map.text = "${{upstreamVar}}")，
+   Python code 裡用 os.environ['SKILL_PARAM_TEXT'] 讀取。
+b. 生成 PDF 必須用系統預設的 ChinesePDF 輔助類別（支援中文），禁止用 FPDF / pdfkit / reportlab，
+   會缺字體或亂碼：
+   ```python
+   import sys, os
+   sys.path.insert(0, r'C:/Users/kicl1/OneDrive/文件/研發組專案/MCP_Server/workspace')
+   from pdf_helper import ChinesePDF
+   DOWNLOADS = r'C:/Users/kicl1/OneDrive/文件/研發組專案/MCP_Server/workspace/downloads'
+   os.makedirs(DOWNLOADS, exist_ok=True)
+   content = os.environ.get('SKILL_PARAM_TEXT', '')
+   pdf = ChinesePDF(); pdf.add_page()
+   pdf.chapter_title('報告標題')
+   pdf.chapter_body(content)
+   pdf.output(os.path.join(DOWNLOADS, '輸出檔名.pdf'))
+   print('OK: 輸出檔名.pdf')
+   ```
+c. 檔案一定要存到 DOWNLOADS 目錄，否則下載連結 404
+d. 檔案命名有意義且 ≤ 15 字中文或 30 字英數
+
+【排程相關 — mcp-schedule-manager】
+要設定每日/每週定時任務，action 必填：
+- add 新增排程：需要 name、cron、type（news/work_summary/language/custom/reminder）、content
+- cron 格式：'0 8 * * 1-5' = 週一到五上午 8 點；'every +10m' = 每 10 分鐘
+- 不要用 time / frequency 這類非白名單欄位
+
+【錯誤避免清單】
+✗ `"code": "print(${{newsSummaries}})"` ← ${{}} 插到 Python 字串中會爆
+✓ 讓 python-executor 的 input_map 多一個 param 接上游：
+   `"input_map": {{"code": "print(os.environ['SKILL_PARAM_TEXT'])", "text": "${{newsSummaries}}"}}`
+
+✗ `"skill_id": "notion"` ← 必須完整名稱 mcp-notion-crud
+✗ `"action": "create_daily"` ← 必須是白名單內的 enum 值
+
+【設計習慣】
+- 先想「資料流」：每個 step 產出什麼 (output_var)，下一步需要什麼 (input_map)
+- 步驟盡量少：能一步搞定就別拆兩步
+- 若任務是「定期推送」類，最後一步用 mcp-schedule-manager 設排程，不要自己寫 while 迴圈"""
 
     return [
         {"role": "system", "content": system_text},
