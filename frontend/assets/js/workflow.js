@@ -4317,48 +4317,52 @@
     const bid = block.id;
     const val = pv.value == null ? "" : pv.value;
     const updateFn = `window._updateBlockParamSimple(${bid}, '${_escHtml(pName)}', this.value)`;
-    const varPickBtn = wfVars.length > 0
-      ? `<button type="button" title="插入變數" onclick="window._openVarPicker(event, ${bid}, '${_escHtml(pName)}')" style="padding:4px 8px;background:#eef2ff;color:#4338ca;border:1px solid #c7d2fe;border-radius:4px;font-size:0.68rem;cursor:pointer;white-space:nowrap;">📎 變數</button>`
-      : "";
+    const INPUT_CSS = "width:100%;padding:5px 8px;border:1px solid #cbd5e1;border-radius:5px;font-size:0.74rem;box-sizing:border-box;background:#fff;";
 
     // 1. Enum → dropdown
     if (pSchema?.enum && Array.isArray(pSchema.enum) && pSchema.enum.length > 0) {
       const def = pSchema.default != null ? String(pSchema.default) : "";
       const cur = val !== "" ? String(val) : def;
       const isValid = pSchema.enum.map(String).includes(cur);
-      const invalidOpt = (!isValid && val) ? `<option value="${_escHtml(String(val))}" selected style="color:#dc2626;background:#fef2f2;">⚠️ ${_escHtml(String(val))}（不合法）</option>` : "";
+      const invalidOpt = (!isValid && val) ? `<option value="${_escHtml(String(val))}" selected style="color:#dc2626;">⚠️ ${_escHtml(String(val))}</option>` : "";
       const opts = pSchema.enum.map(v => {
         const vs = String(v);
         const sel = isValid && vs === cur ? " selected" : "";
         return `<option value="${_escHtml(vs)}"${sel}>${_escHtml(vs)}</option>`;
       }).join("");
       const placeholder = !cur ? '<option value="">— 請選擇 —</option>' : '';
-      return `<select onchange="${updateFn}" ${extraStyle} style="width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.8rem;">${placeholder}${invalidOpt}${opts}</select>`;
+      return `<select onchange="${updateFn}" ${extraStyle} style="${INPUT_CSS}">${placeholder}${invalidOpt}${opts}</select>`;
     }
 
-    // 2. Integer / number → number input with min/max
+    // 2. Integer / number → number input
     if (pSchema?.type === "integer" || pSchema?.type === "number") {
       const min = pSchema.minimum != null ? ` min="${pSchema.minimum}"` : "";
       const max = pSchema.maximum != null ? ` max="${pSchema.maximum}"` : "";
       const step = pSchema.type === "integer" ? ' step="1"' : "";
       const ph = pSchema.default != null ? `預設 ${pSchema.default}` : "數字";
-      return `<input type="number"${min}${max}${step} value="${_escHtml(String(val))}" placeholder="${ph}" onchange="${updateFn}" ${extraStyle} style="width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.8rem;box-sizing:border-box;" />`;
+      return `<input type="number"${min}${max}${step} value="${_escHtml(String(val))}" placeholder="${ph}" onchange="${updateFn}" ${extraStyle} style="${INPUT_CSS}" />`;
     }
 
     // 3. Boolean → checkbox
     if (pSchema?.type === "boolean") {
       const checked = val === true || val === "true" || val === 1 ? "checked" : "";
-      return `<label style="display:flex;align-items:center;gap:6px;font-size:0.8rem;cursor:pointer;">
+      return `<label style="display:inline-flex;align-items:center;gap:6px;font-size:0.74rem;cursor:pointer;padding:3px 0;">
         <input type="checkbox" ${checked} onchange="window._updateBlockParamSimple(${bid}, '${_escHtml(pName)}', this.checked)" />
         啟用
       </label>`;
     }
 
-    // 4. String / default → text input with variable-insert button
-    const ph = pSchema?.default != null ? `預設：${_escHtml(String(pSchema.default))}` : "輸入值，或用 ${變數名} 引用其他變數";
-    return `<div style="display:flex;gap:6px;align-items:stretch;">
-      <input type="text" data-param-input="${_escHtml(pName)}" value="${_escHtml(String(val))}" placeholder="${ph}" onchange="${updateFn}" oninput="${updateFn}" ${extraStyle} style="flex:1;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.8rem;" />
-      ${varPickBtn}
+    // 4. String / default → text input with inline variable-picker icon
+    // Variable icon is a small 📎 absolutely positioned at the right edge of
+    // the input so it doesn't steal horizontal space.
+    const ph = pSchema?.default != null ? `預設：${_escHtml(String(pSchema.default))}` : "輸入值或 ${變數名}";
+    const varIcon = wfVars.length > 0
+      ? `<button type="button" title="插入變數" onclick="window._openVarPicker(event, ${bid}, '${_escHtml(pName)}')" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);width:22px;height:22px;padding:0;border:none;background:transparent;color:#94a3b8;cursor:pointer;font-size:0.75rem;border-radius:3px;display:flex;align-items:center;justify-content:center;">📎</button>`
+      : "";
+    const inputStyle = INPUT_CSS + (wfVars.length ? "padding-right:28px;" : "");
+    return `<div style="position:relative;">
+      <input type="text" data-param-input="${_escHtml(pName)}" value="${_escHtml(String(val))}" placeholder="${ph}" onchange="${updateFn}" oninput="${updateFn}" ${extraStyle} style="${inputStyle}" />
+      ${varIcon}
     </div>`;
   }
 
@@ -4510,47 +4514,44 @@
     const allParams = [...new Set([...schemaParams, ...configuredParams])];
     if (allParams.length === 0 && schema !== undefined) allParams.push("input");
 
-    // Header — brief description instead of long schema listing
-    let header = "";
-    if (schema === undefined) {
-      header = `<div style="font-size:0.7rem;color:var(--text-tertiary);padding:4px 0;">載入參數設定中…</div>`;
-    } else if (!schema?.properties || schemaParams.length === 0) {
-      header = `<div style="background:#fff8e1;border:1px solid #ffd980;border-radius:6px;padding:8px;margin-bottom:8px;font-size:0.7rem;color:#8b5a00;">
-        ⚠️ 此技能尚未宣告參數規格。如需設定請切換到進階模式手動新增參數。
-      </div>`;
-    } else {
-      const reqCount = (schema.required || []).length;
-      header = `<div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:0.7rem;color:#1e40af;">
-        📋 這個技能總共 ${schemaParams.length} 個參數，其中 <strong>${reqCount}</strong> 個必填。帶 <span style="color:#dc2626;">*</span> 的請務必填寫。
-      </div>`;
-    }
-
-    // Advanced-mode toggle
+    // Header + advanced toggle on the same row — compact
     const isAdv = !!block._paramsAdvanced;
-    const advToggle = `<div style="display:flex;justify-content:flex-end;align-items:center;gap:6px;margin-bottom:6px;font-size:0.68rem;color:#64748b;">
-      <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
-        <input type="checkbox" ${isAdv ? "checked" : ""} onchange="window._toggleBlockParamsAdvanced(${block.id}, this.checked)" />
-        進階模式
+    let summary = "";
+    if (schema === undefined) summary = "載入中…";
+    else if (!schema?.properties || schemaParams.length === 0) summary = "⚠️ 無參數規格";
+    else {
+      const reqCount = (schema.required || []).length;
+      summary = `${schemaParams.length} 個參數 · <strong>${reqCount}</strong> 個必填`;
+    }
+    const header = `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 8px;border-bottom:1px solid #e2e8f0;margin-bottom:4px;font-size:0.68rem;color:#64748b;">
+      <span>${summary}</span>
+      <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;user-select:none;">
+        <input type="checkbox" ${isAdv ? "checked" : ""} onchange="window._toggleBlockParamsAdvanced(${block.id}, this.checked)" style="margin:0;" />
+        進階
       </label>
     </div>`;
+    const advToggle = "";
 
-    // Build rows — simple mode uses single widget per param
+    // Build rows — simple mode uses compact single-row layout
     let pHtml = header + advToggle;
     allParams.forEach(pName => {
       const pv = params[pName] || { source: "fixed", value: "" };
       const pSchema = schema?.properties?.[pName] || null;
       const isReq = (schema?.required || []).includes(pName);
       const desc = pSchema?.description || "";
-      // Check if value is empty → highlight required-empty
       const isEmpty = (pv.value === "" || pv.value == null) && pv.source !== "auto" && pv.source !== "previous_step";
       const emptyClass = isReq && isEmpty ? 'style="border-color:#dc2626;background:#fef2f2;"' : "";
+      const removeBtn = !schemaParams.includes(pName)
+        ? `<button title="移除" onclick="window._removeBlockParam(${block.id},'${_escHtml(pName)}')" style="border:none;background:transparent;color:#cbd5e1;cursor:pointer;font-size:0.75rem;padding:0 0 0 4px;">✕</button>`
+        : "";
 
-      pHtml += `<div class="wf-param-card" data-param="${pName}" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:8px;background:#fff;">
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-          <label style="font-size:0.8rem;font-weight:600;color:#1e293b;">${_escHtml(pName)}${isReq ? ' <span style="color:#dc2626;">*</span>' : ''}</label>
-          ${!schemaParams.includes(pName) ? `<button title="移除此參數" onclick="window._removeBlockParam(${block.id},'${_escHtml(pName)}')" style="margin-left:auto;border:none;background:transparent;color:#94a3b8;cursor:pointer;font-size:0.85rem;padding:0;">✕</button>` : '<span style="margin-left:auto;"></span>'}
+      pHtml += `<div class="wf-param-card" data-param="${pName}">
+        <div style="display:flex;align-items:baseline;gap:4px;margin-bottom:4px;">
+          <label>${_escHtml(pName)}${isReq ? ' <span style="color:#dc2626;">*</span>' : ''}</label>
+          <span style="flex:1;"></span>
+          ${removeBtn}
         </div>
-        ${desc ? `<div style="font-size:0.68rem;color:#64748b;margin-bottom:6px;">${_escHtml(desc)}</div>` : ""}
+        ${desc ? `<div style="font-size:0.66rem;color:#94a3b8;margin-bottom:5px;line-height:1.4;">${_escHtml(desc)}</div>` : ""}
         ${isAdv
           ? _renderParamRowAdvanced(block, pName, pv, pSchema, wfVars)
           : _renderParamRowSimple(block, pName, pv, pSchema, wfVars, emptyClass)}

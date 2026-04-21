@@ -507,13 +507,33 @@
 
 /* ── Property Panel (floating) ───────────────────────────────── */
 .wf-prop-panel {
-  position: fixed; z-index: 200; width: 240px;
+  position: fixed; z-index: 200; width: 280px;
+  max-height: calc(100vh - 80px);          /* never overflow viewport */
+  overflow-y: auto;                         /* internal scroll instead */
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: 12px;
   box-shadow: 0 4px 20px rgba(0,0,0,0.12);
   padding: 14px; font-size: 0.76rem;
+  /* Custom scrollbar — slim + unobtrusive */
+  scrollbar-width: thin;
 }
+.wf-prop-panel::-webkit-scrollbar { width: 6px; }
+.wf-prop-panel::-webkit-scrollbar-track { background: transparent; }
+.wf-prop-panel::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+.wf-prop-panel::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Simple-mode param row — no heavy card; just bottom divider */
+.wf-param-card {
+  padding: 10px 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  border-bottom: 1px solid #f1f5f9 !important;
+  background: transparent !important;
+  border-radius: 0 !important;
+}
+.wf-param-card:last-of-type { border-bottom: none !important; }
+.wf-param-card label { font-weight: 600; color: #1e293b; font-size: 0.78rem; }
 .wf-prop-panel.hidden { display: none; }
 .wf-prop-panel-title {
   font-weight: 700; color: var(--text-primary); margin-bottom: 10px;
