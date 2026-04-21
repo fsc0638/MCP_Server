@@ -94,7 +94,7 @@
             "required": ["name", "source"],
             "properties": {
               "name": { "type": "string" },
-              "type": { "type": "string", "enum": ["string", "number", "boolean", "array", "object"], "default": "string" },
+              "type": { "type": "string", "enum": ["string", "number", "integer", "boolean", "array", "object"], "default": "string" },
               "source": {
                 "type": "string",
                 "enum": ["fixed", "user_input", "system", "previous_step", "secret"]

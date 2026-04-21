@@ -318,6 +318,30 @@ def migrate_legacy(
     vars_block["global_inputs"] = sorted(globals_set)
     vars_block.setdefault("env_requirements", [])
     vars_block.setdefault("definitions", [])
+
+    # Normalize definition types — LLM sometimes uses JSON-Schema convention
+    # like "integer" or "double" that don't match our enum. Map to closest
+    # allowed type so validation passes.
+    _ALLOWED_VAR_TYPES = {"string", "number", "integer", "boolean", "array", "object"}
+    _TYPE_ALIASES = {
+        "int": "integer", "long": "integer",
+        "float": "number", "double": "number", "decimal": "number",
+        "bool": "boolean",
+        "list": "array", "tuple": "array",
+        "dict": "object", "map": "object", "json": "object",
+        "str": "string", "text": "string",
+    }
+    for d in vars_block["definitions"]:
+        if not isinstance(d, dict):
+            continue
+        t = (d.get("type") or "").lower().strip()
+        if t in _ALLOWED_VAR_TYPES:
+            d["type"] = t
+        elif t in _TYPE_ALIASES:
+            d["type"] = _TYPE_ALIASES[t]
+        else:
+            d["type"] = "string"  # safe default
+
     out["variables"] = vars_block
 
     # ── 9. Cleanup: remove legacy root-level fields now consolidated elsewhere ──
