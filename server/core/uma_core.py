@@ -139,6 +139,20 @@ class UMA:
             return result
 
 
+    def _skill_directory(self, skill_name: str) -> Optional[Path]:
+        """Return the actual on-disk path for a skill, regardless of scope.
+
+        Registry stores real paths under skills[key]["path"] for system /
+        department / personal skills. Falling back to system skills_home
+        (the old behaviour) only worked for scope=system — dept/personal
+        skills always resolved to a non-existent path and every
+        execute_tool_call returned 'not found'.
+        """
+        skill_data = self.registry.get_skill(skill_name)
+        if skill_data and skill_data.get("path"):
+            return Path(skill_data["path"])
+        return None
+
     def _detect_execution_mode(self, skill_name: str) -> str:
         """
         Auto-detect skill execution mode based on scripts/ directory content.
@@ -146,7 +160,9 @@ class UMA:
         - 'code':       scripts/ has .py files (but no main.py) → reference guide + python-executor
         - 'semantic':   no scripts/ or empty → LLM processes directly with language capabilities
         """
-        skill_dir = self.executor.skills_home / skill_name
+        skill_dir = self._skill_directory(skill_name)
+        if not skill_dir or not skill_dir.exists():
+            return "semantic"
         scripts_dir = skill_dir / "scripts"
 
         for candidate in [scripts_dir, skill_dir / "Scripts"]:
@@ -235,7 +251,8 @@ class UMA:
                 }
 
         mode = self._detect_execution_mode(skill_name)
-        skill_dir = self.executor.skills_home / skill_name
+        # Resolve real on-disk directory (works across system/dept/personal scopes)
+        skill_dir = self._skill_directory(skill_name) or (self.executor.skills_home / skill_name)
 
         # === Executable: run script directly ===
         if mode == "executable":
@@ -274,6 +291,7 @@ class UMA:
                 skill_name, "main.py", arg_dict,
                 env_vars=env_vars,
                 timeout=skill_timeout,
+                skill_dir_override=skill_dir,
             )
             return self._normalize_executable_result(raw_result)
 
