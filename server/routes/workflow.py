@@ -901,13 +901,40 @@ b. 生成 PDF 必須用系統預設的 ChinesePDF 輔助類別（支援中文）
 c. 檔案一定要存到 DOWNLOADS 目錄，否則下載連結 404
 d. 檔案命名有意義且 ≤ 15 字中文或 30 字英數
 
-【排程相關 — mcp-schedule-manager】
-要設定每日/每週定時任務，action 必填：
-- add 新增排程：需要 name、cron、type（news/work_summary/language/custom/reminder）、content
-- cron 格式：'0 8 * * 1-5' = 週一到五上午 8 點；'every +10m' = 每 10 分鐘
-- 不要用 time / frequency 這類非白名單欄位
-- **必須**帶 original_request = 使用者的完整原始描述（從對話取得），不可省略，否則
-  skill 會拒絕執行（安全守門）。後端會自動補上，但請你還是明示寫在 input_map 裡。
+【排程相關 — mcp-schedule-manager】⚠️ **先判斷使用者意圖屬哪類**
+
+情境 A：要「每天早上自動跑整個流程（搜尋 + 總結 + PDF）」——**循環工作流**
+  這種情況整個工作流本體（web-search、txt-analyzer、python-executor 等）
+  就是要被排程反覆執行的內容。LLM 應該：
+  1. 把真正的步驟（web-search → txt-analyzer → python-executor）放在工作流
+     前面正常執行順序，**不要**在後面加 schedule-manager step
+  2. 在 LAST 位置（或前面任何地方）放**一個** schedule-manager step：
+       action: add
+       type:   "workflow"        ← 注意是 "workflow" 不是 "news"
+       cron:   "0 8 * * 1-5"     ← 要的時間
+       name:   流程名稱
+       config: {"workflow_id":"__self__","original_request":"${originalPrompt}"}
+     (後端會把 "__self__" 替換成當前 workflow_id，所以 LLM 不用知道實際 ID)
+  3. 排程觸發時，scheduled_push 會用 WorkflowExecutor 重跑整個工作流
+  4. 第一次使用者按執行時，也會跑完所有步驟 + 建立排程；之後每次到時間
+     就自動重跑
+
+情境 B：只要定時推送一段內容（新聞摘要、工作提醒、語言學習），**不用多步驟**
+  工作流只有 [開始] → [schedule-manager] → [結束]，schedule-manager 用：
+    type: "news" (新聞) / "reminder" (一次性提醒) / "work_summary" / "language" / "custom"
+  scheduled_push 會用 skill 本身的邏輯產內容（不會呼叫 workflow）
+
+通用規則：
+- action=add 必須帶 name / cron / type / original_request
+- cron 格式：
+    '0 8 * * 1-5'  = 週一到五上午 8 點
+    '0 9 * * *'    = 每天上午 9 點
+    'every +10m'   = 每 10 分鐘（interval）
+    'once +30m'    = 30 分鐘後一次性
+- 不要用 time / frequency 這類非標準欄位
+- **必須**帶 original_request = 使用者的完整原始描述
+- content 可以帶格式提示（例：'${pdfFilePath}'），但別依賴它做跨日的檔案傳遞
+  — 排程下次觸發時 workflow 是從頭重跑，舊路徑不會保留
 
 【錯誤避免清單】
 ✗ `"code": "print(${{newsSummaries}})"` ← ${{}} 插到 Python 字串中會爆
@@ -1055,18 +1082,37 @@ async def llm_generate_workflow(
     if not wf["steps"]:
         raise HTTPException(status_code=422, detail="LLM 產生的工作流無可用步驟（可能全部引用到白名單外技能）")
 
-    # ── Auto-inject original_request for skills that require it ──
-    # mcp-schedule-manager rejects add with empty/confirm-like original_request
-    # as a safety check. LLM often forgets to include it, so we post-process
-    # and inject the user's prompt here so the user doesn't see a confusing
-    # "original_request 為空" error.
+    # ── Auto-inject original_request + resolve __self__ workflow_id ──
+    # 1) Schedule-manager refuses add without original_request; supply the
+    #    user's prompt if LLM forgot.
+    # 2) For "type=workflow" tasks we let LLM use the placeholder "__self__"
+    #    as workflow_id (since it doesn't know the ID yet). Replace it with
+    #    the actual workflow_id generated during migrate_legacy below. For
+    #    now we write a placeholder marker that the post-migrate step
+    #    rewrites once wf["workflow_id"] is set.
     for step in wf["steps"]:
         if not isinstance(step, dict):
             continue
         if step.get("skill_id") == "mcp-schedule-manager":
-            step.setdefault("input_map", {})
-            if not step["input_map"].get("original_request"):
-                step["input_map"]["original_request"] = prompt
+            im = step.setdefault("input_map", {})
+            if not im.get("original_request"):
+                im["original_request"] = prompt
+            # Parse config (may be JSON string or dict)
+            _cfg = im.get("config")
+            if isinstance(_cfg, str):
+                try:
+                    _cfg_d = json.loads(_cfg)
+                except Exception:
+                    _cfg_d = {}
+            elif isinstance(_cfg, dict):
+                _cfg_d = _cfg
+            else:
+                _cfg_d = {}
+            # If LLM used "__self__" or left workflow_id empty for type=workflow,
+            # mark for later substitution after migrate_legacy assigns the id
+            if im.get("type") == "workflow" or _cfg_d.get("workflow_id") == "__self__":
+                _cfg_d["workflow_id"] = "__SELF_WORKFLOW_ID__"  # sentinel
+                im["config"] = _cfg_d
 
     # ── Synthesize blocks[] + connections[] from steps[] for the executor.
     # The executor walks blocks (canvas representation), not steps, so an
@@ -1133,6 +1179,25 @@ async def llm_generate_workflow(
     except Exception as e:
         logger.error(f"[LLM-Gen] migration failed: {e}")
         raise HTTPException(status_code=500, detail=f"Schema 遷移失敗：{e}")
+
+    # ── Post-migrate: resolve __SELF_WORKFLOW_ID__ sentinel ──
+    # Now that migrate_legacy has assigned the final workflow_id, rewrite any
+    # schedule-manager step that wanted to register itself as a recurring
+    # workflow task. Also update the corresponding block.config.params.
+    _self_id = wf.get("workflow_id", "")
+    if _self_id:
+        def _rewrite_in_dict(d):
+            for k, v in list(d.items()):
+                if isinstance(v, str) and v == "__SELF_WORKFLOW_ID__":
+                    d[k] = _self_id
+                elif isinstance(v, dict):
+                    _rewrite_in_dict(v)
+                elif isinstance(v, str) and "__SELF_WORKFLOW_ID__" in v:
+                    d[k] = v.replace("__SELF_WORKFLOW_ID__", _self_id)
+        for step in (wf.get("steps") or []):
+            _rewrite_in_dict(step)
+        for blk in (wf.get("blocks") or []):
+            _rewrite_in_dict(blk)
 
     result: Dict[str, Any] = {
         "status": "success",
