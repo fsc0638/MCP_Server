@@ -1,0 +1,209 @@
+{
+  "display_name": "經濟新聞推送與總結",
+  "description": "推送最新經濟新聞並總結成PDF",
+  "variables": {
+    "definitions": [
+      {
+        "name": "newsCount",
+        "type": "integer",
+        "source": "fixed",
+        "required": true,
+        "default_value": 10,
+        "description": "要推送的新聞數量"
+      }
+    ],
+    "global_inputs": [
+      "newsResults",
+      "newsSummaries"
+    ],
+    "env_requirements": []
+  },
+  "steps": [
+    {
+      "step_id": "step_1",
+      "type": "sequential",
+      "skill_id": "mcp-web-search",
+      "label": "搜尋最新經濟新聞",
+      "input_map": {
+        "query": "最新 經濟新聞",
+        "max_results": "${newsCount}",
+        "search_depth": "advanced",
+        "include_domains": [
+          "cnyes.com",
+          "ltn.com.tw",
+          "money.udn.com",
+          "wealth.com.tw"
+        ]
+      },
+      "output_var": "step_1_output",
+      "on_fail": "abort"
+    },
+    {
+      "step_id": "step_2",
+      "type": "sequential",
+      "skill_id": "mcp-txt-llm-analyzer",
+      "label": "總結新聞重點",
+      "input_map": {
+        "text": "${newsResults}"
+      },
+      "output_var": "step_2_output",
+      "on_fail": "abort"
+    },
+    {
+      "step_id": "step_3",
+      "type": "sequential",
+      "skill_id": "mcp-python-executor",
+      "label": "生成新聞總結PDF",
+      "input_map": {
+        "code": "import sys, os\nsys.path.insert(0, r'C:/Users/kicl1/OneDrive/文件/研發組專案/MCP_Server/workspace')\nfrom pdf_helper import ChinesePDF\nDOWNLOADS = r'C:/Users/kicl1/OneDrive/文件/研發組專案/MCP_Server/workspace/downloads'\nos.makedirs(DOWNLOADS, exist_ok=True)\ncontent = os.environ.get('SKILL_PARAM_TEXT', '')\npdf = ChinesePDF(); pdf.add_page()\npdf.chapter_title('經濟新聞總結')\npdf.chapter_body(content)\npdf.output(os.path.join(DOWNLOADS, '經濟新聞總結.pdf'))\nprint('OK: 經濟新聞總結.pdf')",
+        "text": "${newsSummaries}"
+      },
+      "output_var": "step_3_output",
+      "on_fail": "abort"
+    }
+  ],
+  "source": "llm_generated",
+  "metadata": {
+    "original_prompt": "推送十則最新的經濟新聞給我，並總結新聞重點，每則新聞的重點不可低於200字元，並整理成PDF檔案給我下載",
+    "created_by": "line_U09e3122dcc146ed9784ec91acd6d7530",
+    "created_at": "2026-04-22T13:25:11.005902",
+    "updated_at": "2026-04-22T13:25:11.006008",
+    "run_count": 0,
+    "promoted_from": "run_1776835511095_03efb1",
+    "promoted_at": "2026-04-22T13:25:35.750583"
+  },
+  "blocks": [
+    {
+      "id": 1,
+      "type": "start",
+      "x": 100,
+      "y": 60,
+      "label": "開始",
+      "config": {}
+    },
+    {
+      "id": 2,
+      "type": "web-search",
+      "x": 100,
+      "y": 180,
+      "label": "搜尋最新經濟新聞",
+      "config": {
+        "params": {
+          "query": {
+            "source": "fixed",
+            "value": "最新 經濟新聞"
+          },
+          "max_results": {
+            "source": "variable",
+            "value": "{{newsCount}}"
+          },
+          "search_depth": {
+            "source": "fixed",
+            "value": "advanced"
+          },
+          "include_domains": {
+            "source": "fixed",
+            "value": [
+              "cnyes.com",
+              "ltn.com.tw",
+              "money.udn.com",
+              "wealth.com.tw"
+            ]
+          }
+        },
+        "output_var": "newsResults"
+      }
+    },
+    {
+      "id": 3,
+      "type": "txt-llm-analyzer",
+      "x": 100,
+      "y": 300,
+      "label": "總結新聞重點",
+      "config": {
+        "params": {
+          "text": {
+            "source": "variable",
+            "value": "{{newsResults}}"
+          }
+        },
+        "output_var": "newsSummaries"
+      }
+    },
+    {
+      "id": 4,
+      "type": "python-executor",
+      "x": 100,
+      "y": 420,
+      "label": "生成新聞總結PDF",
+      "config": {
+        "params": {
+          "code": {
+            "source": "fixed",
+            "value": "import sys, os\nsys.path.insert(0, r'C:/Users/kicl1/OneDrive/文件/研發組專案/MCP_Server/workspace')\nfrom pdf_helper import ChinesePDF\nDOWNLOADS = r'C:/Users/kicl1/OneDrive/文件/研發組專案/MCP_Server/workspace/downloads'\nos.makedirs(DOWNLOADS, exist_ok=True)\ncontent = os.environ.get('SKILL_PARAM_TEXT', '')\npdf = ChinesePDF(); pdf.add_page()\npdf.chapter_title('經濟新聞總結')\npdf.chapter_body(content)\npdf.output(os.path.join(DOWNLOADS, '經濟新聞總結.pdf'))\nprint('OK: 經濟新聞總結.pdf')"
+          },
+          "text": {
+            "source": "variable",
+            "value": "{{newsSummaries}}"
+          }
+        },
+        "output_var": "pdfFilePath"
+      }
+    },
+    {
+      "id": 5,
+      "type": "end",
+      "x": 100,
+      "y": 540,
+      "label": "結束",
+      "config": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": 1,
+      "to": 2
+    },
+    {
+      "from": 2,
+      "to": 3
+    },
+    {
+      "from": 3,
+      "to": 4
+    },
+    {
+      "from": 4,
+      "to": 5
+    }
+  ],
+  "version": "1.0",
+  "workflow_id": "WorkflowK_3cjLg4W9ti9PPYjzfCUn",
+  "constraints": {
+    "max_steps": 10,
+    "timeout_seconds": 300,
+    "skill_whitelist": null
+  },
+  "trigger": {
+    "enabled": false,
+    "mode": "confirm",
+    "priority": 10,
+    "patterns": [],
+    "schedule": ""
+  },
+  "execution": {
+    "default_model": "",
+    "timeout": 120,
+    "on_error": "retry",
+    "max_retries": 3
+  },
+  "security": {
+    "require_auth": true,
+    "allowed_roles": [],
+    "rate_limit": 0,
+    "audit_log": true
+  },
+  "updated_at": "2026-04-22T13:25:11.006008",
+  "scope": "personal",
+  "owner": "1665"
+}

@@ -34,7 +34,7 @@
       "config": {}
     },
     {
-      "id": 3,
+      "id": 2,
       "type": "google-calendar",
       "x": 240,
       "y": 160,
@@ -77,7 +77,7 @@
       }
     },
     {
-      "id": 4,
+      "id": 3,
       "type": "notion-crud",
       "x": 240,
       "y": 280,
@@ -144,7 +144,7 @@
       }
     },
     {
-      "id": 5,
+      "id": 4,
       "type": "end",
       "x": 440,
       "y": 40,
@@ -152,7 +152,7 @@
       "config": {}
     },
     {
-      "id": 6,
+      "id": 5,
       "type": "sub-workflow",
       "x": 240,
       "y": 40,
@@ -166,27 +166,27 @@
   "connections": [
     {
       "from": 1,
-      "to": 3
+      "to": 2
     },
     {
       "from": 1,
+      "to": 3
+    },
+    {
+      "from": 2,
       "to": 4
     },
     {
       "from": 3,
-      "to": 5
-    },
-    {
-      "from": 4,
-      "to": 5
+      "to": 4
     },
     {
       "from": 1,
-      "to": 6
+      "to": 5
     },
     {
-      "from": 6,
-      "to": 5
+      "from": 5,
+      "to": 4
     }
   ],
   "trigger": {
@@ -221,14 +221,14 @@
   "context": {},
   "scope": "personal",
   "owner": "1665",
-  "updated_at": "2026-04-21T11:44:22.432719",
+  "updated_at": "2026-04-22T13:36:50.418609",
   "version": "1.0",
-  "workflow_id": "wf_51ebd2d381",
-  "display_name": "情境同步自動化助理",
+  "workflow_id": "WorkflowK_Tz5Po8qiQBPDuouPEMXj",
+  "display_name": "早安主人",
   "source": "user_defined",
   "metadata": {
-    "created_at": "2026-04-21T11:44:22.432769",
-    "updated_at": "2026-04-21T11:44:22.432719",
+    "created_at": "2026-04-22T13:36:50.418664",
+    "updated_at": "2026-04-22T13:36:50.418609",
     "run_count": 0,
     "created_by": "line_U09e3122dcc146ed9784ec91acd6d7530"
   },
