@@ -1048,6 +1048,7 @@ def _build_llm_generator_messages(prompt: str, skills: List[Dict[str, Any]], max
 {{
   "display_name": "簡短的工作流名稱（6-20 字）",
   "description": "一句話說明用途",
+  "trigger_keywords": ["關鍵詞1", "關鍵詞2", "..."],
   "variables": {{
     "definitions": [
       {{"name": "camelCaseName", "type": "string", "source": "user_input|fixed",
@@ -1070,6 +1071,18 @@ def _build_llm_generator_messages(prompt: str, skills: List[Dict[str, Any]], max
 6. 固定值 → input_map 直接寫字面值；要引用變數 → ${{varName}}
 7. 不要產生 workflow_id / blocks / connections / trigger — 後端會補
 8. 只回傳 JSON，不要前後加任何解釋文字
+9. **trigger_keywords（觸發關鍵詞）— 必填，1~5 個**
+   - 用途：使用者在聊天中說到這些詞時，系統自動匹配此工作流（0-token 匹配，不花 LLM）
+   - 挑選原則：
+     a. **使用者原始需求中最有辨識度的名詞 / 動詞組合**（例：「經濟新聞」「週報」「Notion 會議記錄」）
+     b. 優先中文（若任務是中文描述）；同義詞可列但不要超過 5 個
+     c. 不要放太泛用的字（「執行」「開始」「處理」「分析」「工作流」「排程」這類動詞或元描述）
+     d. 不要放單字（至少 2 字以上），也不要放完整句子
+     e. 若有特定 skill 的代表詞（「PDF」「圖表」「新聞」）且出現在任務敘述中，可列入
+   - 格式：字串陣列，最多 5 個；空字串或重複會被後端濾掉
+   - 範例：
+     任務「每天早上 8 點推 5 則經濟新聞」→ ["經濟新聞", "財經新聞", "每日新聞", "新聞推播"]
+     任務「把會議錄音整理成 Notion 頁面」→ ["會議記錄", "會議整理", "Notion 會議", "錄音整理"]
 
 【Python / PDF 生成 — 極重要】
 當步驟要用 `mcp-python-executor` 生成檔案，code 字串必須：
@@ -1278,6 +1291,52 @@ async def llm_generate_workflow(
     wf["metadata"]["original_prompt"] = prompt
     wf["metadata"]["created_by"] = caller_ctx.get("user_id") or caller_ctx.get("employee_id", "")
     wf["metadata"]["created_at"] = datetime.now().isoformat()
+
+    # ── Normalize LLM-emitted trigger_keywords ──
+    # LLM prompt asks for up to 5 short Chinese noun-phrase keywords that
+    # match the user's natural-language request. Deduplicate, strip blanks,
+    # filter out overly-generic or too-short entries, and cap at 5.
+    _BANNED_KW = {
+        "執行", "開始", "處理", "分析", "任務", "工作流", "排程",
+        "流程", "步驟", "run", "execute", "start", "workflow",
+    }
+    _raw_kws = wf.get("trigger_keywords")
+    if not isinstance(_raw_kws, list):
+        _raw_kws = []
+    _seen = set()
+    _kws_clean: List[str] = []
+    for k in _raw_kws:
+        if not isinstance(k, str):
+            continue
+        kw = k.strip()
+        # Filter: length, generic banlist, duplicates (case-insensitive)
+        if len(kw) < 2 or len(kw) > 20:
+            continue
+        if kw.lower() in _BANNED_KW:
+            continue
+        key = kw.lower()
+        if key in _seen:
+            continue
+        _seen.add(key)
+        _kws_clean.append(kw)
+        if len(_kws_clean) >= 5:
+            break
+    wf["trigger_keywords"] = _kws_clean
+    # Also mirror into trigger.patterns (v2 spec) so pattern-matching in
+    # chat / LINE picks them up regardless of which field the matcher reads.
+    _trig = wf.get("trigger") or {}
+    _trig_patterns = _trig.get("patterns") or []
+    if not isinstance(_trig_patterns, list):
+        _trig_patterns = []
+    for kw in _kws_clean:
+        if kw not in _trig_patterns:
+            _trig_patterns.append(kw)
+    _trig["patterns"] = _trig_patterns[:5]
+    wf["trigger"] = _trig
+    if _kws_clean:
+        logger.info(f"[LLM-Gen] Extracted trigger_keywords ({len(_kws_clean)}): {_kws_clean}")
+    else:
+        logger.info("[LLM-Gen] LLM returned no usable trigger_keywords — leaving empty")
 
     # Safety: strip any skill_id not in whitelist
     allowed_ids = {s["skill_id"] for s in accessible}
