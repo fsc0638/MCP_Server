@@ -298,7 +298,13 @@ def migrate_legacy(
     trig.setdefault("mode", "confirm")
     trig.setdefault("priority", 10)
     trig.setdefault("patterns", [])
+    # Normalise: frontend writes trigger.cron but v2 schema uses schedule.
+    # Accept both; schedule wins if both present, else cron is moved.
+    if not trig.get("schedule") and trig.get("cron"):
+        trig["schedule"] = trig["cron"]
     trig.setdefault("schedule", "")
+    # Drop legacy cron field once moved (keep things single-source)
+    trig.pop("cron", None)
     # Move legacy root-level trigger_keywords → trigger.patterns
     if out.get("trigger_keywords"):
         _existing_patterns = set(trig.get("patterns") or [])

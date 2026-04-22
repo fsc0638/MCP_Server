@@ -3834,8 +3834,14 @@
         <div class="wf-settings-field"><label>優先順序 (1=最高)</label>
           <input type="number" id="wfSetTriggerPriority" value="${tr.priority || 10}" min="1" max="99" /></div>
         <div class="wf-settings-field"><label>排程 Cron 表達式</label>
-          <input type="text" id="wfSetTriggerCron" value="${_escHtml(tr.cron || "")}" placeholder="例如: 0 9 * * 1-5" />
-          <div class="wf-settings-hint">留空表示不啟用排程自動觸發（若關鍵詞也空，整個觸發無效）</div></div>
+          <input type="text" id="wfSetTriggerCron" value="${_escHtml(tr.schedule || tr.cron || "")}" placeholder="例如: 0 9 * * 1-5" />
+          <div class="wf-settings-hint">
+            儲存時會自動註冊到系統排程，到點執行整個工作流。範例：<br>
+            &nbsp;&nbsp;<code>0 9 * * 1-5</code>&nbsp;= 週一到五上午 9:00<br>
+            &nbsp;&nbsp;<code>*/10 * * * *</code>&nbsp;= 每 10 分鐘<br>
+            &nbsp;&nbsp;<code>30 17 * * 5</code>&nbsp;= 每週五下午 5:30<br>
+            留空表示不排程。一次性延遲（如「10 分鐘後」）請用排程管理技能，不能用 cron。
+          </div></div>
       `;
     } else if (tab === "execution") {
       const ex = wd.execution || {};
@@ -4071,7 +4077,11 @@
       const trigPri = document.getElementById("wfSetTriggerPriority");
       if (trigPri) wd.trigger.priority = parseInt(trigPri.value) || 10;
       const trigCron = document.getElementById("wfSetTriggerCron");
-      if (trigCron) wd.trigger.cron = trigCron.value.trim();
+      if (trigCron) {
+        wd.trigger.schedule = trigCron.value.trim();
+        // Backward compat: keep cron too so older UI code reading it still works
+        wd.trigger.cron = trigCron.value.trim();
+      }
     }
 
     // Execution

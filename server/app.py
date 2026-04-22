@@ -258,6 +258,13 @@ def _setup_scheduler():
         __scheduler.start()
         logger.info("[Scheduler] APScheduler started with 7 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), line_uploads_cleanup(00:05), push_tick(1min), continuous_learner(10min), log_cleanup(02h)")
 
+        # Register workflow-native cron jobs from disk (trigger.schedule)
+        try:
+            from server.services.workflow_scheduler import sync_all_workflow_schedules
+            sync_all_workflow_schedules()
+        except Exception as _wf_sched_err:
+            logger.warning(f"[Scheduler] Workflow schedule sync failed: {_wf_sched_err}")
+
     except ImportError:
         logger.warning(
             "[Scheduler] APScheduler not installed. Scheduled jobs disabled. "

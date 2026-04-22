@@ -404,6 +404,17 @@ def save_workflow(
         f"(scope={req.scope}, {len(req.blocks)} blocks → {len(data.get('steps') or [])} steps, "
         f"source={data.get('source')})"
     )
+
+    # Refresh APScheduler cron job for this workflow based on its current
+    # trigger.schedule + trigger.enabled. Add/update/remove as needed.
+    try:
+        from server.services.workflow_scheduler import refresh_workflow_schedule
+        _sched_res = refresh_workflow_schedule(final_slug)
+        if _sched_res.get("status") == "registered":
+            logger.info(f"[Workflow] Cron job for '{final_slug}' → {_sched_res.get('cron')}")
+    except Exception as _sched_err:
+        logger.warning(f"[Workflow] Failed to refresh scheduler for '{final_slug}': {_sched_err}")
+
     return {
         "status": "success",
         "id": final_slug,
@@ -453,6 +464,13 @@ def delete_workflow(
 
     path.unlink()
     logger.info(f"[Workflow] Deleted: {workflow_id} (scope={scope}, by={req.user_name})")
+
+    # Remove the APScheduler cron job for this workflow (if any)
+    try:
+        from server.services.workflow_scheduler import remove_workflow_schedule
+        remove_workflow_schedule(workflow_id)
+    except Exception as _sched_err:
+        logger.warning(f"[Workflow] Failed to remove scheduler job for '{workflow_id}': {_sched_err}")
 
     # ── Cleanup: remove any schedule tasks that reference this workflow ──
     # When a user deletes a workflow that had an associated recurring/one-shot
@@ -960,40 +978,57 @@ b. 生成 PDF 必須用系統預設的 ChinesePDF 輔助類別（支援中文）
 c. 檔案一定要存到 DOWNLOADS 目錄，否則下載連結 404
 d. 檔案命名有意義且 ≤ 15 字中文或 30 字英數
 
-【排程相關 — mcp-schedule-manager】⚠️ **先判斷使用者意圖屬哪類**
+【排程相關 ★ 新設計：不要再塞 schedule-manager step 來做重複排程】
 
-情境 A：要「每天早上自動跑整個流程（搜尋 + 總結 + PDF）」——**循環工作流**
-  這種情況整個工作流本體（web-search、txt-analyzer、python-executor 等）
-  就是要被排程反覆執行的內容。LLM 應該：
-  1. 把真正的步驟（web-search → txt-analyzer → python-executor）放在工作流
-     前面正常執行順序，**不要**在後面加 schedule-manager step
-  2. 在 LAST 位置（或前面任何地方）放**一個** schedule-manager step：
-       action: add
-       type:   "workflow"        ← 注意是 "workflow" 不是 "news"
-       cron:   "0 8 * * 1-5"     ← 要的時間
-       name:   流程名稱
-       config: {{"workflow_id":"__self__","original_request":"<完整原始需求>"}}
-     (後端會把 "__self__" 替換成當前 workflow_id，所以 LLM 不用知道實際 ID)
-  3. 排程觸發時，scheduled_push 會用 WorkflowExecutor 重跑整個工作流
-  4. 第一次使用者按執行時，也會跑完所有步驟 + 建立排程；之後每次到時間
-     就自動重跑
+循環排程（「每天 X 點」「每週 N 做 Y」等）→ **直接設 workflow 頂層的
+trigger 欄位**，系統會自動接 APScheduler 觸發整個工作流：
 
-情境 B：只要定時推送一段內容（新聞摘要、工作提醒、語言學習），**不用多步驟**
-  工作流只有 [開始] → [schedule-manager] → [結束]，schedule-manager 用：
-    type: "news" (新聞) / "reminder" (一次性提醒) / "work_summary" / "language" / "custom"
-  scheduled_push 會用 skill 本身的邏輯產內容（不會呼叫 workflow）
+   {{
+     ...
+     "trigger": {{
+       "enabled": true,
+       "mode": "auto",
+       "schedule": "0 8 * * 1-5",   ← 5 段 cron（分 時 日 月 週）
+       "patterns": [],
+       "priority": 10
+     }},
+     ...
+   }}
 
-通用規則：
-- action=add 必須帶 name / cron / type / original_request
-- cron 格式：
-    '0 8 * * 1-5'  = 週一到五上午 8 點
-    '0 9 * * *'    = 每天上午 9 點
-    'every +10m'   = 每 10 分鐘（interval）
-    'once +30m'    = 30 分鐘後一次性
-- 不要用 time / frequency 這類非標準欄位
-- **必須**帶 original_request = 使用者的完整原始描述
-- content 可以帶格式提示（例：'${{pdfFilePath}}'），但別依賴它做跨日的檔案傳遞
-  — 排程下次觸發時 workflow 是從頭重跑，舊路徑不會保留
+   cron 格式範例：
+     '0 8 * * 1-5'  = 週一到五上午 8 點
+     '0 9 * * *'    = 每天上午 9 點
+     '*/10 * * * *' = 每 10 分鐘
+     '30 17 * * 5'  = 週五下午 5:30
+
+   這樣做的好處：
+   - 不需要在工作流裡加額外的 schedule-manager step
+   - 排程觸發時會呼叫 WorkflowExecutor.execute() 重跑完整 pipeline
+   - 刪除工作流 → APScheduler job 自動移除
+   - 使用者可以直接在「工作流設定 → 觸發」tab 看到 cron 並編輯
+
+一次性延遲（「兩分鐘後推送」「30 分鐘後提醒」）→ 仍然使用 mcp-schedule-manager：
+   {{
+     "skill_id": "mcp-schedule-manager",
+     "input_map": {{
+       "action": "add",
+       "type": "reminder",
+       "cron": "once +2m",
+       "name": "提醒名稱",
+       "content": "要推送的文字",
+       "original_request": "<完整原始需求>"
+     }},
+     ...
+   }}
+   這種一次性任務用 APScheduler cron 不適合（cron 是循環的），
+   所以還是走排程管理 skill。
+
+純推送類（新聞 / 提醒 / 學習）**不涉及其他 skill** → 工作流可以整個
+只放一個 schedule-manager step，用 type=news / reminder / custom / language / work_summary。
+
+⚠️ 關鍵判斷：使用者說「每天 X 點做 Y」如果 Y 是多步驟工作流（搜尋+整理+PDF 等），
+一定要用 trigger.schedule（方案 A），不要用 schedule-manager type=workflow。
+前者是 cron 觸發整個工作流；後者是老舊做法且 UI 看不到排程資訊。
 
 【錯誤避免清單】
 ✗ `"code": "print(${{newsSummaries}})"` ← ${{}} 插到 Python 字串中會爆
@@ -1146,11 +1181,42 @@ async def llm_generate_workflow(
     if not wf["steps"]:
         raise HTTPException(status_code=422, detail="LLM 產生的工作流無可用步驟（可能全部引用到白名單外技能）")
 
+    # ── Promote schedule-manager type=workflow step → trigger.schedule ──
+    # New architecture: recurring workflows should use workflow.trigger.schedule
+    # directly (APScheduler picks it up). If LLM still emits a legacy
+    # schedule-manager step with type=workflow, extract its cron and move it
+    # to wf.trigger.schedule; then drop the redundant step.
+    _steps = wf.get("steps") or []
+    _remaining_steps = []
+    for s in _steps:
+        if not isinstance(s, dict):
+            _remaining_steps.append(s)
+            continue
+        _im = s.get("input_map") or {}
+        if (
+            s.get("skill_id") == "mcp-schedule-manager"
+            and _im.get("action") == "add"
+            and _im.get("type") == "workflow"
+            and _im.get("cron")
+            and not (_im.get("cron", "").startswith("once") or _im.get("cron", "").startswith("every"))
+        ):
+            # Hoist the cron to workflow trigger
+            _trig = wf.get("trigger") or {}
+            _trig["enabled"] = True
+            _trig["mode"] = _trig.get("mode") or "auto"
+            _trig["schedule"] = _im["cron"]
+            _trig.setdefault("patterns", [])
+            _trig.setdefault("priority", 10)
+            wf["trigger"] = _trig
+            logger.info(f"[LLM-Gen] Promoted schedule-manager (cron={_im['cron']}) → workflow.trigger.schedule")
+            continue  # drop this step
+        _remaining_steps.append(s)
+    wf["steps"] = _remaining_steps
+
     # ── Auto-inject original_request + resolve __self__ workflow_id ──
-    # Normalise schedule-manager steps so a multi-step LLM workflow ALWAYS
-    # gets re-run at schedule time (via type=workflow + workflow_id=__self__).
-    # Otherwise LLM tends to pick type=news and the scheduler fires a stale
-    # news push instead of the workflow's full pipeline.
+    # For any remaining schedule-manager steps (one-shot reminders, news push
+    # tasks), ensure they have original_request. These aren't about re-running
+    # the workflow — they're about firing a push at some future time.
     _skill_step_count = sum(
         1 for s in (wf.get("steps") or [])
         if isinstance(s, dict) and s.get("type") == "sequential"
@@ -1165,7 +1231,11 @@ async def llm_generate_workflow(
             if not im.get("original_request"):
                 im["original_request"] = prompt
 
-            # 2. Parse config into a dict for mutation
+            # 2. Edge case: LLM wrote type=workflow + once+Nm (one-shot delay
+            #    of a workflow run). We can't promote that to trigger.schedule
+            #    (cron doesn't express "once after N minutes"). Keep the step
+            #    and resolve __self__ sentinel so scheduled_push can find the
+            #    workflow when the one-shot fires.
             _cfg = im.get("config")
             if isinstance(_cfg, str):
                 try:
@@ -1176,22 +1246,6 @@ async def llm_generate_workflow(
                 _cfg_d = _cfg
             else:
                 _cfg_d = {}
-
-            # 3. If workflow has OTHER skill steps, force type=workflow so the
-            #    schedule fires the whole pipeline, not just a news push.
-            #    LLM often picks type=news for "push news" intents even when
-            #    the workflow contains preceding steps that should also re-run.
-            if _skill_step_count >= 1 and im.get("action") == "add":
-                if im.get("type") != "workflow":
-                    logger.info(
-                        f"[LLM-Gen] Overriding schedule type='{im.get('type')}' → 'workflow' "
-                        f"({_skill_step_count} upstream skill step(s) must re-run)"
-                    )
-                    im["type"] = "workflow"
-
-            # 4. For type=workflow, mark sentinel so post-migrate can swap in
-            #    the assigned workflow_id. Handles both explicit "__self__"
-            #    from LLM and cases where LLM forgot to include workflow_id.
             if im.get("type") == "workflow" or _cfg_d.get("workflow_id") == "__self__":
                 _cfg_d["workflow_id"] = "__SELF_WORKFLOW_ID__"
                 im["config"] = _cfg_d
