@@ -179,20 +179,29 @@
         // KPI: 本月 Token
         if (thisMonth) {
           if (el("kpiTokens")) el("kpiTokens").textContent = fmt(thisMonth.total_tokens || 0);
-          if (el("kpiTokensSub")) el("kpiTokensSub").textContent = `${curMonth} | ${thisMonth.skill_calls||0} skill + ${thisMonth.chat_calls||0} chat`;
+          if (el("kpiTokensSub")) el("kpiTokensSub").textContent =
+            `${curMonth} | ${thisMonth.skill_calls||0} skill / ${thisMonth.chat_calls||0} chat / ${thisMonth.workflow_calls||0} wf`;
         } else {
           if (el("kpiTokens")) el("kpiTokens").textContent = fmt(d.total?.total_tokens || 0);
         }
 
-        // KPI: 今日 Calls
-        const todayCalls = (todayData.skill_calls || 0) + (todayData.chat_calls || 0);
-        const yesterdayCalls = (yesterdayData.skill_calls || 0) + (yesterdayData.chat_calls || 0);
+        // KPI: 今日 Calls — now includes workflow executions
+        const todaySkill = todayData.skill_calls || 0;
+        const todayChat  = todayData.chat_calls  || 0;
+        const todayWf    = todayData.workflow_calls || 0;
+        const yesterdaySkill = yesterdayData.skill_calls || 0;
+        const yesterdayChat  = yesterdayData.chat_calls  || 0;
+        const yesterdayWf    = yesterdayData.workflow_calls || 0;
+        const todayCalls     = todaySkill + todayChat + todayWf;
+        const yesterdayCalls = yesterdaySkill + yesterdayChat + yesterdayWf;
         if (el("kpiCalls")) el("kpiCalls").textContent = todayCalls;
         if (el("kpiCallsSub")) {
           const diff = todayCalls - yesterdayCalls;
           const arrow = diff > 0 ? "▲" : diff < 0 ? "▼" : "—";
           const color = diff > 0 ? "var(--color-success)" : diff < 0 ? "var(--color-error)" : "var(--text-tertiary)";
-          el("kpiCallsSub").innerHTML = `<span style="color:${color};">${arrow} ${Math.abs(diff)}</span> vs 昨日`;
+          el("kpiCallsSub").innerHTML =
+            `<span style="color:${color};">${arrow} ${Math.abs(diff)}</span> vs 昨日 · ` +
+            `<span title="Skill / Chat / Workflow">${todaySkill}/${todayChat}/<span style="color:var(--wf-purple);">${todayWf}</span></span>`;
         }
       }
 
@@ -276,7 +285,13 @@
       d.setDate(d.getDate() - i);
       const key = d.toISOString().slice(0, 10);
       const val = dailyDict[key] || {};
-      result.push({ date: key, total_tokens: val.total_tokens || 0, skill_calls: val.skill_calls || 0, chat_calls: val.chat_calls || 0 });
+      result.push({
+        date: key,
+        total_tokens: val.total_tokens || 0,
+        skill_calls: val.skill_calls || 0,
+        chat_calls: val.chat_calls || 0,
+        workflow_calls: val.workflow_calls || 0,
+      });
     }
     return result;
   }
@@ -310,6 +325,9 @@
         datasets: [
           { label: "Total Tokens", data: daily.map(d => d.total_tokens || 0), borderColor: "#1A9AAA", backgroundColor: "rgba(26,154,170,0.15)", fill: true, tension: 0.4, borderWidth: 2, pointRadius: _dashTokenDays > 30 ? 0 : 3 },
           { label: "Skill Calls", data: daily.map(d => d.skill_calls || 0), borderColor: "#F5A623", backgroundColor: "rgba(245,166,35,0.08)", fill: false, tension: 0.4, borderWidth: 2, pointRadius: _dashTokenDays > 30 ? 0 : 3, yAxisID: "y1" },
+          // Chart.js doesn't resolve var(--wf-purple), so hex literal here
+          // is intentional (matches the token in style.css).
+          { label: "Workflow Calls", data: daily.map(d => d.workflow_calls || 0), borderColor: "#8e44ad", backgroundColor: "rgba(142,68,173,0.10)", fill: false, tension: 0.4, borderWidth: 2, pointRadius: _dashTokenDays > 30 ? 0 : 3, borderDash: [4, 3], yAxisID: "y1" },
         ],
       },
       options: {
@@ -481,6 +499,9 @@
           datasets: [
             { label: "Total Tokens", data: daily.map(d => d.total_tokens || 0), borderColor: "#1A9AAA", backgroundColor: "rgba(26,154,170,0.15)", fill: true, tension: 0.3, borderWidth: 2 },
             { label: "Skill Calls", data: daily.map(d => d.skill_calls || 0), borderColor: "#F5A623", backgroundColor: "rgba(245,166,35,0.08)", fill: false, tension: 0.3, borderWidth: 2, yAxisID: "y1" },
+            // Workflow executions from audit logs — shares y1 (right) axis
+            // with Skill Calls since both are count-based.
+            { label: "Workflow Calls", data: daily.map(d => d.workflow_calls || 0), borderColor: "#8e44ad", backgroundColor: "rgba(142,68,173,0.08)", fill: false, tension: 0.3, borderWidth: 2, borderDash: [4, 3], yAxisID: "y1" },
           ],
         },
         options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },

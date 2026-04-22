@@ -118,6 +118,39 @@ def get_workflow_logs(workflow_id: str, limit: int = 50) -> list:
     return entries[:limit]
 
 
+def aggregate_daily_counts() -> Dict[str, int]:
+    """Count workflow executions grouped by date (YYYY-MM-DD).
+
+    Scans every `{workflow_id}.jsonl` under workspace/workflows/logs/ and
+    returns { "2026-04-22": 12, "2026-04-21": 8, ... }. Used by
+    /skills/workflow/stats to expose a `workflow_calls` series for the
+    admin dashboard trend chart and KPI cards.
+
+    Cheap enough to call on every stats request — typical fleet logs are
+    <10 MB total even at multi-month retention.
+    """
+    counts: Dict[str, int] = {}
+    logs_dir = _logs_dir()
+    for log_file in logs_dir.glob("*.jsonl"):
+        try:
+            with open(log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    ts = entry.get("timestamp", "")
+                    if len(ts) >= 10:
+                        day = ts[:10]
+                        counts[day] = counts.get(day, 0) + 1
+        except Exception as e:
+            logger.debug(f"[WFAudit] aggregate: skip {log_file.name}: {e}")
+    return counts
+
+
 def get_all_recent_logs(limit: int = 100) -> list:
     """Read recent execution logs across all workflows.
 

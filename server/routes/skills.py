@@ -810,6 +810,26 @@ async def workflow_stats(live: bool = True):
                     elif skill:
                         monthly[month]["skill_calls"] += 1
 
+            # Enrich with workflow execution counts from audit logs
+            # (separate data source — counted per-day, folded into same shape
+            # so frontend can graph all three series on one chart).
+            try:
+                from server.services.workflow_audit import aggregate_daily_counts
+                wf_daily = aggregate_daily_counts()
+                total_wf = 0
+                for day, n in wf_daily.items():
+                    total_wf += n
+                    if day not in daily:
+                        daily[day] = {"total_tokens": 0, "skill_calls": 0, "chat_calls": 0, "workflow_calls": 0}
+                    daily[day]["workflow_calls"] = daily[day].get("workflow_calls", 0) + n
+                    month = day[:7]
+                    if month not in monthly:
+                        monthly[month] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "skill_calls": 0, "chat_calls": 0, "workflow_calls": 0}
+                    monthly[month]["workflow_calls"] = monthly[month].get("workflow_calls", 0) + n
+                total["workflow_calls"] = total_wf
+            except Exception as _wf_err:
+                total["workflow_calls"] = 0
+
             return {"by_skill": by_skill, "daily": daily, "monthly": monthly, "total": total}
         except Exception as e:
             return {"by_skill": {}, "daily": {}, "monthly": {}, "total": {}, "_error": str(e)}

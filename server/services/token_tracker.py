@@ -221,6 +221,31 @@ class TokenTracker:
         for month, mv in summary["monthly"].items():
             mv["days"] = sum(1 for d in summary["daily"] if d.startswith(month))
 
+        # ── Merge workflow execution counts from audit logs ──
+        # Different data source (workspace/workflows/logs/*.jsonl) but the
+        # admin dashboard wants them plotted on the same trend chart, so
+        # fold the per-day counts into summary["daily"] / "monthly" / "total".
+        try:
+            from server.services.workflow_audit import aggregate_daily_counts
+            wf_daily = aggregate_daily_counts()
+            total_wf = 0
+            for day, n in wf_daily.items():
+                total_wf += n
+                if day not in summary["daily"]:
+                    summary["daily"][day] = {"total_tokens": 0, "skill_calls": 0, "chat_calls": 0}
+                summary["daily"][day]["workflow_calls"] = summary["daily"][day].get("workflow_calls", 0) + n
+                month = day[:7]
+                if month not in summary["monthly"]:
+                    summary["monthly"][month] = {
+                        "input_tokens": 0, "output_tokens": 0, "total_tokens": 0,
+                        "skill_calls": 0, "chat_calls": 0, "days": 0,
+                    }
+                summary["monthly"][month]["workflow_calls"] = summary["monthly"][month].get("workflow_calls", 0) + n
+            summary["total"]["workflow_calls"] = total_wf
+        except Exception as _wf_err:
+            logger.debug(f"[TokenTracker] workflow audit aggregation failed: {_wf_err}")
+            summary["total"]["workflow_calls"] = 0
+
         # Calculate averages
         for sk, sv in summary["by_skill"].items():
             if sv["calls"] > 0:
