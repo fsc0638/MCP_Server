@@ -429,6 +429,40 @@ def delete_workflow(
     path.unlink()
     logger.info(f"[Workflow] Deleted: {workflow_id} (scope={scope}, by={req.user_name})")
 
+    # ── Cleanup: remove any schedule tasks that reference this workflow ──
+    # When a user deletes a workflow that had an associated recurring/one-shot
+    # schedule registered via mcp-schedule-manager, sweep all per-user
+    # schedule configs and drop tasks whose config.workflow_id matches.
+    # Otherwise the schedule keeps firing an orphan workflow ID forever.
+    try:
+        schedules_dir = Path(os.getenv("PROJECT_ROOT", str(Path(__file__).resolve().parents[2]))) / "workspace" / "schedules"
+        if schedules_dir.exists():
+            _removed_count = 0
+            for cfg_path in schedules_dir.glob("*.json"):
+                if not cfg_path.stem:
+                    continue
+                try:
+                    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                _tasks = cfg.get("tasks") or []
+                _kept = [
+                    t for t in _tasks
+                    if (t.get("config") or {}).get("workflow_id") != workflow_id
+                ]
+                if len(_kept) < len(_tasks):
+                    cfg["tasks"] = _kept
+                    cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+                    _removed_count += len(_tasks) - len(_kept)
+                    logger.info(
+                        f"[Workflow] Cleaned {len(_tasks) - len(_kept)} orphan schedule(s) "
+                        f"in {cfg_path.name} referencing deleted workflow '{workflow_id}'"
+                    )
+            if _removed_count == 0:
+                logger.debug(f"[Workflow] No orphan schedules to clean for '{workflow_id}'")
+    except Exception as _cleanup_err:
+        logger.warning(f"[Workflow] Schedule cleanup failed (non-fatal): {_cleanup_err}")
+
     # Git commit + push
     reason_part = f" | Reason: {req.reason}" if req.reason.strip() else ""
     git_res = _sync_workflow_git(
@@ -1083,21 +1117,25 @@ async def llm_generate_workflow(
         raise HTTPException(status_code=422, detail="LLM 產生的工作流無可用步驟（可能全部引用到白名單外技能）")
 
     # ── Auto-inject original_request + resolve __self__ workflow_id ──
-    # 1) Schedule-manager refuses add without original_request; supply the
-    #    user's prompt if LLM forgot.
-    # 2) For "type=workflow" tasks we let LLM use the placeholder "__self__"
-    #    as workflow_id (since it doesn't know the ID yet). Replace it with
-    #    the actual workflow_id generated during migrate_legacy below. For
-    #    now we write a placeholder marker that the post-migrate step
-    #    rewrites once wf["workflow_id"] is set.
+    # Normalise schedule-manager steps so a multi-step LLM workflow ALWAYS
+    # gets re-run at schedule time (via type=workflow + workflow_id=__self__).
+    # Otherwise LLM tends to pick type=news and the scheduler fires a stale
+    # news push instead of the workflow's full pipeline.
+    _skill_step_count = sum(
+        1 for s in (wf.get("steps") or [])
+        if isinstance(s, dict) and s.get("type") == "sequential"
+        and s.get("skill_id") and s.get("skill_id") != "mcp-schedule-manager"
+    )
     for step in wf["steps"]:
         if not isinstance(step, dict):
             continue
         if step.get("skill_id") == "mcp-schedule-manager":
             im = step.setdefault("input_map", {})
+            # 1. Always inject original_request (skill safety guard)
             if not im.get("original_request"):
                 im["original_request"] = prompt
-            # Parse config (may be JSON string or dict)
+
+            # 2. Parse config into a dict for mutation
             _cfg = im.get("config")
             if isinstance(_cfg, str):
                 try:
@@ -1108,10 +1146,24 @@ async def llm_generate_workflow(
                 _cfg_d = _cfg
             else:
                 _cfg_d = {}
-            # If LLM used "__self__" or left workflow_id empty for type=workflow,
-            # mark for later substitution after migrate_legacy assigns the id
+
+            # 3. If workflow has OTHER skill steps, force type=workflow so the
+            #    schedule fires the whole pipeline, not just a news push.
+            #    LLM often picks type=news for "push news" intents even when
+            #    the workflow contains preceding steps that should also re-run.
+            if _skill_step_count >= 1 and im.get("action") == "add":
+                if im.get("type") != "workflow":
+                    logger.info(
+                        f"[LLM-Gen] Overriding schedule type='{im.get('type')}' → 'workflow' "
+                        f"({_skill_step_count} upstream skill step(s) must re-run)"
+                    )
+                    im["type"] = "workflow"
+
+            # 4. For type=workflow, mark sentinel so post-migrate can swap in
+            #    the assigned workflow_id. Handles both explicit "__self__"
+            #    from LLM and cases where LLM forgot to include workflow_id.
             if im.get("type") == "workflow" or _cfg_d.get("workflow_id") == "__self__":
-                _cfg_d["workflow_id"] = "__SELF_WORKFLOW_ID__"  # sentinel
+                _cfg_d["workflow_id"] = "__SELF_WORKFLOW_ID__"
                 im["config"] = _cfg_d
 
     # ── Synthesize blocks[] + connections[] from steps[] for the executor.

@@ -1140,6 +1140,19 @@ class ScheduledPushService:
                                 continue
                         except ValueError:
                             pass
+                elif cron.get("once") and cron.get("target_time"):
+                    # One-time task with explicit target_time (e.g. "once +2m"):
+                    # fire when now >= target_time AND not yet run. Immune to
+                    # minute-precision drift / server-restart race conditions
+                    # that would otherwise cause the task to miss its window.
+                    if task.get("last_run"):
+                        continue  # already fired
+                    try:
+                        target = datetime.fromisoformat(cron["target_time"])
+                    except (ValueError, TypeError):
+                        continue
+                    if now < target:
+                        continue
                 else:
                     task_hour = cron.get("hour")
                     task_minute = cron.get("minute", 0)
