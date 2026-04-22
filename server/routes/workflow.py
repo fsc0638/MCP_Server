@@ -410,8 +410,30 @@ def save_workflow(
     try:
         from server.services.workflow_scheduler import refresh_workflow_schedule
         _sched_res = refresh_workflow_schedule(final_slug)
-        if _sched_res.get("status") == "registered":
+        _status = _sched_res.get("status")
+        # Always log the outcome so users can tell WHY a cron didn't register.
+        # Previously we only logged on "registered", which made silent-reject
+        # cases (e.g. trigger.enabled=false with cron filled in) look like the
+        # scheduler hadn't been called at all.
+        _trig = (data.get("trigger") or {})
+        _cron = (_trig.get("schedule") or _trig.get("cron") or "").strip()
+        _enabled = bool(_trig.get("enabled"))
+        if _status == "registered":
             logger.info(f"[Workflow] Cron job for '{final_slug}' → {_sched_res.get('cron')}")
+        elif _status == "removed":
+            if _cron and not _enabled:
+                logger.info(
+                    f"[Workflow] Schedule NOT registered for '{final_slug}': cron="
+                    f"{_cron!r} present but trigger.enabled=false (請勾選「啟用自動觸發」)"
+                )
+            else:
+                logger.info(f"[Workflow] Schedule removed for '{final_slug}' (disabled or no cron)")
+        elif _status == "skipped":
+            logger.info(f"[Workflow] Schedule skipped for '{final_slug}': {_sched_res.get('reason')}")
+        elif _status == "noop":
+            logger.debug(f"[Workflow] Schedule unchanged for '{final_slug}' (no existing job to remove)")
+        elif _status == "error":
+            logger.warning(f"[Workflow] Schedule error for '{final_slug}': {_sched_res.get('error')}")
     except Exception as _sched_err:
         logger.warning(f"[Workflow] Failed to refresh scheduler for '{final_slug}': {_sched_err}")
 
@@ -463,7 +485,13 @@ def delete_workflow(
         wf_display_name = workflow_id
 
     path.unlink()
-    logger.info(f"[Workflow] Deleted: {workflow_id} (scope={scope}, by={req.user_name})")
+    # Prefer explicit req fields; fall back to caller_ctx from the session cookie
+    # so the delete log always shows *someone* even when the frontend forgot
+    # to include user_name/user_id in the body.
+    _actor_name = req.user_name or (caller_ctx or {}).get("user_name", "") or (caller_ctx or {}).get("display_name", "")
+    _actor_id   = req.user_id   or (caller_ctx or {}).get("employee_id", "") or (caller_ctx or {}).get("user_id", "")
+    _by = f"{_actor_name} ({_actor_id})" if (_actor_name or _actor_id) else "unknown"
+    logger.info(f"[Workflow] Deleted: {workflow_id} (scope={scope}, by={_by})")
 
     # Remove the APScheduler cron job for this workflow (if any)
     try:
@@ -735,6 +763,95 @@ def list_promotion_candidates(
     # Newest first
     mine.sort(key=lambda c: c.get("at", 0), reverse=True)
     return {"candidates": mine[:20]}
+
+
+@router.get("/api/workflows/_actions/cron-jobs")
+def list_workflow_cron_jobs(
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """List all workflow-native cron jobs currently registered in APScheduler.
+
+    Visibility endpoint — so users can verify their workflow's
+    `trigger.schedule` was actually registered (as opposed to sitting idle in
+    the JSON file with no running job).
+
+    Returns jobs with prefix `wf_cron_` only, decoded to include the
+    workflow_id, cron expression, next_run_time, and basic metadata loaded
+    from the workflow JSON.
+    """
+    try:
+        import server.app as app_module
+        sched = app_module.__dict__.get("__scheduler") or getattr(app_module, "__scheduler", None)
+    except Exception:
+        sched = None
+
+    if sched is None:
+        return {
+            "status": "unavailable",
+            "reason": "APScheduler not initialized",
+            "scheduler_state": None,
+            "jobs": [],
+        }
+
+    state = getattr(sched, "state", 0)
+    state_label = {0: "STOPPED", 1: "RUNNING", 2: "PAUSED"}.get(state, f"unknown({state})")
+
+    jobs_out = []
+    try:
+        for job in sched.get_jobs():
+            if not job.id.startswith("wf_cron_"):
+                continue
+            wf_id = job.id[len("wf_cron_"):]
+            # Attempt to enrich with workflow metadata from disk
+            display_name, scope, owner, cron_str, enabled = "", "", "", "", False
+            try:
+                from server.services.workflow_scheduler import _load_workflow
+                wf = _load_workflow(wf_id) or {}
+                display_name = wf.get("display_name") or wf.get("name") or wf_id
+                scope = wf.get("scope", "")
+                owner = wf.get("owner", "")
+                trig = wf.get("trigger") or {}
+                cron_str = (trig.get("schedule") or trig.get("cron") or "").strip()
+                enabled = bool(trig.get("enabled"))
+            except Exception:
+                pass
+
+            next_run = None
+            try:
+                if job.next_run_time:
+                    next_run = job.next_run_time.isoformat()
+            except Exception:
+                pass
+
+            jobs_out.append({
+                "job_id": job.id,
+                "workflow_id": wf_id,
+                "display_name": display_name,
+                "scope": scope,
+                "owner": owner,
+                "cron": cron_str,
+                "trigger_enabled": enabled,
+                "next_run_time": next_run,
+                "job_name": job.name,
+            })
+    except Exception as e:
+        logger.warning(f"[Workflow] Listing cron jobs failed: {e}")
+        return {
+            "status": "error",
+            "reason": str(e),
+            "scheduler_state": state_label,
+            "jobs": [],
+        }
+
+    # Sort by next_run_time (jobs about to fire first; None at end)
+    jobs_out.sort(key=lambda j: (j["next_run_time"] is None, j["next_run_time"] or ""))
+
+    return {
+        "status": "ok",
+        "scheduler_state": state_label,
+        "count": len(jobs_out),
+        "jobs": jobs_out,
+    }
 
 
 @router.post("/api/workflows/_actions/promote")

@@ -913,11 +913,22 @@
         }
       }
 
-      // ── Derive file ID from display name (filename = workflow name) ──
+      // ── Derive file ID ──
+      // LOCK semantics: once a workflow has a canonical WorkflowK_ id (assigned
+      // on first save), ALWAYS save back to that same id. Renaming the display
+      // name must NOT create a new file + orphan the previous one.
+      // Only fresh drafts (no _currentWfId yet, or temp wf-xxx) fall back to
+      // a name-based slug so legacy Chinese filenames keep working.
       const displayName = (_wd.name || "").trim();
       const nameBasedId = _sanitizeWfId(displayName);
-      // Use name-based ID if valid, otherwise keep the original ID (temp wf-xxx)
-      const targetFlowId = nameBasedId || oldFlowId;
+      const isCanonical = (s) => typeof s === "string" && /^WorkflowK_[A-Za-z0-9]{20}$/.test(s);
+      let targetFlowId;
+      if (isCanonical(this._currentWfId)) {
+        // Locked — always write to the canonical id.
+        targetFlowId = this._currentWfId;
+      } else {
+        targetFlowId = nameBasedId || oldFlowId;
+      }
 
       const scope  = this._currentScope  || "personal";
       const owner  = this._currentOwner  || "";
@@ -982,9 +993,18 @@
         if (serverFinalId !== oldFlowId) {
           if (!this._isNewDraft) {
             try {
+              const _u = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
               await fetch(
                 `/api/workflows/${encodeURIComponent(oldFlowId)}?scope=${encodeURIComponent(scope)}&owner=${encodeURIComponent(owner)}`,
-                { method: "DELETE" }
+                {
+                  method: "DELETE",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    reason: `重新命名為 ${serverFinalId}`,
+                    user_name: _u.name || _u.employee_id || "",
+                    user_id:   _u.employee_id || _u.id || "",
+                  }),
+                }
               );
             } catch (_) { /* ignore delete errors */ }
           }
@@ -3842,6 +3862,12 @@
             &nbsp;&nbsp;<code>30 17 * * 5</code>&nbsp;= 每週五下午 5:30<br>
             留空表示不排程。一次性延遲（如「10 分鐘後」）請用排程管理技能，不能用 cron。
           </div></div>
+        <div class="wf-settings-field">
+          <button type="button" class="wf-settings-btn-secondary" onclick="window._showWfCronJobs && window._showWfCronJobs()" style="padding:6px 12px;font-size:0.85rem;">
+            🕒 查看已排程工作流
+          </button>
+          <div class="wf-settings-hint">列出目前 APScheduler 中所有已註冊的工作流 cron job（含下次執行時間）。</div>
+        </div>
       `;
     } else if (tab === "execution") {
       const ex = wd.execution || {};
@@ -4014,7 +4040,7 @@
   };
 
   // ── Save Settings ────────────────────────────────────────────
-  window._saveWfSettings = function () {
+  window._saveWfSettings = async function () {
     const fd = window._wfDesigner;
     if (!fd) return;
     if (!fd._wfData) fd._wfData = {};
@@ -4041,10 +4067,145 @@
     const infoEl = document.getElementById("wfInfoText");
     if (infoEl) infoEl.textContent = `${wd.name}  ·  ${fd.blocks.size} 節點 · ${fd.connections.length} 連接`;
 
-    // Close and save (validation in save() handles start/end block check)
-    window._closeWfSettings();
-    // Await so any validation toast from save() is visible before the UI settles
-    fd.save().catch(err => console.warn("[WF] save error:", err));
+    // ── Consistency check: cron filled but trigger disabled ──
+    // Users often fill the cron field and forget to tick 「啟用自動觸發」,
+    // then wonder why the schedule never fires. Confirm their intent.
+    const _tr = wd.trigger || {};
+    const _cronFilled = !!((_tr.schedule || _tr.cron || "").trim());
+    if (_cronFilled && !_tr.enabled) {
+      const proceed = confirm(
+        "⚠️ 您填寫了 Cron 表達式，但「啟用自動觸發」尚未勾選。\n\n" +
+        "此工作流將不會依排程執行。\n\n" +
+        "確定要以「停用」狀態儲存嗎？\n" +
+        "（取消 → 回到設定畫面勾選啟用）"
+      );
+      if (!proceed) {
+        // Switch to Trigger tab so the checkbox is visible
+        const trigTabBtn = document.querySelector('.wf-settings-tab[data-stab="trigger"]');
+        if (trigTabBtn) trigTabBtn.click();
+        const enCk = document.getElementById("wfSetTriggerEnabled");
+        if (enCk) enCk.focus();
+        return;
+      }
+    }
+
+    // ── Apply button loading state ──
+    // Keep the modal open while saving so the user sees the in-progress
+    // feedback; only close once the backend responds (success or failure).
+    const overlay = document.getElementById("wfSettingsOverlay");
+    const applyBtn = overlay ? overlay.querySelector(".wf-settings-btn-primary") : null;
+    const _origLabel = applyBtn ? applyBtn.textContent : "";
+    if (applyBtn) {
+      applyBtn.disabled = true;
+      applyBtn.textContent = "套用中...";
+      applyBtn.classList.add("is-loading");
+    }
+
+    let ok = false;
+    try {
+      ok = await fd.save();
+    } catch (err) {
+      console.warn("[WF] save error:", err);
+    } finally {
+      if (applyBtn) {
+        applyBtn.disabled = false;
+        applyBtn.textContent = ok ? "套用成功" : _origLabel;
+        applyBtn.classList.remove("is-loading");
+        if (ok) {
+          setTimeout(() => {
+            applyBtn.textContent = _origLabel;
+            window._closeWfSettings && window._closeWfSettings();
+          }, 600);
+        }
+      } else if (ok) {
+        window._closeWfSettings && window._closeWfSettings();
+      }
+    }
+  };
+
+  // ── Cron Jobs Viewer ─────────────────────────────────────────────
+  // Opens a modal listing all APScheduler-registered workflow cron jobs.
+  // Useful to verify that trigger.schedule was actually accepted by the
+  // scheduler (vs. sitting idle in the JSON with no running job).
+  window._showWfCronJobs = async function () {
+    const overlay = document.createElement("div");
+    overlay.className = "wf-settings-overlay";
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;z-index:10000;";
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:8px;width:720px;max-width:92vw;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,0.2);">
+        <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;">
+          <div style="font-weight:600;font-size:1rem;">🕒 已排程的工作流 Cron Jobs</div>
+          <button style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:#64748b;" onclick="this.closest('.wf-settings-overlay').remove()">×</button>
+        </div>
+        <div id="wfCronJobsBody" style="padding:16px 20px;overflow:auto;flex:1;">
+          <div style="color:#64748b;">載入中...</div>
+        </div>
+      </div>
+    `;
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+    document.body.appendChild(overlay);
+
+    const body = overlay.querySelector("#wfCronJobsBody");
+    try {
+      const resp = await fetch("/api/workflows/_actions/cron-jobs", { credentials: "include" });
+      const data = await resp.json();
+
+      if (data.status !== "ok") {
+        body.innerHTML = `<div style="color:#b91c1c;">⚠️ 無法取得排程資訊：${_escHtml(data.reason || data.status)}</div>`;
+        return;
+      }
+
+      const stateColor = data.scheduler_state === "RUNNING" ? "#16a34a" : "#b91c1c";
+      let html = `
+        <div style="margin-bottom:12px;font-size:0.85rem;color:#64748b;">
+          APScheduler 狀態：<span style="color:${stateColor};font-weight:600;">${_escHtml(data.scheduler_state)}</span>
+          &nbsp;·&nbsp; 共 ${data.count} 個工作流 cron job
+        </div>
+      `;
+
+      if (!data.jobs.length) {
+        html += `<div style="padding:32px;text-align:center;color:#94a3b8;">目前沒有任何已註冊的工作流 cron job。<br><br>設定 <code>trigger.enabled=true</code> 且 <code>trigger.schedule</code> 填入 cron 表達式後，儲存工作流即會自動註冊。</div>`;
+      } else {
+        html += `
+          <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+            <thead>
+              <tr style="background:#f1f5f9;">
+                <th style="text-align:left;padding:8px 10px;border-bottom:1px solid #cbd5e1;">工作流</th>
+                <th style="text-align:left;padding:8px 10px;border-bottom:1px solid #cbd5e1;">Cron</th>
+                <th style="text-align:left;padding:8px 10px;border-bottom:1px solid #cbd5e1;">下次執行</th>
+                <th style="text-align:left;padding:8px 10px;border-bottom:1px solid #cbd5e1;">Scope</th>
+              </tr>
+            </thead>
+            <tbody>
+        `;
+        for (const j of data.jobs) {
+          const nextRun = j.next_run_time
+            ? new Date(j.next_run_time).toLocaleString("zh-TW", { hour12: false })
+            : "<span style='color:#94a3b8;'>—</span>";
+          const enabledBadge = j.trigger_enabled
+            ? ""
+            : `<span style="display:inline-block;margin-left:6px;padding:1px 6px;background:#fef3c7;color:#92400e;border-radius:3px;font-size:0.7rem;">已停用</span>`;
+          html += `
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:8px 10px;">
+                <div style="font-weight:500;">${_escHtml(j.display_name || j.workflow_id)}${enabledBadge}</div>
+                <div style="color:#94a3b8;font-size:0.75rem;font-family:monospace;">${_escHtml(j.workflow_id)}</div>
+              </td>
+              <td style="padding:8px 10px;font-family:monospace;">${_escHtml(j.cron || "—")}</td>
+              <td style="padding:8px 10px;">${nextRun}</td>
+              <td style="padding:8px 10px;color:#64748b;">${_escHtml(j.scope || "—")}${j.owner ? ` / ${_escHtml(j.owner)}` : ""}</td>
+            </tr>
+          `;
+        }
+        html += `</tbody></table>`;
+      }
+
+      body.innerHTML = html;
+    } catch (e) {
+      body.innerHTML = `<div style="color:#b91c1c;">⚠️ 請求失敗：${_escHtml(String(e))}</div>`;
+    }
   };
 
   function _collectSettingsFromDOM(wd) {
