@@ -74,11 +74,33 @@ def _parse_cron_fields(cron_str: str) -> Optional[Dict[str, str]]:
 
 
 def _scheduler():
-    """Fetch the global APScheduler instance from app module."""
+    """Fetch the global APScheduler instance from app module.
+
+    Module-level `__scheduler` with double-underscore prefix + suffix is a
+    regular attribute (no name mangling at module level), BUT the variable
+    defaults to None at import time and only gets assigned inside
+    _setup_scheduler(). We re-check on every call to account for:
+      - startup timing (refresh_workflow_schedule called before setup finished)
+      - hot reloads during development
+    """
     try:
-        from server import app as app_module
-        return getattr(app_module, "__scheduler", None) or app_module.__dict__.get("__scheduler")
-    except Exception:
+        import server.app as app_module
+        sched = app_module.__dict__.get("_App__scheduler")  # Try mangled first (wouldn't apply to module but safe)
+        if sched is None:
+            sched = app_module.__dict__.get("__scheduler")
+        if sched is None:
+            sched = getattr(app_module, "__scheduler", None)
+        if sched is not None:
+            try:
+                state = getattr(sched, "state", "?")
+                logger.debug(f"[WFScheduler] scheduler id={id(sched)} state={state}")
+            except Exception:
+                pass
+        else:
+            logger.warning("[WFScheduler] app_module.__scheduler is None — startup may not have run")
+        return sched
+    except Exception as e:
+        logger.warning(f"[WFScheduler] _scheduler() failed: {e}")
         return None
 
 
@@ -210,6 +232,22 @@ def refresh_workflow_schedule(workflow_id: str) -> Dict[str, Any]:
     try:
         from apscheduler.triggers.cron import CronTrigger
         cron_trigger = CronTrigger(**cron_kwargs)
+
+        # Sanity check: if scheduler is not running, add_job will add to
+        # pending queue and never fire. Force-start if needed.
+        _state = getattr(sched, "state", 0)
+        if _state == 0:
+            logger.warning(
+                f"[WFScheduler] Scheduler is STOPPED (state=0) when registering "
+                f"'{workflow_id}' — attempting to start it now"
+            )
+            try:
+                sched.start()
+                logger.info("[WFScheduler] Scheduler force-started successfully")
+            except Exception as start_err:
+                logger.error(f"[WFScheduler] Force-start failed: {start_err}")
+                return {"status": "error", "error": f"Scheduler not running and failed to start: {start_err}"}
+
         sched.add_job(
             _run_scheduled_workflow,
             cron_trigger,
@@ -220,7 +258,11 @@ def refresh_workflow_schedule(workflow_id: str) -> Dict[str, Any]:
             coalesce=True,           # skip missed runs if multiple elapsed
             misfire_grace_time=300,  # up to 5 minutes late is OK
         )
-        logger.info(f"[WFScheduler] Registered cron for '{workflow_id}': {cron_str}")
+        _after_state = getattr(sched, "state", 0)
+        logger.info(
+            f"[WFScheduler] Registered cron for '{workflow_id}': {cron_str} "
+            f"(scheduler state={_after_state})"
+        )
         return {"status": "registered", "cron": cron_str, "action": "upsert"}
     except Exception as e:
         logger.error(f"[WFScheduler] Failed to register '{workflow_id}': {e}")
