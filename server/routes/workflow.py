@@ -100,8 +100,21 @@ def _sync_workflow_git(
             subprocess.run(["git", "add", "-u", d], cwd=git_root, capture_output=True, **_enc)
 
         proc = subprocess.run(["git", "commit", "-m", commit_msg], cwd=git_root, capture_output=True, **_enc)
-        combined_out = (proc.stdout or "") + (proc.stderr or "")
-        if proc.returncode != 0 and "nothing to commit" not in combined_out.lower():
+        combined_out = ((proc.stdout or "") + (proc.stderr or "")).lower()
+        # Git's "nothing staged" output varies by version / locale. Treat any
+        # of these as benign no-op (e.g. deleting a file that was never
+        # committed to git — common for workflows created today and deleted
+        # today before the first sync).
+        _benign = (
+            "nothing to commit",
+            "no changes added to commit",
+            "nothing added to commit",
+            "working tree clean",
+        )
+        if proc.returncode != 0:
+            if any(p in combined_out for p in _benign):
+                logger.info(f"[Workflow Git] Skipped commit (no tracked changes for '{message}')")
+                return {"status": "noop", "message": "No tracked git changes to commit"}
             logger.error(f"[Workflow Git] Commit failed: {proc.stderr or proc.stdout}")
             return {"status": "error", "error": f"Commit failed: {proc.stderr or proc.stdout}"}
 
