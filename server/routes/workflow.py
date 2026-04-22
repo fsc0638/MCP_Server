@@ -258,17 +258,29 @@ def save_workflow(
     check_scope_write_permission(req.scope, req.owner, caller_ctx, resource_kind="工作流")
 
     # The URL workflow_id is what the client uses to locate the file.
-    # May be a legacy Chinese name (existing files) or a v2 slug (new writes).
-    # We honor it as the filename for this save but the internal workflow_id
-    # field inside the JSON is ALWAYS a v2 slug (derived by migrate_legacy).
+    # For NEW workflows, client sends a temporary id (like 'wf-123456').
+    # We replace it with a canonical WorkflowK_ id so the id is stable
+    # across the workflow's entire lifetime.
+    from server.services.workflow_schema import (
+        generate_workflow_id,
+        is_canonical_workflow_id,
+    )
     path = _workflows_dir(req.scope, req.owner) / f"{workflow_id}.json"
     is_new = not path.exists()
+
+    # For new workflow with non-canonical (temp) id → upgrade to canonical
+    # immediately so downstream logic (migrate_legacy, git sync, schedules)
+    # all work with the final locked id from the first save onward.
+    if is_new and not is_canonical_workflow_id(workflow_id):
+        _legacy_id_for_data = ""  # Don't seed migrate_legacy with temp id
+    else:
+        _legacy_id_for_data = workflow_id
 
     if is_new:
         enforce_guest_workflow_quota(caller_ctx, creating_new=True)
 
     data = {
-        "id": workflow_id,  # Retained temporarily for migrate_legacy to derive slug
+        "id": _legacy_id_for_data,  # Empty for new → migrate_legacy generates canonical id
         "name": req.name,
         "description": req.description,
         "icon": req.icon,
@@ -346,19 +358,19 @@ def save_workflow(
         # user can retry or contact admin.
         logger.error(f"[WF Gate0] Internal error for {workflow_id}: {_g0_err}")
 
-    # ── Phase 1.5: Align filename with internal workflow_id (slug) ──
-    # If the URL path differs from the v2 slug, rename the file so the two
-    # stay in sync (enables sub-workflow lookup by workflow_id).
-    # This runs ONLY when:
-    #   - migration produced a different slug than the URL path, AND
-    #   - the new filename is safe (ASCII slug, no filesystem issues)
+    # ── Phase 1.5: Align filename with internal workflow_id ──
+    # If the URL path differs from the v2 workflow_id (e.g. first save of a
+    # new workflow where we generated a WorkflowK_ id), rename the file so
+    # the two stay in sync (enables sub-workflow lookup by workflow_id).
+    # Accepts both:
+    #   - canonical: WorkflowK_ + 20 alnum (new format)
+    #   - legacy: lowercase slug with hyphen (existing files)
     final_slug = data.get("workflow_id", workflow_id)
     final_path = path
     renamed = False
     if final_slug and final_slug != workflow_id:
-        # Guard: only switch if slug looks safe (pure slug pattern incl. hyphen)
         import re as _re
-        if _re.match(r"^[a-z][a-z0-9_-]{2,63}$", final_slug):
+        if _re.match(r"^[A-Za-z][A-Za-z0-9_-]{2,63}$", final_slug):
             final_path = _workflows_dir(req.scope, req.owner) / f"{final_slug}.json"
             renamed = True
 
@@ -1102,6 +1114,11 @@ async def llm_generate_workflow(
 
     # 3) Normalize + validate
     wf = dict(raw_workflow or {})
+    # Strip any id LLM might have set — we want migrate_legacy to generate
+    # a canonical WorkflowK_ id. The prompt forbids setting id/workflow_id
+    # but be defensive.
+    wf.pop("id", None)
+    wf.pop("workflow_id", None)
     wf["source"] = "llm_generated"
     if req.display_name:
         wf["display_name"] = req.display_name

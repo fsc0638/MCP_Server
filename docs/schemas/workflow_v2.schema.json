@@ -15,8 +15,8 @@
     },
     "workflow_id": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9_-]{2,63}$",
-      "description": "Programmatic ID (lowercase ASCII + underscore + hyphen). Used as filename and for sub-workflow references. 3-64 chars.",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{2,63}$",
+      "description": "Programmatic ID. Canonical format: 'WorkflowK_' + 20 random alnum chars (mixed case). Once assigned, immutable. Legacy slug / lowercase ids are kept as-is for backward compatibility.",
       "examples": ["search_and_summarize", "daily_news_digest", "wf-1776666666"]
     },
     "display_name": {

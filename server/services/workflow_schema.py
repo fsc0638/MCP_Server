@@ -16,10 +16,38 @@ from __future__ import annotations
 import json
 import logging
 import re
+import secrets
 import shutil
+import string
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+
+# ── Workflow ID generator ──────────────────────────────────────────────
+# Canonical ID format: "WorkflowK_" + 20 random alphanumeric chars (mixed
+# case). Once assigned, an ID is LOCKED — migrate_legacy preserves existing
+# workflow_id, never regenerates. This means:
+#   - New workflows get a WorkflowK_ id on first save
+#   - Existing workflows (with old slug / Chinese ids) keep their id
+#     forever unless manually rebuilt
+_WF_ID_PREFIX = "WorkflowK_"
+_WF_ID_ALPHABET = string.ascii_letters + string.digits  # A-Z a-z 0-9
+_WF_ID_RAND_LEN = 20
+
+def generate_workflow_id() -> str:
+    """Return a new immutable workflow ID in the canonical format."""
+    rand = "".join(secrets.choice(_WF_ID_ALPHABET) for _ in range(_WF_ID_RAND_LEN))
+    return _WF_ID_PREFIX + rand
+
+def is_canonical_workflow_id(s: str) -> bool:
+    """True if s matches the WorkflowK_ + 20 alnum pattern."""
+    if not isinstance(s, str) or not s.startswith(_WF_ID_PREFIX):
+        return False
+    tail = s[len(_WF_ID_PREFIX):]
+    if len(tail) != _WF_ID_RAND_LEN:
+        return False
+    return all(c in _WF_ID_ALPHABET for c in tail)
 
 logger = logging.getLogger("MCP_Server.WorkflowSchema")
 
@@ -214,11 +242,20 @@ def migrate_legacy(
         out["version"] = "1.0"
 
     # ── 2. workflow_id ──
-    # Derive from legacy 'id' / 'name', sanitized. Preserve existing if set.
+    # ID is IMMUTABLE once assigned:
+    #   - Existing workflow_id → keep as-is (locked)
+    #   - Legacy 'id' field from old UI → keep (backward compat for already-
+    #     saved files with slug / Chinese names)
+    #   - Brand new workflow (no id anywhere) → generate canonical
+    #     WorkflowK_ + 20 random alnum chars
     if not out.get("workflow_id"):
         legacy_id = str(out.get("id") or "").strip()
-        slug = _slugify(legacy_id or out.get("name") or "legacy_workflow")
-        out["workflow_id"] = slug or "legacy_workflow"
+        if legacy_id:
+            # Old file being migrated — preserve its id even if non-canonical
+            out["workflow_id"] = legacy_id
+        else:
+            # New workflow — generate canonical immutable id
+            out["workflow_id"] = generate_workflow_id()
 
     # ── 3. display_name ──
     if not out.get("display_name"):
