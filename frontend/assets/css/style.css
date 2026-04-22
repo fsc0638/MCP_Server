@@ -155,6 +155,17 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Form controls inherit the body font.
+   Browsers default input/select/textarea/button to system-ui (Segoe UI on
+   Windows, -apple-system on macOS), which ignores body's font-family. This
+   caused visible Chinese-glyph inconsistency in the workflow designer's
+   inputs vs. surrounding labels. Forcing `inherit` propagates --font-sans
+   (Inter + Noto Sans TC) into every form element site-wide. */
+input, select, textarea, button, optgroup {
+  font-family: inherit;
+  font-size: inherit;
+}
+
 /* Text selection */
 ::selection { background: rgba(26,154,170,0.18); }
 

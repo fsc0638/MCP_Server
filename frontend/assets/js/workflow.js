@@ -2290,7 +2290,7 @@
         </details>
 
         <div id="wfLLMGenStatus" style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:12px;min-height:20px;"></div>
-        <div id="wfLLMGenPreview" style="display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;font-family:monospace;font-size:0.72rem;color:var(--text-secondary);max-height:260px;overflow-y:auto;margin-bottom:12px;white-space:pre-wrap;"></div>
+        <div id="wfLLMGenPreview" style="display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;font-family:var(--font-mono);font-size:0.72rem;color:var(--text-secondary);max-height:260px;overflow-y:auto;margin-bottom:12px;white-space:pre-wrap;"></div>
 
         <div style="text-align:right;">
           <button id="wfLLMGenCancel" type="button" style="padding:8px 18px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid #e2e8f0;cursor:pointer;margin-right:8px;">取消</button>
@@ -2707,7 +2707,7 @@
               <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:4px;">描述</div>
               <div style="font-size:0.85rem;color:var(--text-primary);">${_escHtml(wf.description || "")}</div>
               <div style="font-size:0.76rem;color:var(--text-muted);margin-top:10px;margin-bottom:4px;">流程</div>
-              <div style="font-size:0.82rem;color:var(--text-primary);font-family:monospace;">${_escHtml(stepsPreview)}</div>
+              <div style="font-size:0.82rem;color:var(--text-primary);font-family:var(--font-mono);">${_escHtml(stepsPreview)}</div>
               ${(wf.variables?.env_requirements || []).length ? `
                 <div style="font-size:0.76rem;color:var(--text-muted);margin-top:10px;margin-bottom:4px;">需要的環境變數</div>
                 <div style="font-size:0.78rem;color:#b45309;">${wf.variables.env_requirements.map(e => `<code style="background:#fff8e1;padding:2px 5px;border-radius:3px;margin-right:5px;">${e}</code>`).join("")}</div>
@@ -4273,9 +4273,9 @@
             <tr style="border-bottom:1px solid #e5e7eb;">
               <td style="padding:8px 10px;">
                 <div style="font-weight:500;">${_escHtml(j.display_name || j.workflow_id)}${enabledBadge}</div>
-                <div style="color:var(--text-tertiary);font-size:0.75rem;font-family:monospace;">${_escHtml(j.workflow_id)}</div>
+                <div style="color:var(--text-tertiary);font-size:0.75rem;font-family:var(--font-mono);">${_escHtml(j.workflow_id)}</div>
               </td>
-              <td style="padding:8px 10px;font-family:monospace;">${_escHtml(j.cron || "—")}</td>
+              <td style="padding:8px 10px;font-family:var(--font-mono);">${_escHtml(j.cron || "—")}</td>
               <td style="padding:8px 10px;">${nextRun}</td>
               <td style="padding:8px 10px;color:var(--text-muted);">${_escHtml(j.scope || "—")}${j.owner ? ` / ${_escHtml(j.owner)}` : ""}</td>
             </tr>
@@ -4622,7 +4622,7 @@
       <div style="background:#fff;width:var(--modal-width-md);max-width:92vw;border-radius:var(--modal-radius);padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.25);">
         <h3 style="margin:0 0 8px;font-size:15px;">分支 ${branchIdx + 1} 參數 (${_escHtml(branch.skill_id || "未選技能")})</h3>
         <div style="font-size:12px;color:#666;margin-bottom:10px;">JSON 格式。每個 key 是技能的參數名，value 是 {source, value} 或直接字串。</div>
-        <textarea id="wf-branch-params-ta" style="width:100%;height:240px;font-family:monospace;font-size:12px;padding:10px;border:1px solid #ddd;border-radius:6px;">${_escHtml(current)}</textarea>
+        <textarea id="wf-branch-params-ta" style="width:100%;height:240px;font-family:var(--font-mono);font-size:12px;padding:10px;border:1px solid #ddd;border-radius:6px;">${_escHtml(current)}</textarea>
         <div style="text-align:right;margin-top:12px;">
           <button id="wf-branch-params-cancel" style="padding:6px 14px;margin-right:8px;background:transparent;color:#666;border:1px solid #ddd;border-radius:4px;cursor:pointer;">取消</button>
           <button id="wf-branch-params-save" style="padding:6px 14px;background:var(--wf-purple);color:#fff;border:none;border-radius:4px;cursor:pointer;">儲存</button>

@@ -93,7 +93,7 @@
 .wf-rp-empty { font-size: 0.72rem; color: var(--text-tertiary); padding: 6px 0; }
 .wf-rp-line-cmd {
   padding: 5px 8px; background: var(--bg-main); border-radius: 6px;
-  font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 4px; font-family: monospace;
+  font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 4px; font-family: var(--font-mono);
 }
 
 /* Cards */
@@ -131,7 +131,7 @@
 }
 .wf-landing-card-key {
   font-size: 0.52rem; font-weight: 400; opacity: 0.7;
-  font-family: monospace; margin-top: 2px; word-break: break-all;
+  font-family: var(--font-mono); margin-top: 2px; word-break: break-all;
 }
 .wf-landing-card-body { padding: 8px 14px 12px; }
 .wf-landing-card-meta {
@@ -1128,7 +1128,7 @@
 .wf-var-system-tag {
   padding: 3px 10px; border-radius: 6px;
   background: var(--bg-hover); color: var(--text-secondary);
-  font-size: 0.65rem; font-family: monospace;
+  font-size: 0.65rem; font-family: var(--font-mono);
 }
 
 /* ── Property Panel Tabs ────────────────────────────────────── */
