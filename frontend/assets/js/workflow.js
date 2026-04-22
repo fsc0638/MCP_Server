@@ -133,7 +133,7 @@
     }
 
     // ── Block CRUD ────────────────────────────────────────────
-    addBlock(type, x, y, label) {
+    addBlock(type, x, y, label, suppressPrefill = false) {
       const def = BLOCK_DEFS[type];
       if (!def) return null;
       const id = this.nextId++;
@@ -148,8 +148,14 @@
       // sees a populated params tab instead of an empty one. Control nodes
       // (start/end/branch/parallel/sub-workflow) don't map to a single
       // skill so skip.
+      // suppressPrefill: when restoring blocks from saved JSON (load()),
+      // the caller already overrides block.config with the persisted copy,
+      // so running prefill afterwards only adds extra schema defaults that
+      // didn't exist in the saved file — which then shows up as a phantom
+      // dirty state ("unsaved changes" dialog on exit, even when the user
+      // didn't touch anything). Skip prefill in that path.
       const skipPrefill = ["start", "end", "branch", "parallel", "sub-workflow"];
-      if (!skipPrefill.includes(type)) {
+      if (!suppressPrefill && !skipPrefill.includes(type)) {
         const skillName = type.startsWith("mcp-") ? type : `mcp-${type}`;
         _prefillBlockParamsFromSchema(block, skillName);
       }
@@ -1061,8 +1067,11 @@
       this.nextId = 1;
       this.nextConnId = 1;
       // Restore blocks (with config)
+      // Pass suppressPrefill=true — the persisted config is authoritative;
+      // running async schema-prefill would race and add fields that weren't
+      // in the saved file, tripping the dirty-state check on exit.
       data.blocks.forEach(b => {
-        const block = this.addBlock(b.type, b.x, b.y, b.label);
+        const block = this.addBlock(b.type, b.x, b.y, b.label, /* suppressPrefill */ true);
         if (block && b.config) block.config = b.config;
       });
       // Refresh sub-workflow block subtitles — if any are present, fetch the
