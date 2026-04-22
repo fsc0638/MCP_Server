@@ -939,6 +939,35 @@ def promote_oneshot(
         pass
 
     logger.info(f"[Promote] {req.run_id} → {dest_id} (scope={req.target_scope})")
+
+    # Register APScheduler cron job if the promoted workflow has
+    # trigger.enabled + trigger.schedule. Same logic as save_workflow — without
+    # this, LLM-generated workflows with cron never actually fire because the
+    # promote endpoint bypasses the regular save path.
+    try:
+        from server.services.workflow_scheduler import refresh_workflow_schedule
+        _sched_res = refresh_workflow_schedule(dest_id)
+        _status = _sched_res.get("status")
+        _trig = (wf.get("trigger") or {})
+        _cron = (_trig.get("schedule") or _trig.get("cron") or "").strip()
+        _enabled = bool(_trig.get("enabled"))
+        if _status == "registered":
+            logger.info(f"[Promote] Cron job for '{dest_id}' → {_sched_res.get('cron')}")
+        elif _status == "removed":
+            if _cron and not _enabled:
+                logger.info(
+                    f"[Promote] Schedule NOT registered for '{dest_id}': cron="
+                    f"{_cron!r} present but trigger.enabled=false"
+                )
+            else:
+                logger.info(f"[Promote] No schedule for '{dest_id}' (disabled or no cron)")
+        elif _status == "skipped":
+            logger.info(f"[Promote] Schedule skipped for '{dest_id}': {_sched_res.get('reason')}")
+        elif _status == "error":
+            logger.warning(f"[Promote] Schedule error for '{dest_id}': {_sched_res.get('error')}")
+    except Exception as _sched_err:
+        logger.warning(f"[Promote] Failed to refresh scheduler for '{dest_id}': {_sched_err}")
+
     return {
         "status": "success",
         "workflow_id": dest_id,
