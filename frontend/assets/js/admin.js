@@ -1493,20 +1493,23 @@
 
   let _adminOpenRunId = '';
   let _adminRunDetails = null;
+  let _adminRunPollTimer = null;
 
-  async function _adminToggleRunDetails(runId) {
-    if (!runId) return;
-    if (_adminOpenRunId === runId) {
-      _adminOpenRunId = '';
-      _adminRunDetails = null;
-      _adminRenderApprovalsTable();
-      return;
+  function _adminStopRunPolling() {
+    if (_adminRunPollTimer) {
+      clearTimeout(_adminRunPollTimer);
+      _adminRunPollTimer = null;
     }
+  }
 
-    _adminOpenRunId = runId;
-    _adminRunDetails = null;
-    _adminRenderApprovalsTable();
+  function _adminShouldKeepPolling(d) {
+    const overall = (d && d.overall) ? String(d.overall) : '';
+    // Stop when fully success OR fully error; keep polling when pending approval/unknown
+    return !(overall === 'success' || overall === 'error');
+  }
 
+  async function _adminFetchRunDetails(runId) {
+    if (!runId) return;
     try {
       const resp = await fetch(`/api/workflows/runs/${encodeURIComponent(runId)}`);
       if (!resp.ok) throw new Error('fetch failed');
@@ -1515,8 +1518,33 @@
     } catch (_) {
       _adminRunDetails = { status: 'error', run_id: runId, overall: 'error', blocks: [] };
     }
-
     _adminRenderApprovalsTable();
+
+    // schedule next poll
+    if (_adminOpenRunId === runId && _adminShouldKeepPolling(_adminRunDetails)) {
+      const delay = 2500; // 2.5s
+      _adminRunPollTimer = setTimeout(() => _adminFetchRunDetails(runId), delay);
+    } else {
+      _adminStopRunPolling();
+    }
+  }
+
+  async function _adminToggleRunDetails(runId) {
+    if (!runId) return;
+    if (_adminOpenRunId === runId) {
+      _adminOpenRunId = '';
+      _adminRunDetails = null;
+      _adminStopRunPolling();
+      _adminRenderApprovalsTable();
+      return;
+    }
+
+    _adminOpenRunId = runId;
+    _adminRunDetails = null;
+    _adminStopRunPolling();
+    _adminRenderApprovalsTable();
+
+    await _adminFetchRunDetails(runId);
   }
 
   function _adminRenderRunDetailsRow() {
