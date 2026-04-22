@@ -1223,6 +1223,77 @@ def _llm_generate_workflow_json(prompt: str, skills: List[Dict[str, Any]], max_s
     return data
 
 
+class RefinePromptRequest(BaseModel):
+    prompt: str
+
+
+@router.post("/api/workflows/_actions/refine-prompt")
+def refine_prompt(req: RefinePromptRequest):
+    """Use an LLM to turn a user's rough task description into a structured,
+    precise one-shot workflow prompt. Called from the ✨ "一次性智能流程"
+    modal when the user clicks the pencil icon inside the textarea.
+
+    Returns { status, refined } — pure text replacement; the frontend
+    overwrites the textarea with `refined` for the user to review before
+    hitting "產生並執行".
+    """
+    from openai import OpenAI
+    import os as _os
+
+    raw = (req.prompt or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="prompt 不可為空")
+    if len(raw) > 2000:
+        raise HTTPException(status_code=413, detail="prompt 太長，請精簡到 2000 字以內")
+
+    api_key = _os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="未設定 OPENAI_API_KEY，無法優化任務描述")
+
+    # Smaller / cheaper model — this is a rewrite task, not generation.
+    model = _os.getenv("OPENAI_MODEL_PROMPT_REFINE") or "gpt-4o-mini"
+
+    system_text = (
+        "# Role\n"
+        "你是一位資深的 AI 工作流架構師與提示詞工程師。你的專長是將用戶簡單、模糊的任務描述，"
+        "轉化為結構嚴謹、邏輯清晰且易於被自動化系統執行的「高精確度指令」。\n\n"
+        "# Goal\n"
+        "優化用戶輸入的任務描述，使其包含以下要素：\n"
+        "1. **明確的操作對象**：定義具體的數據來源或目標平台（如：特定網站、Notion、Excel）。\n"
+        "2. **具體的數量與規格**：明確數字（如：5 則、前 10 名）與格式要求。\n"
+        "3. **邏輯步驟**：將任務拆解為「獲取 -> 處理 -> 輸出」的清晰流程。\n"
+        "4. **邊界與限制**：設定處理異常或篩選的標準。\n\n"
+        "# Guidelines\n"
+        "- **保持簡練但精確**：優化後的提示詞不應過於冗長，而應充滿「資訊量」。\n"
+        "- **結構化輸出**：使用動作動詞（如：抓取、彙整、轉換、寫入）。\n"
+        "- **保留用戶核心意圖**：不要隨意增加用戶沒要求的額外功能，僅針對原意進行深度補全。\n\n"
+        "# Output Format\n"
+        "僅回傳優化後的指令文字，不要包含任何開場白或解釋。"
+    )
+
+    client = OpenAI(api_key=api_key)
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_text},
+                {"role": "user", "content": raw},
+            ],
+            temperature=0.4,
+            max_tokens=800,
+        )
+    except Exception as e:
+        logger.error(f"[RefinePrompt] OpenAI call failed: {e}")
+        raise HTTPException(status_code=502, detail=f"LLM 呼叫失敗：{e}")
+
+    refined = (resp.choices[0].message.content or "").strip()
+    if not refined:
+        raise HTTPException(status_code=502, detail="LLM 回傳空內容")
+
+    logger.info(f"[RefinePrompt] {len(raw)} → {len(refined)} chars")
+    return {"status": "ok", "refined": refined, "original": raw}
+
+
 @router.post("/api/workflows/_actions/llm-generate")
 async def llm_generate_workflow(
     req: LLMGenerateRequest,

@@ -2253,8 +2253,14 @@
         </div>
 
         <label style="display:block;font-size:0.78rem;font-weight:600;color:#1e293b;margin-bottom:4px;">任務描述 <span style="color:#dc2626;">*</span></label>
-        <textarea id="wfLLMGenPrompt" rows="5" placeholder="例：搜尋台灣股市新聞 5 則，寫成摘要存到 Notion ToDo"
-          style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;resize:vertical;margin-bottom:12px;"></textarea>
+        <div style="position:relative;margin-bottom:12px;">
+          <textarea id="wfLLMGenPrompt" rows="5" placeholder="例：搜尋台灣股市新聞 5 則，寫成摘要存到 Notion ToDo"
+            style="width:100%;padding:10px 10px 32px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;resize:vertical;display:block;"></textarea>
+          <button id="wfLLMGenRefineBtn" type="button" title="用 LLM 優化任務描述"
+            style="position:absolute;left:8px;bottom:10px;width:26px;height:26px;padding:0;border:1px solid #cbd5e1;border-radius:5px;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#6c5ce7;font-size:0.9rem;line-height:1;transition:all .15s;">
+            ✏️
+          </button>
+        </div>
 
         <details style="margin-bottom:12px;">
           <summary style="cursor:pointer;font-size:0.78rem;color:#475569;">進階選項</summary>
@@ -2292,6 +2298,73 @@
     const submitBtn = mask.querySelector("#wfLLMGenSubmit");
     const statusEl  = mask.querySelector("#wfLLMGenStatus");
     const previewEl = mask.querySelector("#wfLLMGenPreview");
+    const promptEl  = mask.querySelector("#wfLLMGenPrompt");
+    const refineBtn = mask.querySelector("#wfLLMGenRefineBtn");
+
+    // ── Pencil icon: refine user's rough prompt into a structured one ──
+    // Sends current textarea content to /_actions/refine-prompt, overwrites
+    // the textarea with the refined version, keeps a one-step undo so the
+    // user can revert if the refinement went wrong.
+    let _lastOriginalPrompt = null;
+    refineBtn.onclick = async () => {
+      const cur = (promptEl.value || "").trim();
+      if (!cur) {
+        statusEl.style.color = "#dc2626";
+        statusEl.textContent = "⚠️ 請先填寫任務描述，再用 ✏️ 優化";
+        return;
+      }
+
+      // Lock the button and show in-progress feedback
+      refineBtn.disabled = true;
+      const _origIcon = refineBtn.textContent;
+      refineBtn.textContent = "⏳";
+      refineBtn.style.cursor = "wait";
+      statusEl.style.color = "#475569";
+      statusEl.textContent = "🧠 正在優化任務描述…";
+
+      try {
+        const resp = await fetch("/api/workflows/_actions/refine-prompt", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ prompt: cur }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          const det = (data && data.detail) ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : `HTTP ${resp.status}`;
+          throw new Error(det);
+        }
+        const refined = (data.refined || "").trim();
+        if (!refined) throw new Error("LLM 回傳空內容");
+
+        // Save prior value for one-step undo
+        _lastOriginalPrompt = cur;
+        promptEl.value = refined;
+
+        // Show undo affordance in the status line
+        statusEl.style.color = "#059669";
+        statusEl.innerHTML = "✨ 已優化（請確認內容後再執行） &nbsp; <a href='#' id='wfLLMGenUndo' style='color:#6c5ce7;text-decoration:underline;font-size:0.76rem;'>↩ 還原原本的描述</a>";
+        const undoLink = mask.querySelector("#wfLLMGenUndo");
+        if (undoLink) {
+          undoLink.onclick = (ev) => {
+            ev.preventDefault();
+            if (_lastOriginalPrompt != null) {
+              promptEl.value = _lastOriginalPrompt;
+              _lastOriginalPrompt = null;
+              statusEl.style.color = "#475569";
+              statusEl.textContent = "已還原為原本的描述";
+            }
+          };
+        }
+      } catch (e) {
+        statusEl.style.color = "#dc2626";
+        statusEl.textContent = "⚠️ 優化失敗：" + (e.message || e);
+      } finally {
+        refineBtn.disabled = false;
+        refineBtn.textContent = _origIcon;
+        refineBtn.style.cursor = "pointer";
+      }
+    };
 
     submitBtn.onclick = async () => {
       const promptText = mask.querySelector("#wfLLMGenPrompt").value.trim();
