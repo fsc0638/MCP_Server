@@ -913,7 +913,7 @@ d. 檔案命名有意義且 ≤ 15 字中文或 30 字英數
        type:   "workflow"        ← 注意是 "workflow" 不是 "news"
        cron:   "0 8 * * 1-5"     ← 要的時間
        name:   流程名稱
-       config: {"workflow_id":"__self__","original_request":"${originalPrompt}"}
+       config: {{"workflow_id":"__self__","original_request":"<完整原始需求>"}}
      (後端會把 "__self__" 替換成當前 workflow_id，所以 LLM 不用知道實際 ID)
   3. 排程觸發時，scheduled_push 會用 WorkflowExecutor 重跑整個工作流
   4. 第一次使用者按執行時，也會跑完所有步驟 + 建立排程；之後每次到時間
@@ -933,7 +933,7 @@ d. 檔案命名有意義且 ≤ 15 字中文或 30 字英數
     'once +30m'    = 30 分鐘後一次性
 - 不要用 time / frequency 這類非標準欄位
 - **必須**帶 original_request = 使用者的完整原始描述
-- content 可以帶格式提示（例：'${pdfFilePath}'），但別依賴它做跨日的檔案傳遞
+- content 可以帶格式提示（例：'${{pdfFilePath}}'），但別依賴它做跨日的檔案傳遞
   — 排程下次觸發時 workflow 是從頭重跑，舊路徑不會保留
 
 【錯誤避免清單】
