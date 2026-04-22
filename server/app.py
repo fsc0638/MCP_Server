@@ -249,7 +249,7 @@ def _setup_scheduler():
 
         __scheduler.add_job(
             _scheduled_log_cleanup,
-            CronTrigger(hour=2, minute=0, timezone=__tz),
+            CronTrigger(hour=2, minute=0),   # uses scheduler's default timezone (Asia/Taipei)
             id="log_cleanup",
             name="Log Cleanup",
             replace_existing=True,
