@@ -111,6 +111,36 @@
 
   /* Typography */
   --font-sans: 'Inter', 'Noto Sans TC', system-ui, -apple-system, sans-serif;
+  --font-mono: 'SFMono-Regular', 'Roboto Mono', Consolas, 'Courier New', monospace;
+
+  /* Workflow / brand accents — intentionally theme-invariant
+     (Google service brand colors must stay recognizable across themes). */
+  --wf-purple:        #8e44ad;
+  --wf-purple-dark:   #6c5ce7;
+  --brand-google-blue:   #4285f4;
+  --brand-google-green:  #34a853;
+  --brand-google-red:    #ea4335;
+  --brand-google-yellow: #fbbc04;
+
+  /* Modal sizing tokens — single source of truth for all dialog widths.
+     Pick small/medium/large based on content density; use radius + padding
+     consistently so modals no longer drift between 10/14/16px. */
+  --modal-width-sm:   380px;
+  --modal-width-md:   520px;
+  --modal-width-lg:   620px;
+  --modal-radius:     14px;
+  --modal-padding:    22px 24px;
+  --modal-shadow:     0 20px 60px rgba(0,0,0,0.25);
+
+  /* Spacing scale (8-point grid) — roll out incrementally; legacy fixed
+     pixel values stay working until migrated. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
 }
 
 /* ── Reset & Base ───────────────────────────────────────────── */

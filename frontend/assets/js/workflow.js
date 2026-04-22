@@ -1168,8 +1168,8 @@
           <!-- Stat Cards -->
           <div class="wf-stats-grid">
             <div class="wf-stat-card"><div class="wf-stat-value" id="wfStatBlocks">0</div><div class="wf-stat-label">節點數</div></div>
-            <div class="wf-stat-card"><div class="wf-stat-value" id="wfStatConns" style="color:#34a853">0</div><div class="wf-stat-label">連接數</div></div>
-            <div class="wf-stat-card"><div class="wf-stat-value" id="wfStatRuns" style="color:#f5a623">0</div><div class="wf-stat-label">執行次數</div></div>
+            <div class="wf-stat-card"><div class="wf-stat-value" id="wfStatConns" style="color:var(--brand-google-green)">0</div><div class="wf-stat-label">連接數</div></div>
+            <div class="wf-stat-card"><div class="wf-stat-value" id="wfStatRuns" style="color:var(--kway-orange)">0</div><div class="wf-stat-label">執行次數</div></div>
           </div>
 
           <!-- Activity Chart -->
@@ -1609,7 +1609,7 @@
             <option value="retry" ${cfg.on_error === "retry" ? "selected" : ""}>重試</option>
           </select></div>
         <div class="wf-prop-hint" style="margin-top:8px;font-size:0.78rem;color:var(--text-tertiary);">
-          ※ 節點設定在儲存後生效；模型設定影響此節點的 LLM 呼叫。${hasCustomCfg ? ' <span style="color:#34a853;">✓ 已有自訂設定</span>' : ""}
+          ※ 節點設定在儲存後生效；模型設定影響此節點的 LLM 呼叫。${hasCustomCfg ? ' <span style="color:var(--brand-google-green);">✓ 已有自訂設定</span>' : ""}
         </div>
       `;
     }
@@ -1693,8 +1693,8 @@
     menu.id = "wfBlockCtxMenu";
     menu.style.cssText = "position:fixed;z-index:9800;min-width:110px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:2px;font-size:0.82rem;";
     menu.innerHTML = `
-      <button type="button" data-act="config" style="display:block;width:100%;text-align:left;padding:5px 12px;background:transparent;border:none;border-radius:4px;cursor:pointer;color:#1e293b;">設定</button>
-      <button type="button" data-act="remove" style="display:block;width:100%;text-align:left;padding:5px 12px;background:transparent;border:none;border-radius:4px;cursor:pointer;color:#dc2626;">移除</button>
+      <button type="button" data-act="config" style="display:block;width:100%;text-align:left;padding:5px 12px;background:transparent;border:none;border-radius:4px;cursor:pointer;color:var(--text-primary);">設定</button>
+      <button type="button" data-act="remove" style="display:block;width:100%;text-align:left;padding:5px 12px;background:transparent;border:none;border-radius:4px;cursor:pointer;color:var(--color-error);">移除</button>
     `;
 
     // Position just below the anchor button, kept inside viewport
@@ -1765,15 +1765,15 @@
     mask.style.cssText = "position:fixed;inset:0;z-index:9900;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;";
     const safeLabel = (label || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     mask.innerHTML = `
-      <div style="background:#fff;width:380px;max-width:92vw;border-radius:10px;box-shadow:0 20px 60px rgba(0,0,0,0.25);padding:20px 22px;">
-        <div style="font-size:1rem;font-weight:700;color:#1e293b;margin-bottom:10px;">移除節點</div>
-        <div style="font-size:0.85rem;color:#475569;line-height:1.55;margin-bottom:18px;">
+      <div style="background:#fff;width:var(--modal-width-sm);max-width:92vw;border-radius:var(--modal-radius);box-shadow:0 20px 60px rgba(0,0,0,0.25);padding:20px 22px;">
+        <div style="font-size:1rem;font-weight:700;color:var(--text-primary);margin-bottom:10px;">移除節點</div>
+        <div style="font-size:0.85rem;color:var(--text-secondary);line-height:1.55;margin-bottom:18px;">
           確定要移除「<strong>${safeLabel}</strong>」這個節點嗎？<br>
           連接到它的線會一併刪除。
         </div>
         <div style="text-align:right;">
-          <button id="wfBlockDelCancel" type="button" style="padding:7px 16px;margin-right:8px;background:transparent;color:#64748b;border:1px solid #e2e8f0;border-radius:6px;font-size:0.82rem;cursor:pointer;">取消</button>
-          <button id="wfBlockDelOk" type="button" style="padding:7px 16px;background:#dc2626;color:#fff;border:none;border-radius:6px;font-size:0.82rem;font-weight:600;cursor:pointer;">移除</button>
+          <button id="wfBlockDelCancel" type="button" style="padding:7px 16px;margin-right:8px;background:transparent;color:var(--text-muted);border:1px solid #e2e8f0;border-radius:6px;font-size:0.82rem;cursor:pointer;">取消</button>
+          <button id="wfBlockDelOk" type="button" style="padding:7px 16px;background:var(--color-error);color:#fff;border:none;border-radius:6px;font-size:0.82rem;font-weight:600;cursor:pointer;">移除</button>
         </div>
       </div>
     `;
@@ -1933,9 +1933,9 @@
           <input class="wf-lp-search" id="wfLandingSearch" type="text" placeholder="搜尋工作流名稱..." autocomplete="off" value="${_escHtml(_savedQuery)}" /></div>
         <div class="wf-lp-section"><div class="wf-lp-title">分類</div>
           <div class="wf-lp-filter">
-            <div class="wf-lp-filter-item${_isActive("all")}" data-scope="all"><span class="wf-lp-filter-dot" style="background:#64748B;"></span><span>全部</span><span class="wf-lp-filter-count">${sc.all}</span></div>
-            <div class="wf-lp-filter-item${_isActive("system")}" data-scope="system"><span class="wf-lp-filter-dot" style="background:#059669;"></span><span>系統</span><span class="wf-lp-filter-count">${sc.system}</span></div>
-            <div class="wf-lp-filter-item${_isActive("department")}" data-scope="department"><span class="wf-lp-filter-dot" style="background:#4285f4;"></span><span>部門</span><span class="wf-lp-filter-count">${sc.department}</span></div>
+            <div class="wf-lp-filter-item${_isActive("all")}" data-scope="all"><span class="wf-lp-filter-dot" style="background:var(--text-muted);"></span><span>全部</span><span class="wf-lp-filter-count">${sc.all}</span></div>
+            <div class="wf-lp-filter-item${_isActive("system")}" data-scope="system"><span class="wf-lp-filter-dot" style="background:var(--color-success);"></span><span>系統</span><span class="wf-lp-filter-count">${sc.system}</span></div>
+            <div class="wf-lp-filter-item${_isActive("department")}" data-scope="department"><span class="wf-lp-filter-dot" style="background:var(--brand-google-blue);"></span><span>部門</span><span class="wf-lp-filter-count">${sc.department}</span></div>
             <div class="wf-lp-filter-item${_isActive("personal")}" data-scope="personal"><span class="wf-lp-filter-dot" style="background:#1a9aaa;"></span><span>個人</span><span class="wf-lp-filter-count">${sc.personal}</span></div>
           </div></div>
         <div class="wf-lp-section"><div class="wf-lp-title">最近編輯</div>
@@ -1959,7 +1959,7 @@
     if (grid) {
       let html = `<div class="wf-landing-card-new" onclick="_showNewWorkflowScopePicker()">
         <div class="wf-landing-card-new-inner"><div class="wf-landing-card-new-icon">+</div><div class="wf-landing-card-new-label">新增工作流</div></div></div>
-        <div class="wf-landing-card-new" style="background:linear-gradient(135deg,#8e44ad 0%,#6c5ce7 100%);color:#fff;" onclick="_showLLMGenerateModal()">
+        <div class="wf-landing-card-new" style="background:linear-gradient(135deg,var(--wf-purple) 0%,var(--wf-purple-dark) 100%);color:#fff;" onclick="_showLLMGenerateModal()">
         <div class="wf-landing-card-new-inner" style="color:#fff;"><div class="wf-landing-card-new-icon" style="color:#fff;">✨</div><div class="wf-landing-card-new-label" style="color:#fff;">一次性智能流程</div></div></div>`;
       workflows.forEach((wf, i) => {
         const color = _WF_COLORS[i % _WF_COLORS.length];
@@ -2070,16 +2070,16 @@
       overlay.style.cssText = "position:fixed;inset:0;z-index:8500;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;";
 
       const rows = (missingInputs || []).map(inp => {
-        const desc = inp.description ? `<div style="font-size:0.7rem;color:#64748b;margin-top:3px;">${_escHtml(inp.description)}</div>` : "";
+        const desc = inp.description ? `<div style="font-size:0.7rem;color:var(--text-muted);margin-top:3px;">${_escHtml(inp.description)}</div>` : "";
         const isMultiline = (inp.type || "").toLowerCase() === "text" || (inp.description || "").length > 60;
         const defVal = _escHtml(inp.default || "");
         const field = isMultiline
           ? `<textarea rows="3" id="wfWizInp_${_escHtml(inp.name)}" placeholder="${defVal}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;resize:vertical;">${defVal}</textarea>`
           : `<input type="text" id="wfWizInp_${_escHtml(inp.name)}" value="${defVal}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;" />`;
-        const required = inp.required === false ? '<span style="color:#94a3b8;font-size:0.72rem;">（選填）</span>' : '<span style="color:#dc2626;">*</span>';
+        const required = inp.required === false ? '<span style="color:var(--text-tertiary);font-size:0.72rem;">（選填）</span>' : '<span style="color:var(--color-error);">*</span>';
         return `<div style="margin-bottom:12px;">
-          <label style="display:block;font-size:0.78rem;font-weight:600;color:#1e293b;margin-bottom:4px;">
-            <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">${_escHtml(inp.name)}</code>
+          <label style="display:block;font-size:0.78rem;font-weight:600;color:var(--text-primary);margin-bottom:4px;">
+            <code style="background:var(--bg-hover);padding:1px 5px;border-radius:3px;">${_escHtml(inp.name)}</code>
             ${required}
           </label>
           ${field}
@@ -2088,16 +2088,16 @@
       }).join("");
 
       overlay.innerHTML = `
-        <div style="background:#fff;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,0.25);padding:22px 24px 18px;width:500px;max-width:92vw;max-height:85vh;overflow-y:auto;">
+        <div style="background:#fff;border-radius:var(--modal-radius);box-shadow:var(--modal-shadow);padding:var(--modal-padding);width:var(--modal-width-md);max-width:92vw;max-height:85vh;overflow-y:auto;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
             <span style="font-size:1.1rem;">📝</span>
             <div style="font-size:1rem;font-weight:700;">執行「${_escHtml(wfName)}」需要以下輸入</div>
           </div>
-          <div style="font-size:0.78rem;color:#64748b;margin-bottom:16px;">填寫後按「確認」開始執行</div>
-          ${rows || '<div style="color:#94a3b8;">(沒有待輸入欄位)</div>'}
+          <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:16px;">填寫後按「確認」開始執行</div>
+          ${rows || '<div style="color:var(--text-tertiary);">(沒有待輸入欄位)</div>'}
           <footer style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;">
-            <button id="wfWizCancel" style="padding:8px 18px;border-radius:8px;background:transparent;color:#64748b;border:1px solid #e2e8f0;cursor:pointer;">取消</button>
-            <button id="wfWizSubmit" style="padding:8px 18px;border-radius:8px;background:#0D6EFD;color:#fff;border:none;font-weight:600;cursor:pointer;">確認並執行</button>
+            <button id="wfWizCancel" style="padding:8px 18px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid #e2e8f0;cursor:pointer;">取消</button>
+            <button id="wfWizSubmit" style="padding:8px 18px;border-radius:8px;background:var(--color-info);color:#fff;border:none;font-weight:600;cursor:pointer;">確認並執行</button>
           </footer>
         </div>`;
       document.body.appendChild(overlay);
@@ -2113,7 +2113,7 @@
           const v = (el?.value || "").trim();
           if (!v && inp.required !== false) {
             hasMissing = true;
-            if (el) el.style.borderColor = "#dc2626";
+            if (el) el.style.borderColor = "var(--color-error)";
           } else {
             collected[inp.name] = v;
             if (el) el.style.borderColor = "#cbd5e1";
@@ -2151,15 +2151,15 @@
           <span style="font-size:0.8rem;font-weight:600;margin-left:6px;">${_escHtml(r.skill || r.type)}</span>
           <span style="font-size:0.72rem;color:#888;margin-left:6px;">${r.status}${r.model_used ? " · " + r.model_used : ""}</span>
           ${preview}
-          ${r.error ? `<div style="font-size:0.72rem;color:#ea4335;margin-top:3px;">${_escHtml(r.error)}</div>` : ""}
+          ${r.error ? `<div style="font-size:0.72rem;color:var(--brand-google-red);margin-top:3px;">${_escHtml(r.error)}</div>` : ""}
         </div>`;
       }).join("");
     const outputHtml = data.final_output
       ? `<div style="margin-top:12px;"><div style="font-size:0.75rem;font-weight:700;color:#555;margin-bottom:6px;">最終輸出</div>
-         <div style="background:#f8f9fb;border-radius:8px;padding:12px;font-size:0.8rem;white-space:pre-wrap;max-height:220px;overflow-y:auto;">${_escHtml(data.final_output)}</div></div>`
+         <div style="background:var(--bg-sidebar);border-radius:8px;padding:12px;font-size:0.8rem;white-space:pre-wrap;max-height:220px;overflow-y:auto;">${_escHtml(data.final_output)}</div></div>`
       : "";
     overlay.innerHTML = `
-      <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:24px 24px 18px;width:520px;max-width:92vw;max-height:85vh;overflow-y:auto;">
+      <div style="background:#fff;border-radius:var(--modal-radius);box-shadow:var(--modal-shadow);padding:24px 24px 18px;width:var(--modal-width-md);max-width:92vw;max-height:85vh;overflow-y:auto;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
           <div style="font-size:1rem;font-weight:700;">⚡ ${_escHtml(wfName)} 執行結果</div>
           <button onclick="document.getElementById('wfRunResultOverlay')?.remove()"
@@ -2252,49 +2252,49 @@
     mask.id = "wfLLMGenModal";
     mask.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;";
     mask.innerHTML = `
-      <div style="background:#fff;width:620px;max-width:94vw;max-height:90vh;overflow-y:auto;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.3);padding:22px 24px;">
+      <div style="background:#fff;width:var(--modal-width-lg);max-width:94vw;max-height:90vh;overflow-y:auto;border-radius:var(--modal-radius);box-shadow:0 20px 60px rgba(0,0,0,.3);padding:22px 24px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
           <span style="font-size:1.3rem;">✨</span>
           <h3 style="margin:0;font-size:1.05rem;">一次性智能流程</h3>
         </div>
-        <div style="font-size:0.8rem;color:#64748b;margin-bottom:14px;">
+        <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:14px;">
           描述一個任務，系統用可用技能自動組合出一個流程並立即執行。執行後若覺得好用，可以在結果卡片上一鍵永久儲存。
         </div>
 
-        <label style="display:block;font-size:0.78rem;font-weight:600;color:#1e293b;margin-bottom:4px;">任務描述 <span style="color:#dc2626;">*</span></label>
+        <label style="display:block;font-size:0.78rem;font-weight:600;color:var(--text-primary);margin-bottom:4px;">任務描述 <span style="color:var(--color-error);">*</span></label>
         <div style="position:relative;margin-bottom:12px;">
           <textarea id="wfLLMGenPrompt" rows="5" placeholder="例：搜尋台灣股市新聞 5 則，寫成摘要存到 Notion ToDo"
             style="width:100%;padding:10px 10px 32px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;resize:vertical;display:block;"></textarea>
           <button id="wfLLMGenRefineBtn" type="button" title="用 LLM 優化任務描述"
-            style="position:absolute;left:8px;bottom:10px;width:26px;height:26px;padding:0;border:1px solid #cbd5e1;border-radius:5px;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#6c5ce7;font-size:0.9rem;line-height:1;transition:all .15s;">
+            style="position:absolute;left:8px;bottom:10px;width:26px;height:26px;padding:0;border:1px solid #cbd5e1;border-radius:5px;background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--wf-purple-dark);font-size:0.9rem;line-height:1;transition:all .15s;">
             ✏️
           </button>
         </div>
 
         <details style="margin-bottom:12px;">
-          <summary style="cursor:pointer;font-size:0.78rem;color:#475569;">進階選項</summary>
+          <summary style="cursor:pointer;font-size:0.78rem;color:var(--text-secondary);">進階選項</summary>
           <div style="margin-top:10px;padding-left:10px;border-left:2px solid #e2e8f0;">
-            <label style="display:block;font-size:0.72rem;color:#475569;margin-bottom:3px;">流程名稱（留空由 LLM 決定）</label>
+            <label style="display:block;font-size:0.72rem;color:var(--text-secondary);margin-bottom:3px;">流程名稱（留空由 LLM 決定）</label>
             <input id="wfLLMGenName" type="text" placeholder="例：每日股市 → Notion"
               style="width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.78rem;margin-bottom:10px;" />
 
-            <label style="display:block;font-size:0.72rem;color:#475569;margin-bottom:3px;">最多步驟數 (1-10)</label>
+            <label style="display:block;font-size:0.72rem;color:var(--text-secondary);margin-bottom:3px;">最多步驟數 (1-10)</label>
             <input id="wfLLMGenMaxSteps" type="number" min="1" max="10" value="6"
               style="width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.78rem;margin-bottom:10px;" />
 
-            <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:#475569;">
+            <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:var(--text-secondary);">
               <input id="wfLLMGenExecute" type="checkbox" checked />
               立即執行（取消勾選僅產生預覽不執行）
             </label>
           </div>
         </details>
 
-        <div id="wfLLMGenStatus" style="font-size:0.78rem;color:#475569;margin-bottom:12px;min-height:20px;"></div>
-        <div id="wfLLMGenPreview" style="display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;font-family:monospace;font-size:0.72rem;color:#334155;max-height:260px;overflow-y:auto;margin-bottom:12px;white-space:pre-wrap;"></div>
+        <div id="wfLLMGenStatus" style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:12px;min-height:20px;"></div>
+        <div id="wfLLMGenPreview" style="display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;font-family:monospace;font-size:0.72rem;color:var(--text-secondary);max-height:260px;overflow-y:auto;margin-bottom:12px;white-space:pre-wrap;"></div>
 
         <div style="text-align:right;">
-          <button id="wfLLMGenCancel" type="button" style="padding:8px 18px;border-radius:8px;background:transparent;color:#64748b;border:1px solid #e2e8f0;cursor:pointer;margin-right:8px;">取消</button>
-          <button id="wfLLMGenSubmit" type="button" style="padding:8px 18px;border-radius:8px;background:linear-gradient(135deg,#8e44ad 0%,#6c5ce7 100%);color:#fff;border:none;font-weight:600;cursor:pointer;">✨ 產生並執行</button>
+          <button id="wfLLMGenCancel" type="button" style="padding:8px 18px;border-radius:8px;background:transparent;color:var(--text-muted);border:1px solid #e2e8f0;cursor:pointer;margin-right:8px;">取消</button>
+          <button id="wfLLMGenSubmit" type="button" style="padding:8px 18px;border-radius:8px;background:linear-gradient(135deg,var(--wf-purple) 0%,var(--wf-purple-dark) 100%);color:#fff;border:none;font-weight:600;cursor:pointer;">✨ 產生並執行</button>
         </div>
       </div>
     `;
@@ -2318,7 +2318,7 @@
     refineBtn.onclick = async () => {
       const cur = (promptEl.value || "").trim();
       if (!cur) {
-        statusEl.style.color = "#dc2626";
+        statusEl.style.color = "var(--color-error)";
         statusEl.textContent = "⚠️ 請先填寫任務描述，再用 ✏️ 優化";
         return;
       }
@@ -2328,7 +2328,7 @@
       const _origIcon = refineBtn.textContent;
       refineBtn.textContent = "⏳";
       refineBtn.style.cursor = "wait";
-      statusEl.style.color = "#475569";
+      statusEl.style.color = "var(--text-secondary)";
       statusEl.textContent = "🧠 正在優化任務描述…";
 
       try {
@@ -2351,7 +2351,7 @@
         promptEl.value = refined;
 
         // Show undo affordance in the status line
-        statusEl.style.color = "#059669";
+        statusEl.style.color = "var(--color-success)";
         statusEl.innerHTML = "✨ 已優化（請確認內容後再執行） &nbsp; <a href='#' id='wfLLMGenUndo' style='color:#6c5ce7;text-decoration:underline;font-size:0.76rem;'>↩ 還原原本的描述</a>";
         const undoLink = mask.querySelector("#wfLLMGenUndo");
         if (undoLink) {
@@ -2360,13 +2360,13 @@
             if (_lastOriginalPrompt != null) {
               promptEl.value = _lastOriginalPrompt;
               _lastOriginalPrompt = null;
-              statusEl.style.color = "#475569";
+              statusEl.style.color = "var(--text-secondary)";
               statusEl.textContent = "已還原為原本的描述";
             }
           };
         }
       } catch (e) {
-        statusEl.style.color = "#dc2626";
+        statusEl.style.color = "var(--color-error)";
         statusEl.textContent = "⚠️ 優化失敗：" + (e.message || e);
       } finally {
         refineBtn.disabled = false;
@@ -2379,7 +2379,7 @@
       const promptText = mask.querySelector("#wfLLMGenPrompt").value.trim();
       if (!promptText) {
         statusEl.textContent = "⚠️ 請先描述任務";
-        statusEl.style.color = "#dc2626";
+        statusEl.style.color = "var(--color-error)";
         return;
       }
       const displayName = mask.querySelector("#wfLLMGenName").value.trim();
@@ -2388,7 +2388,7 @@
 
       submitBtn.disabled = true;
       submitBtn.textContent = "產生中...";
-      statusEl.style.color = "#475569";
+      statusEl.style.color = "var(--text-secondary)";
       statusEl.textContent = "🧠 LLM 正在根據你的需求組裝工作流…";
       previewEl.style.display = "none";
 
@@ -2418,11 +2418,11 @@
           const ex = data.execution;
           if (ex.status === "success") {
             msg += `\n🚀 執行成功 (${ex.blocks_executed || 0} 個節點)`;
-            statusEl.style.color = "#059669";
+            statusEl.style.color = "var(--color-success)";
             runSuccess = true;
           } else {
             msg += `\n⚠️ 執行失敗：${(ex.errors || [ex.message || "unknown"]).join("；")}`;
-            statusEl.style.color = "#dc2626";
+            statusEl.style.color = "var(--color-error)";
           }
         }
         statusEl.textContent = msg;
@@ -2452,8 +2452,8 @@
           saveRow.className = "wf-llm-save-row";
           saveRow.style.cssText = "background:#f8f5ff;border:1px dashed #c7b9ff;border-radius:8px;padding:12px;margin-top:12px;";
           saveRow.innerHTML = `
-            <div style="font-size:0.82rem;font-weight:700;color:#1e293b;margin-bottom:8px;">💾 這個流程很好用嗎？</div>
-            <div style="font-size:0.72rem;color:#64748b;margin-bottom:10px;">按下「儲存為我的工作流」可以永久保留，之後在聊天中用關鍵字就能觸發。</div>
+            <div style="font-size:0.82rem;font-weight:700;color:var(--text-primary);margin-bottom:8px;">💾 這個流程很好用嗎？</div>
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:10px;">按下「儲存為我的工作流」可以永久保留，之後在聊天中用關鍵字就能觸發。</div>
             <div style="display:flex;gap:8px;align-items:center;">
               <input id="wfLLMPromoteName" type="text" placeholder="工作流名稱" value="${_escHtml(wf.display_name || '')}"
                 style="flex:1;padding:5px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:0.78rem;" />
@@ -2462,7 +2462,7 @@
                 <option value="department">🏢 部門</option>
                 <option value="system">🌐 系統（admin）</option>
               </select>
-              <button id="wfLLMPromoteBtn" type="button" style="padding:6px 14px;background:#6c5ce7;color:#fff;border:none;border-radius:4px;font-size:0.78rem;font-weight:600;cursor:pointer;white-space:nowrap;">儲存</button>
+              <button id="wfLLMPromoteBtn" type="button" style="padding:6px 14px;background:var(--wf-purple-dark);color:#fff;border:none;border-radius:4px;font-size:0.78rem;font-weight:600;cursor:pointer;white-space:nowrap;">儲存</button>
             </div>
             <div id="wfLLMPromoteStatus" style="font-size:0.72rem;margin-top:6px;min-height:16px;"></div>
           `;
@@ -2475,14 +2475,14 @@
             const displayName = nameIn.value.trim();
             if (!displayName) {
               statusDiv.textContent = "⚠️ 請先填名稱";
-              statusDiv.style.color = "#dc2626";
+              statusDiv.style.color = "var(--color-error)";
               nameIn.focus();
               return;
             }
             const btn = ev.currentTarget;
             btn.disabled = true;
             btn.textContent = "儲存中…";
-            statusDiv.style.color = "#475569";
+            statusDiv.style.color = "var(--text-secondary)";
             statusDiv.textContent = "正在儲存…";
             try {
               const r = await fetch("/api/workflows/_actions/promote", {
@@ -2501,7 +2501,7 @@
                 const det = rd?.detail ? (typeof rd.detail === "string" ? rd.detail : JSON.stringify(rd.detail)) : `HTTP ${r.status}`;
                 throw new Error(det);
               }
-              statusDiv.style.color = "#059669";
+              statusDiv.style.color = "var(--color-success)";
               statusDiv.textContent = `✅ 已儲存為工作流「${displayName}」`;
               btn.textContent = "已儲存";
               // Refresh the landing cards so the new workflow shows up
@@ -2510,7 +2510,7 @@
                 try { _showWorkflowLanding(); } catch (_) {}
               }
             } catch (err) {
-              statusDiv.style.color = "#dc2626";
+              statusDiv.style.color = "var(--color-error)";
               statusDiv.textContent = "❌ 儲存失敗：" + (err.message || err);
               btn.disabled = false;
               btn.textContent = "儲存";
@@ -2521,7 +2521,7 @@
         submitBtn.textContent = "✨ 重新產生";
         submitBtn.disabled = false;
       } catch (e) {
-        statusEl.style.color = "#dc2626";
+        statusEl.style.color = "var(--color-error)";
         statusEl.textContent = "❌ 產生失敗：" + (e.message || e);
         submitBtn.disabled = false;
         submitBtn.textContent = "✨ 產生並執行";
@@ -2601,16 +2601,16 @@
     overlay.id = "wfModeOverlay";
     overlay.style.cssText = "position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.45);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;";
     overlay.innerHTML = `
-      <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:22px 24px 18px;width:520px;max-width:92vw;">
+      <div style="background:#fff;border-radius:var(--modal-radius);box-shadow:var(--modal-shadow);padding:var(--modal-padding);width:var(--modal-width-md);max-width:92vw;">
         <div style="font-size:1.05rem;font-weight:700;margin-bottom:4px;">選擇建立方式</div>
-        <div style="font-size:0.8rem;color:#64748b;margin-bottom:16px;">使用精靈可在 5 個問題內生成工作流；也可以直接進入空白畫布自行拖拉</div>
+        <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:16px;">使用精靈可在 5 個問題內生成工作流；也可以直接進入空白畫布自行拖拉</div>
         <div style="display:flex;flex-direction:column;gap:10px;">
           <div class="wf-mode-card" onclick="window._showWfWizard('${scope}','${owner}')"
-            style="padding:14px 16px;border:2px solid #0d6efd;border-radius:12px;cursor:pointer;background:#f0f7ff;display:flex;align-items:flex-start;gap:14px;">
+            style="padding:14px 16px;border:2px solid var(--color-info);border-radius:12px;cursor:pointer;background:#f0f7ff;display:flex;align-items:flex-start;gap:14px;">
             <div style="font-size:1.6rem;flex-shrink:0;">✨</div>
             <div style="flex:1;">
-              <div style="font-size:0.9rem;font-weight:700;color:#0d6efd;">精靈模式（推薦）</div>
-              <div style="font-size:0.76rem;color:#475569;margin-top:3px;">回答 5 題（目的/輸入/輸出/時機/失敗處理）自動選最適合的模板</div>
+              <div style="font-size:0.9rem;font-weight:700;color:var(--color-info);">精靈模式（推薦）</div>
+              <div style="font-size:0.76rem;color:var(--text-secondary);margin-top:3px;">回答 5 題（目的/輸入/輸出/時機/失敗處理）自動選最適合的模板</div>
             </div>
           </div>
           <div class="wf-mode-card" onclick="window._createNewWorkflow('${scope}','${owner}');document.getElementById('wfModeOverlay')?.remove()"
@@ -2618,12 +2618,12 @@
             <div style="font-size:1.6rem;flex-shrink:0;">🎨</div>
             <div style="flex:1;">
               <div style="font-size:0.9rem;font-weight:700;">空白畫布</div>
-              <div style="font-size:0.76rem;color:#64748b;margin-top:3px;">從 Palette 拖拉節點自由設計</div>
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-top:3px;">從 Palette 拖拉節點自由設計</div>
             </div>
           </div>
         </div>
         <div style="display:flex;justify-content:flex-end;margin-top:16px;">
-          <button onclick="document.getElementById('wfModeOverlay')?.remove()" style="padding:7px 18px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;font-size:0.82rem;">取消</button>
+          <button onclick="document.getElementById('wfModeOverlay')?.remove()" style="padding:7px 18px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:var(--text-muted);cursor:pointer;font-size:0.82rem;">取消</button>
         </div>
       </div>`;
     overlay.addEventListener("click", e => { if (e.target === overlay) overlay.remove(); });
@@ -2656,25 +2656,25 @@
       const q = QUESTIONS[step];
       const labelFor = (o) => (q.labels && q.labels[o]) || o;
       overlay.innerHTML = `
-        <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:24px;width:520px;max-width:92vw;">
-          <div style="font-size:0.72rem;color:#64748b;margin-bottom:6px;">步驟 ${step+1} / ${QUESTIONS.length}</div>
+        <div style="background:#fff;border-radius:var(--modal-radius);box-shadow:var(--modal-shadow);padding:24px;width:var(--modal-width-md);max-width:92vw;">
+          <div style="font-size:0.72rem;color:var(--text-muted);margin-bottom:6px;">步驟 ${step+1} / ${QUESTIONS.length}</div>
           <div style="font-size:1.05rem;font-weight:700;margin-bottom:16px;">${q.label}</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
             ${q.options.map(o => `
               <button class="wf-wiz-opt" data-val="${o}"
-                style="padding:14px;border:1.5px solid #e2e8f0;border-radius:10px;background:#f8f9fb;cursor:pointer;font-size:0.88rem;color:#1e293b;transition:border-color 0.15s,background 0.15s;">
+                style="padding:14px;border:1.5px solid #e2e8f0;border-radius:10px;background:var(--bg-sidebar);cursor:pointer;font-size:0.88rem;color:var(--text-primary);transition:border-color 0.15s,background 0.15s;">
                 ${labelFor(o)}
               </button>
             `).join("")}
           </div>
           <div style="display:flex;justify-content:space-between;margin-top:18px;">
-            <button onclick="(function(){document.getElementById('wfWizardOverlay')?.remove()})()" style="padding:7px 16px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;font-size:0.82rem;">取消</button>
-            ${step > 0 ? `<button id="wfWizBack" style="padding:7px 16px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;font-size:0.82rem;">上一步</button>` : ""}
+            <button onclick="(function(){document.getElementById('wfWizardOverlay')?.remove()})()" style="padding:7px 16px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:var(--text-muted);cursor:pointer;font-size:0.82rem;">取消</button>
+            ${step > 0 ? `<button id="wfWizBack" style="padding:7px 16px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:var(--text-muted);cursor:pointer;font-size:0.82rem;">上一步</button>` : ""}
           </div>
         </div>`;
       overlay.querySelectorAll(".wf-wiz-opt").forEach(btn => {
-        btn.onmouseenter = () => { btn.style.borderColor = "#0d6efd"; btn.style.background = "#f0f7ff"; };
-        btn.onmouseleave = () => { btn.style.borderColor = "#e2e8f0"; btn.style.background = "#f8f9fb"; };
+        btn.onmouseenter = () => { btn.style.borderColor = "var(--color-info)"; btn.style.background = "#f0f7ff"; };
+        btn.onmouseleave = () => { btn.style.borderColor = "#e2e8f0"; btn.style.background = "var(--bg-sidebar)"; };
         btn.onclick = () => {
           answers[q.key] = btn.dataset.val;
           step += 1;
@@ -2686,7 +2686,7 @@
     }
 
     async function renderPreview() {
-      overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:24px;width:520px;max-width:92vw;"><div style="text-align:center;padding:30px 0;">⏳ 正在為你選擇最適合的模板...</div></div>`;
+      overlay.innerHTML = `<div style="background:#fff;border-radius:var(--modal-radius);padding:24px;width:var(--modal-width-md);max-width:92vw;"><div style="text-align:center;padding:30px 0;">⏳ 正在為你選擇最適合的模板...</div></div>`;
       try {
         const resp = await fetch("/api/workflows/wizard", {
           method: "POST", headers: {"Content-Type":"application/json"},
@@ -2694,22 +2694,22 @@
         });
         const data = await resp.json();
         if (!resp.ok || data.status !== "success") {
-          overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:24px;"><div style="color:#dc2626;">Wizard 建立失敗：${JSON.stringify(data.detail || data).slice(0,200)}</div><div style="text-align:right;margin-top:12px;"><button onclick="document.getElementById('wfWizardOverlay')?.remove()">關閉</button></div></div>`;
+          overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:24px;"><div style="color:var(--color-error);">Wizard 建立失敗：${JSON.stringify(data.detail || data).slice(0,200)}</div><div style="text-align:right;margin-top:12px;"><button onclick="document.getElementById('wfWizardOverlay')?.remove()">關閉</button></div></div>`;
           return;
         }
         const wf = data.workflow;
         const stepsPreview = (wf.blocks || []).filter(b => !["start","end","branch"].includes(b.type)).map(b => b.type).join(" → ") || "(無節點)";
         overlay.innerHTML = `
-          <div style="background:#fff;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,0.18);padding:24px;width:560px;max-width:92vw;max-height:85vh;overflow-y:auto;">
+          <div style="background:#fff;border-radius:var(--modal-radius);box-shadow:var(--modal-shadow);padding:24px;width:var(--modal-width-md);max-width:92vw;max-height:85vh;overflow-y:auto;">
             <div style="font-size:1.05rem;font-weight:700;margin-bottom:6px;">✨ 已為你選擇模板</div>
-            <div style="font-size:0.88rem;color:#0d6efd;font-weight:600;margin-bottom:12px;">${wf.icon || "📋"} ${_escHtml(wf.display_name)}</div>
-            <div style="background:#f8f9fb;border-radius:10px;padding:12px;margin-bottom:14px;">
-              <div style="font-size:0.76rem;color:#64748b;margin-bottom:4px;">描述</div>
-              <div style="font-size:0.85rem;color:#1e293b;">${_escHtml(wf.description || "")}</div>
-              <div style="font-size:0.76rem;color:#64748b;margin-top:10px;margin-bottom:4px;">流程</div>
-              <div style="font-size:0.82rem;color:#1e293b;font-family:monospace;">${_escHtml(stepsPreview)}</div>
+            <div style="font-size:0.88rem;color:var(--color-info);font-weight:600;margin-bottom:12px;">${wf.icon || "📋"} ${_escHtml(wf.display_name)}</div>
+            <div style="background:var(--bg-sidebar);border-radius:10px;padding:12px;margin-bottom:14px;">
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:4px;">描述</div>
+              <div style="font-size:0.85rem;color:var(--text-primary);">${_escHtml(wf.description || "")}</div>
+              <div style="font-size:0.76rem;color:var(--text-muted);margin-top:10px;margin-bottom:4px;">流程</div>
+              <div style="font-size:0.82rem;color:var(--text-primary);font-family:monospace;">${_escHtml(stepsPreview)}</div>
               ${(wf.variables?.env_requirements || []).length ? `
-                <div style="font-size:0.76rem;color:#64748b;margin-top:10px;margin-bottom:4px;">需要的環境變數</div>
+                <div style="font-size:0.76rem;color:var(--text-muted);margin-top:10px;margin-bottom:4px;">需要的環境變數</div>
                 <div style="font-size:0.78rem;color:#b45309;">${wf.variables.env_requirements.map(e => `<code style="background:#fff8e1;padding:2px 5px;border-radius:3px;margin-right:5px;">${e}</code>`).join("")}</div>
               ` : ""}
             </div>
@@ -2717,8 +2717,8 @@
               <input id="wfWizName" type="text" placeholder="輸入工作流名稱" value="${_escHtml(wf.display_name)}" style="flex:1;padding:8px 12px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:0.88rem;" />
             </div>
             <div style="display:flex;justify-content:flex-end;gap:10px;">
-              <button onclick="document.getElementById('wfWizardOverlay')?.remove()" style="padding:8px 18px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:#64748b;cursor:pointer;">取消</button>
-              <button id="wfWizCreate" style="padding:8px 18px;border-radius:8px;background:#0d6efd;color:#fff;border:none;font-weight:600;cursor:pointer;">建立並開啟畫布</button>
+              <button onclick="document.getElementById('wfWizardOverlay')?.remove()" style="padding:8px 18px;border-radius:8px;border:1px solid #e2e8f0;background:transparent;color:var(--text-muted);cursor:pointer;">取消</button>
+              <button id="wfWizCreate" style="padding:8px 18px;border-radius:8px;background:var(--color-info);color:#fff;border:none;font-weight:600;cursor:pointer;">建立並開啟畫布</button>
             </div>
           </div>`;
         overlay.querySelector("#wfWizCreate").onclick = async () => {
@@ -2749,7 +2749,7 @@
           }
         };
       } catch (err) {
-        overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:24px;"><div style="color:#dc2626;">錯誤：${err.message}</div></div>`;
+        overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:24px;"><div style="color:var(--color-error);">錯誤：${err.message}</div></div>`;
       }
     }
 
@@ -3801,7 +3801,7 @@
           <div class="wf-confirm-actions" style="flex-wrap:wrap;gap:8px;">
             <button class="wf-confirm-btn wf-confirm-cancel" data-a="cancel">取消</button>
             <button class="wf-confirm-btn" data-a="discard"
-              style="background:#fff5f5;color:#b91c1c;border:1px solid #fca5a5;">直接退出</button>
+              style="background:#fff5f5;color:var(--color-error);border:1px solid #fca5a5;">直接退出</button>
             <button class="wf-confirm-btn wf-confirm-ok" data-a="save"
               style="background:var(--kway-blue,#4a90d9);">儲存並退出</button>
           </div>
@@ -3886,9 +3886,9 @@
 
     if (tab === "basic") {
       body.innerHTML = `
-        <div class="wf-settings-field"><label>工作流名稱 <span style="color:#ea4335">*</span></label>
+        <div class="wf-settings-field"><label>工作流名稱 <span style="color:var(--brand-google-red)">*</span></label>
           <input type="text" id="wfSetName" value="${_escHtml(wd.name || "")}" placeholder="請輸入工作流名稱" /></div>
-        <div class="wf-settings-field"><label>描述 <span style="color:#ea4335">*</span></label>
+        <div class="wf-settings-field"><label>描述 <span style="color:var(--brand-google-red)">*</span></label>
           <textarea id="wfSetDesc" rows="3" placeholder="請簡述此工作流的用途">${_escHtml(wd.description || "")}</textarea></div>
         <div class="wf-settings-field"><label>圖示</label>
           <input type="text" id="wfSetIcon" value="${_escHtml(wd.icon || "")}" placeholder="例如: chart, document" /></div>
@@ -3913,8 +3913,8 @@
             <input type="checkbox" id="wfSetTriggerEnabled" ${tr.enabled ? "checked" : ""} />
             啟用自動觸發
           </label></div>
-        ${showWarn ? `<div class="wf-settings-field" style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:10px;margin-bottom:10px;">
-          <div style="color:#b91c1c;font-weight:700;font-size:0.85rem;margin-bottom:4px;">⚠️ 此工作流永遠不會自動觸發</div>
+        ${showWarn ? `<div class="wf-settings-field" style="background:var(--color-error-bg);border:1px solid #fca5a5;border-radius:6px;padding:10px;margin-bottom:10px;">
+          <div style="color:var(--color-error);font-weight:700;font-size:0.85rem;margin-bottom:4px;">⚠️ 此工作流永遠不會自動觸發</div>
           <div style="color:#7f1d1d;font-size:0.78rem;">已啟用觸發但沒有設定任何關鍵詞或排程。請至少做一件：<br>
             1. 到「<strong>基本</strong>」tab 填寫<strong>觸發關鍵詞</strong>（如「每日新聞」），或<br>
             2. 在下方填寫<strong>排程 Cron 表達式</strong>，或<br>
@@ -3923,8 +3923,8 @@
         </div>` : ""}
         <div class="wf-settings-field">
           <label>觸發關鍵詞摘要（在「基本」tab 編輯）</label>
-          <div class="wf-settings-hint" style="padding:6px 10px;background:#f1f5f9;border-radius:4px;color:#334155;">
-            ${hasKw ? kwList.map(k => `<code style="background:#e2e8f0;padding:1px 6px;border-radius:3px;margin-right:4px;">${_escHtml(k)}</code>`).join("") : '<span style="color:#94a3b8;">（尚未設定，自動觸發不會生效）</span>'}
+          <div class="wf-settings-hint" style="padding:6px 10px;background:var(--bg-hover);border-radius:4px;color:var(--text-secondary);">
+            ${hasKw ? kwList.map(k => `<code style="background:#e2e8f0;padding:1px 6px;border-radius:3px;margin-right:4px;">${_escHtml(k)}</code>`).join("") : '<span style="color:var(--text-tertiary);">（尚未設定，自動觸發不會生效）</span>'}
           </div>
         </div>
         <div class="wf-settings-field"><label>觸發模式</label>
@@ -4217,10 +4217,10 @@
       <div style="background:#fff;border-radius:8px;width:720px;max-width:92vw;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 10px 40px rgba(0,0,0,0.2);">
         <div style="padding:16px 20px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;">
           <div style="font-weight:600;font-size:1rem;">🕒 已排程的工作流 Cron Jobs</div>
-          <button style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:#64748b;" onclick="this.closest('.wf-settings-overlay').remove()">×</button>
+          <button style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--text-muted);" onclick="this.closest('.wf-settings-overlay').remove()">×</button>
         </div>
         <div id="wfCronJobsBody" style="padding:16px 20px;overflow:auto;flex:1;">
-          <div style="color:#64748b;">載入中...</div>
+          <div style="color:var(--text-muted);">載入中...</div>
         </div>
       </div>
     `;
@@ -4235,25 +4235,25 @@
       const data = await resp.json();
 
       if (data.status !== "ok") {
-        body.innerHTML = `<div style="color:#b91c1c;">⚠️ 無法取得排程資訊：${_escHtml(data.reason || data.status)}</div>`;
+        body.innerHTML = `<div style="color:var(--color-error);">⚠️ 無法取得排程資訊：${_escHtml(data.reason || data.status)}</div>`;
         return;
       }
 
       const stateColor = data.scheduler_state === "RUNNING" ? "#16a34a" : "#b91c1c";
       let html = `
-        <div style="margin-bottom:12px;font-size:0.85rem;color:#64748b;">
+        <div style="margin-bottom:12px;font-size:0.85rem;color:var(--text-muted);">
           APScheduler 狀態：<span style="color:${stateColor};font-weight:600;">${_escHtml(data.scheduler_state)}</span>
           &nbsp;·&nbsp; 共 ${data.count} 個工作流 cron job
         </div>
       `;
 
       if (!data.jobs.length) {
-        html += `<div style="padding:32px;text-align:center;color:#94a3b8;">目前沒有任何已註冊的工作流 cron job。<br><br>設定 <code>trigger.enabled=true</code> 且 <code>trigger.schedule</code> 填入 cron 表達式後，儲存工作流即會自動註冊。</div>`;
+        html += `<div style="padding:32px;text-align:center;color:var(--text-tertiary);">目前沒有任何已註冊的工作流 cron job。<br><br>設定 <code>trigger.enabled=true</code> 且 <code>trigger.schedule</code> 填入 cron 表達式後，儲存工作流即會自動註冊。</div>`;
       } else {
         html += `
           <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
             <thead>
-              <tr style="background:#f1f5f9;">
+              <tr style="background:var(--bg-hover);">
                 <th style="text-align:left;padding:8px 10px;border-bottom:1px solid #cbd5e1;">工作流</th>
                 <th style="text-align:left;padding:8px 10px;border-bottom:1px solid #cbd5e1;">Cron</th>
                 <th style="text-align:left;padding:8px 10px;border-bottom:1px solid #cbd5e1;">下次執行</th>
@@ -4268,16 +4268,16 @@
             : "<span style='color:#94a3b8;'>—</span>";
           const enabledBadge = j.trigger_enabled
             ? ""
-            : `<span style="display:inline-block;margin-left:6px;padding:1px 6px;background:#fef3c7;color:#92400e;border-radius:3px;font-size:0.7rem;">已停用</span>`;
+            : `<span style="display:inline-block;margin-left:6px;padding:1px 6px;background:var(--color-warning-bg);color:#92400e;border-radius:3px;font-size:0.7rem;">已停用</span>`;
           html += `
             <tr style="border-bottom:1px solid #e5e7eb;">
               <td style="padding:8px 10px;">
                 <div style="font-weight:500;">${_escHtml(j.display_name || j.workflow_id)}${enabledBadge}</div>
-                <div style="color:#94a3b8;font-size:0.75rem;font-family:monospace;">${_escHtml(j.workflow_id)}</div>
+                <div style="color:var(--text-tertiary);font-size:0.75rem;font-family:monospace;">${_escHtml(j.workflow_id)}</div>
               </td>
               <td style="padding:8px 10px;font-family:monospace;">${_escHtml(j.cron || "—")}</td>
               <td style="padding:8px 10px;">${nextRun}</td>
-              <td style="padding:8px 10px;color:#64748b;">${_escHtml(j.scope || "—")}${j.owner ? ` / ${_escHtml(j.owner)}` : ""}</td>
+              <td style="padding:8px 10px;color:var(--text-muted);">${_escHtml(j.scope || "—")}${j.owner ? ` / ${_escHtml(j.owner)}` : ""}</td>
             </tr>
           `;
         }
@@ -4286,7 +4286,7 @@
 
       body.innerHTML = html;
     } catch (e) {
-      body.innerHTML = `<div style="color:#b91c1c;">⚠️ 請求失敗：${_escHtml(String(e))}</div>`;
+      body.innerHTML = `<div style="color:var(--color-error);">⚠️ 請求失敗：${_escHtml(String(e))}</div>`;
     }
   };
 
@@ -4470,7 +4470,7 @@
       const def = paramSchema.default != null ? String(paramSchema.default) : "";
       const cur = currentVal != null && currentVal !== "" ? String(currentVal) : def;
       const isValid = paramSchema.enum.map(String).includes(cur);
-      const invalidOpt = (!isValid && currentVal) ? `<option value="${_escHtml(String(currentVal))}" selected style="color:#dc2626;background:#fef2f2;">⚠️ 目前值：${_escHtml(String(currentVal))}（不合法，請選新值）</option>` : "";
+      const invalidOpt = (!isValid && currentVal) ? `<option value="${_escHtml(String(currentVal))}" selected style="color:var(--color-error);background:var(--color-error-bg);">⚠️ 目前值：${_escHtml(String(currentVal))}（不合法，請選新值）</option>` : "";
       const opts = paramSchema.enum.map(v => {
         const vs = String(v);
         const sel = isValid && vs === cur ? " selected" : "";
@@ -4522,23 +4522,23 @@
       const paramCount = Object.keys(br.params || {}).length;
       return `<div class="wf-parallel-branch" data-bi="${i}" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-bottom:8px;background:#fff;">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
-          <span style="background:#ede7f6;color:#8e44ad;font-size:0.7rem;font-weight:700;padding:2px 8px;border-radius:4px;">分支 ${i + 1}</span>
+          <span style="background:#ede7f6;color:var(--wf-purple);font-size:0.7rem;font-weight:700;padding:2px 8px;border-radius:4px;">分支 ${i + 1}</span>
           <input type="text" placeholder="標籤（選填）" value="${_escHtml(br.label || "")}" style="flex:1;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
             onchange="window._updateParallelBranch(${block.id}, ${i}, 'label', this.value)" />
           <button title="移除分支" onclick="window._removeParallelBranch(${block.id}, ${i})"
-            style="background:transparent;border:none;color:#dc2626;cursor:pointer;font-size:0.9rem;">✕</button>
+            style="background:transparent;border:none;color:var(--color-error);cursor:pointer;font-size:0.9rem;">✕</button>
         </div>
-        <label style="font-size:0.7rem;color:#6b7280;display:block;margin-bottom:3px;">技能</label>
+        <label style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:3px;">技能</label>
         <select style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;margin-bottom:6px;"
           onchange="window._updateParallelBranch(${block.id}, ${i}, 'skill_id', this.value)">
           <option value="">選擇技能</option>
           ${skillOpts.replace(`value="${_escHtml(br.skill_id || "")}"`, `value="${_escHtml(br.skill_id || "")}" selected`)}
         </select>
-        <label style="font-size:0.7rem;color:#6b7280;display:block;margin-bottom:3px;">輸出變數名稱</label>
+        <label style="font-size:0.7rem;color:var(--text-muted);display:block;margin-bottom:3px;">輸出變數名稱</label>
         <input type="text" placeholder="例：news_result" value="${_escHtml(br.output_var || "")}"
           style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;margin-bottom:6px;"
           onchange="window._updateParallelBranch(${block.id}, ${i}, 'output_var', this.value)" />
-        <div style="font-size:0.68rem;color:#9ca3af;">
+        <div style="font-size:0.68rem;color:var(--text-tertiary);">
           參數設定：${paramCount} 個（打開此分支的屬性面板編輯，或直接改 JSON）
           <button style="float:right;background:transparent;border:1px solid #e5e7eb;border-radius:4px;padding:2px 8px;font-size:0.68rem;cursor:pointer;"
             onclick="window._editParallelBranchParams(${block.id}, ${i})">參數...</button>
@@ -4550,18 +4550,18 @@
       <div style="background:#f3e5f5;padding:8px 10px;border-radius:6px;margin-bottom:10px;font-size:0.72rem;color:#6a1b9a;">
         🔀 <strong>並行分支</strong>：以下分支會<strong>同時</strong>執行，全部完成後結果會匯合到下方的「匯合變數」。
       </div>
-      ${branchRows || '<div style="padding:10px;text-align:center;color:#9ca3af;font-size:0.72rem;">尚無分支 — 點下方「+ 新增分支」</div>'}
-      <button style="width:100%;padding:6px;background:#8e44ad;color:#fff;border:none;border-radius:6px;font-size:0.72rem;cursor:pointer;margin-bottom:10px;"
+      ${branchRows || '<div style="padding:10px;text-align:center;color:var(--text-tertiary);font-size:0.72rem;">尚無分支 — 點下方「+ 新增分支」</div>'}
+      <button style="width:100%;padding:6px;background:var(--wf-purple);color:#fff;border:none;border-radius:6px;font-size:0.72rem;cursor:pointer;margin-bottom:10px;"
         onclick="window._addParallelBranch(${block.id})">+ 新增分支</button>
       <div style="margin-bottom:8px;">
-        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">匯合後變數名稱</label>
+        <label style="font-size:0.72rem;color:var(--text-secondary);display:block;margin-bottom:3px;">匯合後變數名稱</label>
         <input type="text" value="${_escHtml(block.config.merge_output_var)}"
           style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
           onchange="window._updateBlockConfig(${block.id}, 'merge_output_var', this.value)" />
-        <div style="font-size:0.66rem;color:#9ca3af;margin-top:3px;">後續節點可用 <code>\${${_escHtml(block.config.merge_output_var)}}</code> 引用匯合結果 (JSON)</div>
+        <div style="font-size:0.66rem;color:var(--text-tertiary);margin-top:3px;">後續節點可用 <code>\${${_escHtml(block.config.merge_output_var)}}</code> 引用匯合結果 (JSON)</div>
       </div>
       <div>
-        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">分支失敗策略</label>
+        <label style="font-size:0.72rem;color:var(--text-secondary);display:block;margin-bottom:3px;">分支失敗策略</label>
         <select style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
           onchange="window._updateBlockConfig(${block.id}, 'on_fail', this.value)">
           <option value="abort" ${block.config.on_fail === "abort" ? "selected" : ""}>中止整個工作流 (abort)</option>
@@ -4619,13 +4619,13 @@
     mask.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center;";
     const current = JSON.stringify(branch.params || {}, null, 2);
     mask.innerHTML = `
-      <div style="background:#fff;width:520px;max-width:92vw;border-radius:10px;padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.25);">
+      <div style="background:#fff;width:var(--modal-width-md);max-width:92vw;border-radius:var(--modal-radius);padding:20px;box-shadow:0 20px 60px rgba(0,0,0,.25);">
         <h3 style="margin:0 0 8px;font-size:15px;">分支 ${branchIdx + 1} 參數 (${_escHtml(branch.skill_id || "未選技能")})</h3>
         <div style="font-size:12px;color:#666;margin-bottom:10px;">JSON 格式。每個 key 是技能的參數名，value 是 {source, value} 或直接字串。</div>
         <textarea id="wf-branch-params-ta" style="width:100%;height:240px;font-family:monospace;font-size:12px;padding:10px;border:1px solid #ddd;border-radius:6px;">${_escHtml(current)}</textarea>
         <div style="text-align:right;margin-top:12px;">
           <button id="wf-branch-params-cancel" style="padding:6px 14px;margin-right:8px;background:transparent;color:#666;border:1px solid #ddd;border-radius:4px;cursor:pointer;">取消</button>
-          <button id="wf-branch-params-save" style="padding:6px 14px;background:#8e44ad;color:#fff;border:none;border-radius:4px;cursor:pointer;">儲存</button>
+          <button id="wf-branch-params-save" style="padding:6px 14px;background:var(--wf-purple);color:#fff;border:none;border-radius:4px;cursor:pointer;">儲存</button>
         </div>
       </div>`;
     document.body.appendChild(mask);
@@ -4651,7 +4651,7 @@
   // (_execution_stack in executor) prevents A→B→A loops automatically.
   async function _renderSubWorkflowBlockEditor(block, container, fd) {
     if (!block.config) block.config = {};
-    container.innerHTML = `<div style="padding:10px;color:#6b7280;font-size:0.72rem;">載入工作流清單...</div>`;
+    container.innerHTML = `<div style="padding:10px;color:var(--text-muted);font-size:0.72rem;">載入工作流清單...</div>`;
 
     // Fetch available workflows (all scopes) and filter out self to prevent
     // the most obvious cycle at UI level.
@@ -4699,33 +4699,33 @@
         📎 <strong>子工作流</strong>：呼叫另一個已儲存的工作流作為本步驟。系統會偵測循環呼叫 (A→B→A)，最多允許 5 層巢狀。
       </div>
       <div style="margin-bottom:10px;">
-        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">選擇子工作流</label>
+        <label style="font-size:0.72rem;color:var(--text-secondary);display:block;margin-bottom:3px;">選擇子工作流</label>
         <select style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
           onchange="window._updateSubWorkflowId(${block.id}, this.value, this.options[this.selectedIndex]?.textContent || '')">
           <option value="">— 請選擇 —</option>
           ${options}
         </select>
-        ${!options ? '<div style="font-size:0.66rem;color:#dc2626;margin-top:4px;">⚠️ 沒有可選的工作流（自己無法引用自己）</div>' : ""}
+        ${!options ? '<div style="font-size:0.66rem;color:var(--color-error);margin-top:4px;">⚠️ 沒有可選的工作流（自己無法引用自己）</div>' : ""}
       </div>
       <div style="margin-bottom:10px;">
-        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">傳入變數 (以逗號分隔的變數名)</label>
+        <label style="font-size:0.72rem;color:var(--text-secondary);display:block;margin-bottom:3px;">傳入變數 (以逗號分隔的變數名)</label>
         <input type="text" value="${_escHtml(passVars.join(", "))}"
           placeholder="例：topic, lang"
           style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
           onchange="window._updateSubWorkflowPassVars(${block.id}, this.value)" />
-        <div style="font-size:0.66rem;color:#9ca3af;margin-top:3px;">
-          本工作流目前可傳入的變數：${wfVars.map(v => `<code style="background:#f1f5f9;padding:1px 4px;border-radius:3px;margin:0 2px;">${_escHtml(v.name)}</code>`).join("") || "（尚未定義）"}
+        <div style="font-size:0.66rem;color:var(--text-tertiary);margin-top:3px;">
+          本工作流目前可傳入的變數：${wfVars.map(v => `<code style="background:var(--bg-hover);padding:1px 4px;border-radius:3px;margin:0 2px;">${_escHtml(v.name)}</code>`).join("") || "（尚未定義）"}
         </div>
       </div>
       <div style="margin-bottom:10px;">
-        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">接收輸出的變數名</label>
+        <label style="font-size:0.72rem;color:var(--text-secondary);display:block;margin-bottom:3px;">接收輸出的變數名</label>
         <input type="text" value="${_escHtml(block.config.output_var || "")}"
           placeholder="例：sub_result"
           style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
           onchange="window._updateBlockConfig(${block.id}, 'output_var', this.value)" />
       </div>
       <div>
-        <label style="font-size:0.72rem;color:#374151;display:block;margin-bottom:3px;">子工作流失敗策略</label>
+        <label style="font-size:0.72rem;color:var(--text-secondary);display:block;margin-bottom:3px;">子工作流失敗策略</label>
         <select style="width:100%;padding:4px 8px;border:1px solid #e5e7eb;border-radius:4px;font-size:0.72rem;"
           onchange="window._updateBlockConfig(${block.id}, 'on_fail', this.value)">
           <option value="abort" ${block.config.on_fail === "abort" || !block.config.on_fail ? "selected" : ""}>中止整個工作流 (abort)</option>
@@ -4806,7 +4806,7 @@
     }
     const name = fd?._wfNameCache?.[wfId] || wfId;
     sub.textContent = "→ " + name;
-    sub.style.color = "#8e44ad";
+    sub.style.color = "var(--wf-purple)";
     sub.title = `子工作流 ID: ${wfId}`;
   }
 
@@ -4823,7 +4823,7 @@
       const def = pSchema.default != null ? String(pSchema.default) : "";
       const cur = val !== "" ? String(val) : def;
       const isValid = pSchema.enum.map(String).includes(cur);
-      const invalidOpt = (!isValid && val) ? `<option value="${_escHtml(String(val))}" selected style="color:#dc2626;">⚠️ ${_escHtml(String(val))}</option>` : "";
+      const invalidOpt = (!isValid && val) ? `<option value="${_escHtml(String(val))}" selected style="color:var(--color-error);">⚠️ ${_escHtml(String(val))}</option>` : "";
       const opts = pSchema.enum.map(v => {
         const vs = String(v);
         const sel = isValid && vs === cur ? " selected" : "";
@@ -4856,7 +4856,7 @@
     // the input so it doesn't steal horizontal space.
     const ph = pSchema?.default != null ? `預設：${_escHtml(String(pSchema.default))}` : "輸入值或 ${變數名}";
     const varIcon = wfVars.length > 0
-      ? `<button type="button" title="插入變數" onclick="window._openVarPicker(event, ${bid}, '${_escHtml(pName)}')" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);width:22px;height:22px;padding:0;border:none;background:transparent;color:#94a3b8;cursor:pointer;font-size:0.75rem;border-radius:3px;display:flex;align-items:center;justify-content:center;">📎</button>`
+      ? `<button type="button" title="插入變數" onclick="window._openVarPicker(event, ${bid}, '${_escHtml(pName)}')" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);width:22px;height:22px;padding:0;border:none;background:transparent;color:var(--text-tertiary);cursor:pointer;font-size:0.75rem;border-radius:3px;display:flex;align-items:center;justify-content:center;">📎</button>`
       : "";
     const inputStyle = INPUT_CSS + (wfVars.length ? "padding-right:28px;" : "");
     return `<div style="position:relative;">
@@ -4884,7 +4884,7 @@
             <option value="">選擇變數</option>${selectedVarOpts}</select>`
         : pv.source === "fixed"
           ? _renderFixedParamInput(bid, pName, pv.value, pSchema)
-          : `<span style="flex:1;padding:5px 8px;color:#64748b;font-size:0.72rem;">${pv.source === "previous_step" ? "自動帶入前一節點的輸出" : "由 LLM 根據描述推斷"}</span>`}
+          : `<span style="flex:1;padding:5px 8px;color:var(--text-muted);font-size:0.72rem;">${pv.source === "previous_step" ? "自動帶入前一節點的輸出" : "由 LLM 根據描述推斷"}</span>`}
     </div>`;
   }
 
@@ -4933,17 +4933,17 @@
     const systemVars = ["_current_date", "_current_time", "_user_name", "_user_dept", "_session_id"];
     const rows = [];
     if (wfVars.length) {
-      rows.push(`<div style="padding:4px 10px;font-size:0.65rem;color:#6b7280;background:#f9fafb;">自訂變數</div>`);
+      rows.push(`<div style="padding:4px 10px;font-size:0.65rem;color:var(--text-muted);background:#f9fafb;">自訂變數</div>`);
       wfVars.forEach(v => {
-        rows.push(`<button type="button" data-var="${_escHtml(v.name)}" style="display:block;width:100%;text-align:left;padding:6px 12px;background:transparent;border:none;cursor:pointer;font-size:0.75rem;color:#1e293b;">
+        rows.push(`<button type="button" data-var="${_escHtml(v.name)}" style="display:block;width:100%;text-align:left;padding:6px 12px;background:transparent;border:none;cursor:pointer;font-size:0.75rem;color:var(--text-primary);">
           <strong>\${${_escHtml(v.name)}}</strong>
-          ${v.description ? `<span style="color:#94a3b8;font-size:0.68rem;"> — ${_escHtml(v.description).slice(0, 40)}</span>` : ""}
+          ${v.description ? `<span style="color:var(--text-tertiary);font-size:0.68rem;"> — ${_escHtml(v.description).slice(0, 40)}</span>` : ""}
         </button>`);
       });
     }
-    rows.push(`<div style="padding:4px 10px;font-size:0.65rem;color:#6b7280;background:#f9fafb;">系統變數</div>`);
+    rows.push(`<div style="padding:4px 10px;font-size:0.65rem;color:var(--text-muted);background:#f9fafb;">系統變數</div>`);
     systemVars.forEach(v => {
-      rows.push(`<button type="button" data-var="${_escHtml(v)}" style="display:block;width:100%;text-align:left;padding:6px 12px;background:transparent;border:none;cursor:pointer;font-size:0.75rem;color:#1e293b;">
+      rows.push(`<button type="button" data-var="${_escHtml(v)}" style="display:block;width:100%;text-align:left;padding:6px 12px;background:transparent;border:none;cursor:pointer;font-size:0.75rem;color:var(--text-primary);">
         <strong>\${${_escHtml(v)}}</strong>
       </button>`);
     });
@@ -4978,7 +4978,7 @@
     }, 0);
 
     popup.querySelectorAll("button[data-var]").forEach(b => {
-      b.addEventListener("mouseenter", () => { b.style.background = "#f1f5f9"; });
+      b.addEventListener("mouseenter", () => { b.style.background = "var(--bg-hover)"; });
       b.addEventListener("mouseleave", () => { b.style.background = "transparent"; });
       b.addEventListener("click", () => {
         const varName = b.dataset.var;
@@ -5022,7 +5022,7 @@
       const reqCount = (schema.required || []).length;
       summary = `${schemaParams.length} 個參數 · <strong>${reqCount}</strong> 個必填`;
     }
-    const header = `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 8px;border-bottom:1px solid #e2e8f0;margin-bottom:4px;font-size:0.68rem;color:#64748b;">
+    const header = `<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 2px 8px;border-bottom:1px solid #e2e8f0;margin-bottom:4px;font-size:0.68rem;color:var(--text-muted);">
       <span>${summary}</span>
       <label style="cursor:pointer;display:inline-flex;align-items:center;gap:4px;user-select:none;">
         <input type="checkbox" ${isAdv ? "checked" : ""} onchange="window._toggleBlockParamsAdvanced(${block.id}, this.checked)" style="margin:0;" />
@@ -5039,18 +5039,18 @@
       const isReq = (schema?.required || []).includes(pName);
       const desc = pSchema?.description || "";
       const isEmpty = (pv.value === "" || pv.value == null) && pv.source !== "auto" && pv.source !== "previous_step";
-      const emptyClass = isReq && isEmpty ? 'style="border-color:#dc2626;background:#fef2f2;"' : "";
+      const emptyClass = isReq && isEmpty ? 'style="border-color:var(--color-error);background:var(--color-error-bg);"' : "";
       const removeBtn = !schemaParams.includes(pName)
         ? `<button title="移除" onclick="window._removeBlockParam(${block.id},'${_escHtml(pName)}')" style="border:none;background:transparent;color:#cbd5e1;cursor:pointer;font-size:0.75rem;padding:0 0 0 4px;">✕</button>`
         : "";
 
       pHtml += `<div class="wf-param-card" data-param="${pName}">
         <div style="display:flex;align-items:baseline;gap:4px;margin-bottom:4px;">
-          <label>${_escHtml(pName)}${isReq ? ' <span style="color:#dc2626;">*</span>' : ''}</label>
+          <label>${_escHtml(pName)}${isReq ? ' <span style="color:var(--color-error);">*</span>' : ''}</label>
           <span style="flex:1;"></span>
           ${removeBtn}
         </div>
-        ${desc ? `<div style="font-size:0.66rem;color:#94a3b8;margin-bottom:5px;line-height:1.4;">${_escHtml(desc)}</div>` : ""}
+        ${desc ? `<div style="font-size:0.66rem;color:var(--text-tertiary);margin-bottom:5px;line-height:1.4;">${_escHtml(desc)}</div>` : ""}
         ${isAdv
           ? _renderParamRowAdvanced(block, pName, pv, pSchema, wfVars)
           : _renderParamRowSimple(block, pName, pv, pSchema, wfVars, emptyClass)}
@@ -5058,7 +5058,7 @@
     });
 
     // Custom param add (still available but de-emphasized)
-    pHtml += `<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:0.7rem;color:#64748b;">+ 新增自訂參數</summary>
+    pHtml += `<details style="margin-top:10px;"><summary style="cursor:pointer;font-size:0.7rem;color:var(--text-muted);">+ 新增自訂參數</summary>
       <div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
         <input id="wfNewParamKey_${block.id}" style="flex:1;padding:4px 8px;border:1px solid #e5e7eb;border-radius:6px;font-size:0.72rem;" placeholder="參數名稱（英文）" />
         <button onclick="window._addBlockParam(${block.id})"

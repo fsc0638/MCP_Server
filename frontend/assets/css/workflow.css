@@ -775,7 +775,7 @@
 }
 .wf-editor-field textarea {
   min-height: 200px; resize: vertical;
-  font-family: 'Roboto Mono', 'Consolas', monospace; font-size: 0.72rem;
+  font-family: var(--font-mono); font-size: 0.72rem;
   line-height: 1.5;
 }
 
@@ -1177,7 +1177,7 @@
 }
 .wf-param-schema-hint code {
   background: #deeeff; border-radius: 3px; padding: 1px 4px;
-  font-size: 0.68rem; font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.68rem; font-family: var(--font-mono);
 }
 
 /* ── Workflow Card Delete Button ─────────────────────────────── */
@@ -1261,7 +1261,7 @@
 }
 .wf-scope-card-path {
   font-size: 0.7rem; color: var(--text-tertiary);
-  font-family: "SFMono-Regular", Consolas, monospace;
+  font-family: var(--font-mono);
   margin-bottom: 4px;
 }
 .wf-scope-card-desc {
