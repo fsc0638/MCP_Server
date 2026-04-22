@@ -815,6 +815,17 @@ class WorkflowExecutor:
                 logger.info(f"[WFExec] Block {bid} ({skill_name}): no params, bound accumulated_context → {fallback_key}")
             else:
                 logger.warning(f"[WFExec] Block {bid} ({skill_name}): no params, fallback to 'input'")
+
+        # ── Type coercion based on skill's parameter schema ──
+        # LLM-generated workflows often emit CSV strings for array-typed params
+        # ("BBC,CNN" for include_domains) or numeric strings for integer params.
+        # The downstream skill / external API then returns 422. Look up the
+        # skill's declared schema and coerce common mismatches before calling.
+        try:
+            block_params = self._coerce_params_to_schema(uma, skill_name, block_params)
+        except Exception as _coerce_err:
+            logger.debug(f"[WFExec] Param coercion skipped for {skill_name}: {_coerce_err}")
+
         logger.info(f"[WFExec] Block {bid} ({skill_name}): params={list(block_params.keys())}, model={block_model}")
 
         # ── Inject session context for schedule-manager & similar skills ──
@@ -1124,6 +1135,73 @@ class WorkflowExecutor:
                 result[param_name] = _interpolate(value) if isinstance(value, str) else (value or accumulated_context)
 
         return result
+
+    def _coerce_params_to_schema(self, uma, skill_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Coerce param values to match the skill's declared JSON schema types.
+
+        LLM-generated workflows often produce type-mismatched values. Rather
+        than failing the whole run, coerce the obvious cases so the skill
+        sees what it expects.
+
+        Supported coercions (string → other):
+          - array  : split on [,，、;；] and strip empties
+          - integer: int(value)
+          - number : float(value)
+          - boolean: "true"/"false"/"1"/"0"/"yes"/"no" → bool
+
+        Leaves non-string values and unknown types alone.
+        """
+        if not isinstance(params, dict) or not params:
+            return params
+
+        # Pull the skill's parameter schema (registry already has it parsed).
+        try:
+            entry = (uma.registry.skills or {}).get(skill_name) or {}
+            schema = ((entry.get("metadata") or {}).get("parameters") or {}).get("properties") or {}
+        except Exception:
+            return params
+        if not isinstance(schema, dict) or not schema:
+            return params
+
+        out = dict(params)
+        changed = []
+        for pname, pval in list(out.items()):
+            pdef = schema.get(pname)
+            if not isinstance(pdef, dict):
+                continue
+            ptype = pdef.get("type")
+
+            # array: string CSV → list
+            if ptype == "array" and isinstance(pval, str):
+                parts = [p.strip() for p in re.split(r"[,，、;；]+", pval) if p.strip()]
+                out[pname] = parts
+                changed.append(f"{pname}:str→array({len(parts)})")
+                continue
+
+            # integer / number / boolean from string
+            if isinstance(pval, str) and pval.strip() != "":
+                s = pval.strip()
+                try:
+                    if ptype == "integer":
+                        out[pname] = int(float(s))  # tolerate "3.0"
+                        changed.append(f"{pname}:str→int")
+                    elif ptype == "number":
+                        out[pname] = float(s)
+                        changed.append(f"{pname}:str→number")
+                    elif ptype == "boolean":
+                        low = s.lower()
+                        if low in ("true", "1", "yes", "y", "on"):
+                            out[pname] = True
+                            changed.append(f"{pname}:str→bool")
+                        elif low in ("false", "0", "no", "n", "off"):
+                            out[pname] = False
+                            changed.append(f"{pname}:str→bool")
+                except (ValueError, TypeError):
+                    pass  # leave as string; skill will surface error
+
+        if changed:
+            logger.info(f"[WFExec] Coerced params for {skill_name}: {', '.join(changed)}")
+        return out
 
 
 # ── Singleton ──

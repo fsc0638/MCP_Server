@@ -1179,10 +1179,28 @@ trigger 欄位**，系統會自動接 APScheduler 觸發整個工作流：
   需要即時性 → 加「今日」「最新」「本週」等時效詞
 - max_results：用使用者指定的數量，沒指定預設 5；Tavily 可能回少於該數
 - search_depth="advanced" 回傳的內文更豐富（但比較慢），適合要「詳細摘要」的任務
-- include_domains 可指定可信來源，例：
-    台灣財經：['cnyes.com','ltn.com.tw','money.udn.com','wealth.com.tw']
-    台灣新聞：['udn.com','ltn.com.tw','cna.com.tw','ltn.com.tw']
-  若任務提到「台灣」「本地」可用此機制過濾雜訊"""
+- **include_domains 規則（超常出錯，務必注意）**：
+  a. 型別是**陣列**（JSON array of strings），**不可**寫成 CSV 字串
+     ✗ "include_domains": "BBC,CNN"                 ← Tavily 會回 422
+     ✓ "include_domains": ["bbc.com", "cnn.com"]
+  b. 內容必須是**實際網域名稱**（domain name），**不是**站名縮寫
+     ✗ ["BBC", "CNN", "聯合報"]                     ← 不是 domain
+     ✓ ["bbc.com", "cnn.com", "udn.com"]
+  c. 使用者若只說「BBC、CNN」，你要自行翻成正確 domain：
+     BBC→bbc.com、CNN→cnn.com、NYT→nytimes.com、Reuters→reuters.com、
+     BBC 中文→bbc.com/zhongwen、日經→nikkei.com
+  d. 常用清單：
+     國際新聞：['reuters.com','bbc.com','cnn.com','nytimes.com','bloomberg.com']
+     台灣財經：['cnyes.com','ltn.com.tw','money.udn.com','wealth.com.tw']
+     台灣新聞：['udn.com','ltn.com.tw','cna.com.tw','chinatimes.com']
+  e. 若任務沒指定來源，**請直接省略此參數**（傳空或不寫），不要硬塞預設
+- 不確定使用者意圖時，傾向放進 `input_map` 為 fixed 值（LLM 已知當下值），
+  而不是放進 variables.user_input（會導致執行時使用者還要再輸入一次 domain）
+
+【陣列 / 整數型參數 — 通用規則】
+- 看技能 params 標註的 type，如果是 `array`，input_map 的值一定寫成 JSON 陣列
+- 整數 / 布林同理：max_results 標 integer → 寫 5 不要寫 "5"；include_raw_content 標 boolean → 寫 true 不要寫 "true"
+- 後端有型別強制轉換（CSV→array、"5"→5），但仍請你一次寫對，減少錯誤"""
 
     return [
         {"role": "system", "content": system_text},
