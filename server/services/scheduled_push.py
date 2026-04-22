@@ -1099,6 +1099,8 @@ class ScheduledPushService:
         # Map day_of_week strings
         dow_map = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
+        _total_tasks = 0
+        _fired_count = 0
         for config_file in self.schedules_dir.glob("*.json"):
             # Defensive: skip files with empty stem (e.g. ".json") — indicates
             # a skill was called without SESSION_ID set. Safer to drop the file
@@ -1120,7 +1122,9 @@ class ScheduledPushService:
                 continue
 
             for task in config.get("tasks", []):
+                _total_tasks += 1
                 if not task.get("enabled", True):
+                    logger.debug(f"[ScheduledPush] Skip '{task.get('name')}' — disabled")
                     continue
 
                 cron = task.get("cron_parsed", {})
@@ -1146,13 +1150,18 @@ class ScheduledPushService:
                     # minute-precision drift / server-restart race conditions
                     # that would otherwise cause the task to miss its window.
                     if task.get("last_run"):
-                        continue  # already fired
+                        logger.debug(f"[ScheduledPush] Skip '{task.get('name')}' — already fired once")
+                        continue
                     try:
                         target = datetime.fromisoformat(cron["target_time"])
                     except (ValueError, TypeError):
+                        logger.warning(f"[ScheduledPush] Skip '{task.get('name')}' — invalid target_time: {cron.get('target_time')}")
                         continue
                     if now < target:
+                        _wait = (target - now).total_seconds()
+                        logger.debug(f"[ScheduledPush] Skip '{task.get('name')}' — waits {int(_wait)}s more (target {target})")
                         continue
+                    logger.info(f"[ScheduledPush] One-shot due: '{task.get('name')}' target={target} now={now}")
                 else:
                     task_hour = cron.get("hour")
                     task_minute = cron.get("minute", 0)
@@ -1204,6 +1213,7 @@ class ScheduledPushService:
                     # Push to LINE
                     push_fn(chat_id, full_message)
                     logger.info(f"[ScheduledPush] Pushed '{task['name']}' to {chat_id}")
+                    _fired_count += 1
 
                     # Update last_run
                     task["last_run"] = now.isoformat()
@@ -1217,6 +1227,14 @@ class ScheduledPushService:
 
                 except Exception as e:
                     logger.error(f"[ScheduledPush] Task '{task['name']}' failed: {e}")
+
+        # One summary line per tick so we can see the scheduler is actually
+        # running when "nothing happened". Unconditional — even with 0 tasks
+        # we still want to see proof of life.
+        logger.info(
+            f"[ScheduledPush] Tick: scanned {_total_tasks} task(s), fired {_fired_count} "
+            f"at {now.strftime('%H:%M:%S')}"
+        )
 
     # ─── Natural Language Task Creation (via LLM) ────────────────────────────
 

@@ -114,6 +114,7 @@ def _scheduled_line_uploads_cleanup():
 
 def _scheduled_push_tick():
     """Scheduled job: check and execute due push tasks (every minute)."""
+    logger.debug("[Scheduler] push tick fired")
     try:
         from server.services.scheduled_push import ScheduledPushService
         from server.integrations.line_connector import _get_line_components, _send_status_push
