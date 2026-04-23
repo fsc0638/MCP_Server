@@ -305,7 +305,120 @@ class WorkflowExecutor:
     _MAX_STACK_DEPTH = 5  # matches integrated report §4 recommendation
 
     def __init__(self):
-        pass
+        # Lazy adapter cache for semantic-skill LLM calls — keyed by model
+        # so different blocks in the same workflow can use different models
+        # without re-initializing a client each time.
+        self._adapter_cache: Dict[str, Any] = {}
+
+    def _get_adapter(self, model: str = "") -> Optional[Any]:
+        """Return a cached OpenAI adapter for the given model, or None if
+        OPENAI_API_KEY is missing. Adapter's token-tracking path fires
+        automatically on every call, so semantic skill usage flows into the
+        analytics pipeline with zero extra wiring here."""
+        key = model or "default"
+        if key in self._adapter_cache:
+            return self._adapter_cache[key]
+        try:
+            from server.adapters.openai_adapter import OpenAIAdapter
+            # UMA isn't required for pure-chat invocation (no tool calls)
+            adapter = OpenAIAdapter(uma=None, model=model or None)
+            if not adapter.is_available:
+                return None
+            self._adapter_cache[key] = adapter
+            return adapter
+        except Exception as e:
+            logger.debug(f"[WFExec] Adapter init failed for model={model!r}: {e}")
+            return None
+
+    async def _invoke_semantic_skill(
+        self,
+        skill_name: str,
+        guide: str,
+        user_text: str,
+        model: str,
+        user_context: Optional[dict],
+    ) -> Dict[str, Any]:
+        """Run a semantic / code-mode skill by delegating to the LLM adapter.
+
+        Previously, when WorkflowExecutor hit a semantic skill (like
+        mcp-txt-llm-analyzer that has no scripts/main.py), uma.execute_tool_call
+        would just return a knowledge_guide dict and the executor would treat
+        the raw SKILL.md text as the block's output. The LLM was never invoked,
+        so the skill effectively did nothing useful inside a workflow — and
+        no tokens were ever spent (nothing to track).
+
+        This method closes the gap by taking the guide and the resolved block
+        input, composing them as system+user messages, and invoking the
+        adapter's underlying OpenAI client directly. Token usage is recorded
+        to TokenTracker with the actual skill name (not "(chat)") and tier
+        "workflow-semantic" so the dashboard can distinguish it from chat
+        traffic.
+
+        Returns {"content": <assistant_text>, "usage": {input/output/total}}.
+        Empty content signals failure; caller should fall back gracefully.
+        """
+        adapter = self._get_adapter(model)
+        if adapter is None:
+            return {"content": "", "usage": {}}
+
+        messages = [
+            {"role": "system", "content": guide or ""},
+            {"role": "user",   "content": user_text or ""},
+        ]
+
+        t0 = time.time()
+        try:
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(
+                None,
+                lambda: adapter.client.chat.completions.create(
+                    model=adapter.model,
+                    messages=messages,
+                    temperature=0.3,
+                ),
+            )
+        except Exception as e:
+            logger.warning(f"[WFExec] Semantic LLM call failed for {skill_name}: {e}")
+            return {"content": "", "usage": {}}
+
+        content = ""
+        usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        try:
+            content = resp.choices[0].message.content or ""
+            if getattr(resp, "usage", None):
+                usage = {
+                    "input_tokens": getattr(resp.usage, "prompt_tokens", 0) or 0,
+                    "output_tokens": getattr(resp.usage, "completion_tokens", 0) or 0,
+                    "total_tokens": getattr(resp.usage, "total_tokens", 0) or 0,
+                }
+        except Exception as e:
+            logger.debug(f"[WFExec] Response parse issue for {skill_name}: {e}")
+
+        # Record with proper skill label + real tokens
+        try:
+            from server.services.token_tracker import TokenTracker
+            uc = user_context or {}
+            pr = os.getenv("PROJECT_ROOT", str(Path(__file__).resolve().parents[2]))
+            tracker = TokenTracker(pr)
+            tracker.record_usage(
+                session_id=uc.get("session_id", ""),
+                user_id=uc.get("user_id") or uc.get("employee_id", ""),
+                chat_type=uc.get("chat_type", "workflow"),
+                chat_id=uc.get("chat_id", ""),
+                skill=skill_name,
+                model=adapter.model,
+                tier="workflow-semantic",
+                input_tokens=usage["input_tokens"],
+                output_tokens=usage["output_tokens"],
+                total_tokens=usage["total_tokens"],
+                skill_internal_tokens=0,
+                duration_ms=int((time.time() - t0) * 1000),
+                status="success",
+            )
+        except Exception as e:
+            logger.debug(f"[WFExec] Token record failed for {skill_name}: {e}")
+
+        return {"content": content, "usage": usage}
 
     async def execute(
         self,
@@ -876,7 +989,53 @@ class WorkflowExecutor:
                         status="error",
                     )
                     raise Exception(f"Skill error: {result.get('message', result.get('error', 'unknown'))}")
-                if isinstance(result, dict):
+
+                # ── Semantic / code-mode skills: invoke LLM with the guide ──
+                # When UMA returns a knowledge_guide (execution_mode in
+                # {semantic, code}), the skill expects the LLM to actually
+                # process it. Previously the executor just took the guide
+                # text as the block's "output" — wasting the step. Now we
+                # pipe guide→system, resolved input→user through the adapter,
+                # so the skill does real work AND token usage gets tracked
+                # automatically with the correct skill label.
+                _did_semantic_call = False
+                if (
+                    isinstance(result, dict)
+                    and result.get("type") == "knowledge_guide"
+                    and result.get("execution_mode") in ("semantic", "code")
+                ):
+                    guide = result.get("guide", "") or ""
+                    # Compose the user-side payload: prefer accumulated upstream
+                    # context (string from previous block), fall back to
+                    # serialized block params so the LLM sees the structured
+                    # inputs it was configured with.
+                    user_text = accumulated_context or ""
+                    if not user_text.strip():
+                        try:
+                            user_text = json.dumps(block_params, ensure_ascii=False, indent=2)
+                        except Exception:
+                            user_text = str(block_params)
+
+                    llm_result = await self._invoke_semantic_skill(
+                        skill_name=skill_name,
+                        guide=guide,
+                        user_text=user_text,
+                        model=block_model or "",
+                        user_context=user_context,
+                    )
+                    if llm_result.get("content"):
+                        output_text = llm_result["content"]
+                        _did_semantic_call = True
+                        logger.info(
+                            f"[WFExec] Block {bid} ({skill_name}): semantic LLM call "
+                            f"in={llm_result['usage'].get('input_tokens',0)} "
+                            f"out={llm_result['usage'].get('output_tokens',0)} "
+                            f"total={llm_result['usage'].get('total_tokens',0)}"
+                        )
+                    else:
+                        # LLM failed — fall back to raw guide (better than crashing)
+                        output_text = guide
+                elif isinstance(result, dict):
                     output_text = (
                         result.get("output") or result.get("guide") or result.get("content")
                         or json.dumps(result, ensure_ascii=False)
@@ -885,20 +1044,21 @@ class WorkflowExecutor:
                     output_text = str(result)
 
                 # ── Record skill invocation to TokenTracker ──
-                # Workflow executor bypasses the chat adapter entirely, so skill
-                # calls made from within a workflow were completely invisible to
-                # the analytics pipeline (token_usage.jsonl). This closes that
-                # gap so by_skill / by_user / daily.skill_calls reflect workflow
-                # usage alongside chat usage. Token counts default to 0 unless
-                # the skill returned a _usage field (future contract extension).
-                self._record_skill_usage(
-                    skill_name=skill_name,
-                    user_context=user_context,
-                    model=block_model,
-                    result=result,
-                    duration_ms=int(time.time() * 1000) - _block_start_ms,
-                    status="success",
-                )
+                # For semantic blocks we already recorded real token usage in
+                # _invoke_semantic_skill (with the proper skill label), so
+                # skip the placeholder record here to avoid double-counting.
+                # Executable blocks (subprocess) still go through here with
+                # token counts of 0 — correct, since executable skills don't
+                # report internal LLM usage yet.
+                if not _did_semantic_call:
+                    self._record_skill_usage(
+                        skill_name=skill_name,
+                        user_context=user_context,
+                        model=block_model,
+                        result=result,
+                        duration_ms=int(time.time() * 1000) - _block_start_ms,
+                        status="success",
+                    )
 
                 return {
                     "entry": {
