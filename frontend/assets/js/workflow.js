@@ -1849,7 +1849,11 @@
         }
         // "discard" falls through and exits without saving
       }
-      body.classList.remove("wf-mode");
+      // Stay in wf-mode — we're going BACK TO LANDING, not to chat. The
+      // CSS rules that hide chat/sidebar content key on this class, so
+      // leaving it in place is what keeps the workflow landing page
+      // free of bleed-through from the chat view underneath. (Only the
+      // _landingOpen branch above actually exits to chat and removes it.)
       body.classList.remove("wf-readonly");
       _skillEditMode = false;
       ["wfSkillEditArea", "wfCanvasArea", "wfPaletteWrap", "wfDashboardWrap"].forEach(id => {
