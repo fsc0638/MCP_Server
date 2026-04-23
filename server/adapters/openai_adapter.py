@@ -661,10 +661,23 @@ class OpenAIAdapter:
         except Exception as e:
             err_str = str(e)
             logger.error(f"OpenAI chat error: {e}")
-            if "Rate limit reached" in err_str or "rate_limit" in err_str.lower():
+            _low = err_str.lower()
+            # Quota / billing — money ran out, 30-second retry won't help.
+            # Distinguish from rate-limit (temporary, worth retrying).
+            if "insufficient_quota" in _low or "exceeded your current quota" in _low or "billing" in _low:
+                yield {"status": "error", "message": (
+                    "💳 OpenAI API 配額已用完或帳單異常，暫時無法處理。\n"
+                    "請聯繫系統管理員檢查 OpenAI 帳戶餘額與計費狀態 "
+                    "(https://platform.openai.com/account/billing)。"
+                )}
+            elif "Rate limit reached" in err_str or "rate_limit" in _low:
                 yield {"status": "error", "message": "⚠️ OpenAI API 目前流量已滿，請稍候 30 秒後再試一次。"}
             elif any(code in err_str for code in ["500", "502", "503", "server_error", "overloaded"]):
                 yield {"status": "error", "message": "⚠️ AI 服務暫時忙碌，請稍候再試一次。"}
+            elif "invalid_api_key" in _low or "incorrect api key" in _low or "401" in err_str:
+                yield {"status": "error", "message": (
+                    "🔑 OpenAI API Key 無效或未設定，請聯繫系統管理員檢查 .env 中的 OPENAI_API_KEY。"
+                )}
             else:
                 yield {"status": "error", "message": f"⚠️ 處理時發生錯誤，請稍後再試。\n(技術細節：{err_str[:120]})"}
 
@@ -753,7 +766,18 @@ class OpenAIAdapter:
         except Exception as e:
             err_str = str(e)
             logger.error(f"OpenAI simple_chat error: {e}")
-            if "Rate limit reached" in err_str or "rate_limit" in err_str.lower():
+            _low = err_str.lower()
+            if "insufficient_quota" in _low or "exceeded your current quota" in _low or "billing" in _low:
+                yield {"status": "error", "message": (
+                    "💳 OpenAI API 配額已用完或帳單異常，暫時無法處理。\n"
+                    "請聯繫系統管理員檢查 OpenAI 帳戶餘額與計費狀態 "
+                    "(https://platform.openai.com/account/billing)。"
+                )}
+            elif "Rate limit reached" in err_str or "rate_limit" in _low:
                 yield {"status": "error", "message": "⚠️ OpenAI API 目前流量已滿，請稍候 30 秒後再試一次。"}
+            elif "invalid_api_key" in _low or "incorrect api key" in _low or "401" in err_str:
+                yield {"status": "error", "message": (
+                    "🔑 OpenAI API Key 無效或未設定，請聯繫系統管理員檢查 .env 中的 OPENAI_API_KEY。"
+                )}
             else:
                 yield {"status": "error", "message": err_str}
