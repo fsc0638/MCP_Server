@@ -1876,6 +1876,12 @@
       // styling) so the button lights up regardless of which location hosts
       // it — the button was moved to the sidebar 2026-04-23.
       if (btn) btn.classList.add("active", "is-active");
+      // Also flip the body into wf-mode so the CSS rules that hide chat
+      // content ( .page-chat-main > * ) fire immediately. Otherwise the
+      // chat conversation stays rendered behind the landing overlay and
+      // bleeds through when entering skill-edit mode from openSkillManager
+      // (which closes the overlay but relies on wf-mode to hide chat).
+      body.classList.add("wf-mode");
       _showWorkflowLanding();
     }
   }
@@ -5164,6 +5170,33 @@
   // ── Utility ───────────────────────────────────────────────────
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+  // ── Sidebar entry: exit workflow/skill-edit mode back to chat ────
+  // Wired on the 「AI Chat」 sidebar button (added 2026-04-23). The button
+  // used to be a no-op placeholder (is-active + no onclick); now it's the
+  // canonical way to return to the chat view from anywhere inside
+  // workflow / skill-edit mode. Safe to click when already in chat view
+  // (no-op short-circuit).
+  async function backToChat() {
+    const body = document.querySelector(".page-chat-body");
+    if (!body) return;
+    const inWfMode = body.classList.contains("wf-mode");
+    const overlay = document.getElementById("wfLandingOverlay");
+    const landingOpen = overlay && overlay.classList.contains("open");
+    // If we're in any wf-* state (canvas, skill-edit, or landing), drive
+    // the existing toggle to unwind it. If skill-edit is on top, flip it
+    // off first so toggleWorkflowView sees a clean state.
+    if (_skillEditMode) {
+      await toggleSkillEditMode();  // exit skill edit
+    }
+    if (body.classList.contains("wf-mode") || landingOpen) {
+      await toggleWorkflowView();   // exit wf-mode / close landing
+    }
+    // Highlight AI Chat, drop other sidebar highlights.
+    document.querySelectorAll(".page-chat-primary-nav-btn").forEach(b => b.classList.remove("is-active"));
+    const ai = document.getElementById("btnAiChat");
+    if (ai) ai.classList.add("is-active");
+  }
+
   // ── Sidebar entry: open skill-editor directly ───────────────────
   // Called from chat.html's 「技能管理」 sidebar button (added 2026-04-23).
   // Previously the skill editor was only reachable via the workflow
@@ -5187,12 +5220,28 @@
     if (!_skillEditMode) {
       await toggleSkillEditMode();
     }
+    // Sidebar highlight: skill-manager button on, others off
+    document.querySelectorAll(".page-chat-primary-nav-btn").forEach(b => b.classList.remove("is-active"));
+    const sm = document.getElementById("btnSkillManager");
+    if (sm) sm.classList.add("is-active");
+  }
+
+  // Sidebar highlight hook for 設計工作流 — wraps toggleWorkflowView so
+  // the button lights up on entry and AI Chat dims. The original function
+  // already handles the body/landing state; this just cleans up nav state.
+  async function onWorkflowDesignerClick() {
+    document.querySelectorAll(".page-chat-primary-nav-btn").forEach(b => b.classList.remove("is-active"));
+    const wd = document.getElementById("btnWorkflowDesigner");
+    if (wd) wd.classList.add("is-active");
+    await toggleWorkflowView();
   }
 
   // Expose to global
   window.toggleWorkflowView = toggleWorkflowView;
   window.toggleSkillEditMode = toggleSkillEditMode;
   window.openSkillManager = openSkillManager;
+  window.backToChat = backToChat;
+  window.onWorkflowDesignerClick = onWorkflowDesignerClick;
   window.closeWfPropPanel = closeWfPropPanel;
 
   // Auto-open workflow landing or specific workflow from query params

@@ -86,7 +86,7 @@
         <span class="page-chat-primary-nav-kicker">主選單</span>
       </div>
       <nav class="page-chat-primary-nav-menu">
-        <button class="page-chat-primary-nav-btn is-active" type="button" aria-current="page" aria-label="AI Chat">
+        <button id="btnAiChat" class="page-chat-primary-nav-btn is-active" type="button" onclick="window.backToChat && window.backToChat()" aria-current="page" aria-label="AI Chat">
           <span class="page-chat-primary-nav-icon" aria-hidden="true">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>
@@ -125,7 +125,7 @@
           </span>
           <span class="page-chat-primary-nav-label">技能管理</span>
         </button>
-        <button class="page-chat-primary-nav-btn" type="button" id="btnWorkflowDesigner" onclick="toggleWorkflowView()" aria-label="設計工作流">
+        <button class="page-chat-primary-nav-btn" type="button" id="btnWorkflowDesigner" onclick="window.onWorkflowDesignerClick && window.onWorkflowDesignerClick()" aria-label="設計工作流">
           <span class="page-chat-primary-nav-icon" aria-hidden="true">
             <!-- Grid of nodes icon — same glyph that used to live on the top bar -->
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
