@@ -771,6 +771,13 @@ async def workflow_stats(live: bool = True):
                 inp = r.get("input_tokens", 0)
                 out = r.get("output_tokens", 0)
                 tot = r.get("total_tokens", 0)
+                # skill_internal_tokens holds the "hidden" tokens a skill
+                # burned internally (e.g. mcp-meeting-analyzer makes 2 LLM
+                # calls inside its subprocess; those show up here via the
+                # skill's _usage → WorkflowExecutor → tracker pipeline).
+                # Adding it to tot gives a true total cost picture.
+                si = r.get("skill_internal_tokens", 0)
+                effective_tot = tot + si
                 skill = r.get("skill", "")
                 day = r.get("ts", "")[:10]
                 month = day[:7] if day else ""
@@ -778,7 +785,7 @@ async def workflow_stats(live: bool = True):
 
                 total["input_tokens"] += inp
                 total["output_tokens"] += out
-                total["total_tokens"] += tot
+                total["total_tokens"] += effective_tot
                 if is_chat:
                     total["chat_calls"] += 1
                 elif skill:
@@ -788,12 +795,12 @@ async def workflow_stats(live: bool = True):
                     if skill not in by_skill:
                         by_skill[skill] = {"calls": 0, "total_tokens": 0}
                     by_skill[skill]["calls"] += 1
-                    by_skill[skill]["total_tokens"] += tot
+                    by_skill[skill]["total_tokens"] += effective_tot
 
                 if day:
                     if day not in daily:
                         daily[day] = {"total_tokens": 0, "skill_calls": 0, "chat_calls": 0}
-                    daily[day]["total_tokens"] += tot
+                    daily[day]["total_tokens"] += effective_tot
                     if is_chat:
                         daily[day]["chat_calls"] += 1
                     elif skill:
@@ -804,7 +811,7 @@ async def workflow_stats(live: bool = True):
                         monthly[month] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "skill_calls": 0, "chat_calls": 0}
                     monthly[month]["input_tokens"] += inp
                     monthly[month]["output_tokens"] += out
-                    monthly[month]["total_tokens"] += tot
+                    monthly[month]["total_tokens"] += effective_tot
                     if is_chat:
                         monthly[month]["chat_calls"] += 1
                     elif skill:
