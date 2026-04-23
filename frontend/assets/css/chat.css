@@ -188,6 +188,20 @@ html, body { height: 100%; overflow: hidden; }
   overflow-y: auto;
 }
 
+/* Spacer inside the nav menu — flex-grows to push whatever comes after
+   it (the 管理後台 admin button) down to the bottom of the rail. Added
+   2026-04-23 when the admin entry moved from the topbar into the
+   main menu. */
+.page-chat-primary-nav-spacer {
+  flex: 1 1 auto;
+  min-height: 16px;
+}
+/* Subtle visual separation between the main apps and the admin entry. */
+.page-chat-primary-nav-btn--admin {
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+}
+
 .page-chat-primary-nav-btn {
   width: 100%;
   min-height: 78px;

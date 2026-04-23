@@ -29,35 +29,9 @@
           <span class="sub">凱衛資訊 AI 智能平台</span>
         </div>
       </a>
-      <div class="page-chat-topbar-divider" aria-hidden="true"></div>
-      <button class="page-chat-workspace-tag" aria-label="切換工作區">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
-          <polyline points="9 22 9 12 15 12 15 22"/>
-        </svg>
-        資訊處工作區
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
-      </button>
-      <!-- 設計工作流 moved to left sidebar (requested 2026-04-23);
-           管理後台 now takes its former slot just right of 資訊處工作區. -->
-      <a href="admin.html" class="page-chat-workspace-tag" id="btnAdminPanel" style="text-decoration:none;display:none;" aria-label="管理後台">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4"/>
-        </svg>
-        管理後台
-      </a>
-      <script>
-        // Show admin button only for admin users
-        (function(){
-          try {
-            var u = JSON.parse(sessionStorage.getItem('kway_user') || '{}');
-            if (u.role === 'admin') {
-              var btn = document.getElementById('btnAdminPanel');
-              if (btn) btn.style.display = '';
-            }
-          } catch(_){}
-        })();
-      </script>
+      <!-- 資訊處工作區 removed 2026-04-23 (redundant after the sidebar
+           became the canonical navigation layer); 管理後台 now lives at
+           the bottom of the main menu, gated to admin role. -->
     </div>
 
     <div class="page-chat-topbar-right">
@@ -148,6 +122,33 @@
           </span>
           <span class="page-chat-primary-nav-label">資源管理</span>
         </button>
+
+        <!-- Spacer pushes the admin button to the bottom of the rail
+             (requested 2026-04-23). Hidden by default; JS reveals it
+             when sessionStorage kway_user.role === "admin". -->
+        <div class="page-chat-primary-nav-spacer" aria-hidden="true"></div>
+        <a class="page-chat-primary-nav-btn page-chat-primary-nav-btn--admin" id="btnAdminPanelSidebar" href="admin.html" style="display:none;text-decoration:none;" aria-label="管理後台">
+          <span class="page-chat-primary-nav-icon" aria-hidden="true">
+            <!-- Gear icon for admin / back-office -->
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </span>
+          <span class="page-chat-primary-nav-label">管理後台</span>
+        </a>
+        <script>
+          // Reveal admin link only for admin users
+          (function(){
+            try {
+              var u = JSON.parse(sessionStorage.getItem('kway_user') || '{}');
+              if (u.role === 'admin') {
+                var el = document.getElementById('btnAdminPanelSidebar');
+                if (el) el.style.display = '';
+              }
+            } catch(_){}
+          })();
+        </script>
       </nav>
     </aside>
 

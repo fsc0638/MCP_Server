@@ -30,17 +30,9 @@
         <span class="sub">凱衛資訊 AI 智能平台</span>
       </div>
     </a>
-    <div class="page-chat-topbar-divider" aria-hidden="true"></div>
-    <a href="chat.html" class="page-chat-workspace-tag" style="text-decoration:none;" aria-label="資訊處工作區">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-      資訊處工作區
-    </a>
-    <!-- 設計工作流 moved to chat.html's left sidebar 2026-04-23;
-         removed here since the sidebar is now the single entry point. -->
-    <span class="page-chat-workspace-tag active" style="pointer-events:none;">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4"/></svg>
-      管理後台
-    </span>
+    <!-- 2026-04-23: removed both 資訊處工作區 and 管理後台 top-bar tags.
+         Navigation now lives entirely in the left main menu rail —
+         管理後台 pinned at the bottom of .admin-primary-nav below. -->
   </div>
   <div class="page-chat-topbar-right">
     <button class="page-chat-topbar-icon-btn" aria-label="通知">
@@ -113,6 +105,19 @@
         </span>
         <span class="page-chat-primary-nav-label">資源管理</span>
       </button>
+
+      <!-- Spacer pushes 管理後台 to the bottom; this entry is marked
+           is-active because we're already on the admin page. -->
+      <div class="page-chat-primary-nav-spacer" aria-hidden="true"></div>
+      <span class="page-chat-primary-nav-btn page-chat-primary-nav-btn--admin is-active" aria-label="管理後台" aria-current="page">
+        <span class="page-chat-primary-nav-icon" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </span>
+        <span class="page-chat-primary-nav-label">管理後台</span>
+      </span>
     </nav>
   </aside>
 
