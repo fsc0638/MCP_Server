@@ -757,6 +757,13 @@ def _extract_file_content(file_path: str) -> tuple:
             import pandas as pd
             df = pd.read_csv(file_path)
             text = df.to_markdown(index=False)
+        elif lower.endswith(('.m4a', '.mp3', '.wav', '.aac', '.flac', '.ogg',
+                             '.opus', '.webm', '.mp4', '.avi', '.mov', '.mkv',
+                             '.wmv', '.png', '.jpg', '.jpeg', '.gif', '.bmp',
+                             '.tiff', '.svg', '.ico', '.zip', '.rar', '.7z',
+                             '.tar', '.gz', '.exe', '.dll', '.bin', '.dat')):
+            # 二進位/媒體檔案不進行文字提取，避免亂碼進入 LLM
+            return "", f"二進位檔案格式 ({os.path.splitext(file_path)[1]})，不支援文字提取"
         else:
             # .txt, .md, .log, .json, .py, .js, .xml, etc.
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
@@ -1465,11 +1472,27 @@ def _process_line_message(
                             extracted_text, extract_err = _extract_file_content(attached_file_path)
 
                             if extract_err:
-                                user_input = (
-                                    f"[系統通知：使用者上傳了文件 {filename}，但伺服器無法提取內容。\n"
-                                    f"錯誤訊息：{extract_err}\n"
-                                    f"請告知使用者檔案可能已損壞、加密或格式不支援。]"
-                                )
+                                _audio_exts = ('.m4a', '.mp3', '.wav', '.aac', '.flac', '.ogg', '.opus', '.webm')
+                                _video_exts = ('.mp4', '.avi', '.mov', '.mkv', '.wmv')
+                                if filename.lower().endswith(_audio_exts):
+                                    user_input = (
+                                        f"[系統通知：使用者上傳了音訊檔案 {filename}。\n"
+                                        f"這是音訊格式，無法直接提取文字。\n"
+                                        f"請立即使用 mcp-transcribe 技能進行語音轉錄。\n"
+                                        f"file_path: {attached_file_path}]"
+                                    )
+                                elif filename.lower().endswith(_video_exts):
+                                    user_input = (
+                                        f"[系統通知：使用者上傳了影片檔案 {filename}。\n"
+                                        f"這是影片格式，無法直接提取文字。\n"
+                                        f"請告知使用者目前不支援影片轉錄。]"
+                                    )
+                                else:
+                                    user_input = (
+                                        f"[系統通知：使用者上傳了文件 {filename}，但伺服器無法提取內容。\n"
+                                        f"錯誤訊息：{extract_err}\n"
+                                        f"請告知使用者檔案可能已損壞、加密或格式不支援。]"
+                                    )
                             elif len(extracted_text) <= 15000:
                                 # Single-pass mode: full content fits in one message
                                 user_input = (
