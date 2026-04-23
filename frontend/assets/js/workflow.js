@@ -5179,17 +5179,23 @@
   async function backToChat() {
     const body = document.querySelector(".page-chat-body");
     if (!body) return;
-    const inWfMode = body.classList.contains("wf-mode");
-    const overlay = document.getElementById("wfLandingOverlay");
-    const landingOpen = overlay && overlay.classList.contains("open");
-    // If we're in any wf-* state (canvas, skill-edit, or landing), drive
-    // the existing toggle to unwind it. If skill-edit is on top, flip it
-    // off first so toggleWorkflowView sees a clean state.
+    // toggleWorkflowView has 3 branches:
+    //   canvas/skill-edit → goes BACK TO LANDING (not chat)
+    //   landing open      → closes landing, drops wf-mode → chat
+    //   nothing active    → opens landing (no-op here)
+    // So from skill-edit we need up to two calls: one exits to landing,
+    // next closes landing. Loop to stay robust against future state
+    // additions, bounded at 3 iterations as a safety net.
     if (_skillEditMode) {
-      await toggleSkillEditMode();  // exit skill edit
+      await toggleSkillEditMode();  // exit skill edit first
     }
-    if (body.classList.contains("wf-mode") || landingOpen) {
-      await toggleWorkflowView();   // exit wf-mode / close landing
+    for (let i = 0; i < 3; i++) {
+      const overlay = document.getElementById("wfLandingOverlay");
+      const stillWf =
+        body.classList.contains("wf-mode") ||
+        (overlay && overlay.classList.contains("open"));
+      if (!stillWf) break;
+      await toggleWorkflowView();
     }
     // Highlight AI Chat, drop other sidebar highlights.
     document.querySelectorAll(".page-chat-primary-nav-btn").forEach(b => b.classList.remove("is-active"));
