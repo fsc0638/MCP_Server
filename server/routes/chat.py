@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import AsyncGenerator, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Cookie
 from sse_starlette.sse import EventSourceResponse
 
 from server.dependencies.session import get_session_manager
@@ -144,17 +144,79 @@ def get_task(task_id: str):
 
 
 @router.post("/execute")
-def execute_tool(request: ExecuteRequest):
+def execute_tool(request: ExecuteRequest, mcp_session: str = Cookie(default="")):
+    """Execute a single skill.
+
+    Phase 1/2: Apply policy + audit. High-risk actions are paused for HitL approval.
+    """
+    from server.services.permissions import resolve_caller_context
+    from server.services.policy import authorize
+    from server.services.audit_logger import log_event
+
     uma = get_uma()
     skill = uma.registry.get_skill(request.skill_name)
     if not skill:
         raise HTTPException(status_code=404, detail=f"Skill '{request.skill_name}' not found")
+
+    # Basic env readiness gate (existing behavior)
     if not skill["metadata"].get("_env_ready", False):
         return {"status": "error", "message": f"Skill '{request.skill_name}' environment is not ready"}
+
+    # Resolve caller (None => guest)
+    caller_ctx = resolve_caller_context(mcp_session)
+    subject_id = (caller_ctx or {}).get("user_id") or "guest"
+
+    # For now, /execute is treated as low-risk skill execution.
+    # High-risk external writes will be triggered inside workflows (or later via explicit tool types).
+    decision = authorize(
+        subject_ctx=caller_ctx,
+        action="skill.execute",
+        resource_type="skill",
+        resource_id=request.skill_name,
+        context={},
+    )
+
+    if not decision.allow:
+        log_event(
+            correlation_id="exec",
+            subject_id=subject_id,
+            action="skill.execute",
+            resource_type="skill",
+            resource_id=request.skill_name,
+            decision="deny",
+            reason_code=decision.reason_code,
+            reason=decision.reason,
+            input_obj={"arguments": request.arguments},
+        )
+        raise HTTPException(status_code=403, detail=decision.reason or "Forbidden")
+
     try:
         result = uma.execute_tool_call(request.skill_name, request.arguments)
+        log_event(
+            correlation_id="exec",
+            subject_id=subject_id,
+            action="skill.execute",
+            resource_type="skill",
+            resource_id=request.skill_name,
+            decision="allow",
+            reason_code=decision.reason_code,
+            reason=decision.reason,
+            input_obj={"arguments": request.arguments},
+            output_obj={"result_type": type(result).__name__},
+        )
         return {"status": "success", "result": result}
     except Exception as exc:
+        log_event(
+            correlation_id="exec",
+            subject_id=subject_id,
+            action="skill.execute",
+            resource_type="skill",
+            resource_id=request.skill_name,
+            decision="error",
+            reason_code=exc.__class__.__name__,
+            reason=str(exc)[:200],
+            input_obj={"arguments": request.arguments},
+        )
         return {"status": "error", "message": str(exc)}
 
 

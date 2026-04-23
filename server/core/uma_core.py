@@ -216,7 +216,7 @@ class UMA:
 
         return content
 
-    def execute_tool_call(self, skill_name: str, arguments: str):
+    def execute_tool_call(self, skill_name: str, arguments: str, approved_for_run: Optional[str] = None):
         """
         Two-phase skill execution:
         1. LLM selects a skill based on name + description (lightweight listing).
@@ -229,6 +229,13 @@ class UMA:
         - semantic (no scripts): return SKILL.md guide + LLM processes; SKILL.md may instruct python-executor.
 
         Phase 3: risk_level: high → requires_approval gate.
+
+        Phase 2 HitL (option β): `approved_for_run` lets callers (typically
+        workflow_executor on resume) bypass the risk gate when this exact
+        (run_id, skill_name) pair has already been approved via the HitL
+        Approvals Center. Prevents the resume-loop where an approved skill
+        keeps returning requires_approval. See docs/CLAWCODING_INTEGRATION_NOTES.md
+        §10-1 HitL-RESUME-LOOP.
         """
         try:
             arg_dict = json.loads(arguments) if isinstance(arguments, str) else arguments
@@ -240,15 +247,39 @@ class UMA:
         if skill_data:
             meta = skill_data.get("metadata", {})
             if meta.get("risk_level", "").lower() == "high":
-                return {
-                    "status": "requires_approval",
-                    "tool_name": skill_name,
-                    "risk_description": meta.get(
-                        "risk_description",
-                        f"技能「{skill_name}」被標記為高風險操作，需要使用者授權後才可執行。"
-                    ),
-                    "pending_args": arg_dict,
-                }
+                # β: bypass if this run already has an approved approval for this skill
+                _bypass = False
+                if approved_for_run:
+                    try:
+                        from server.services.db import connect, init_db
+                        _conn = connect(); init_db(_conn)
+                        _row = _conn.execute(
+                            "SELECT 1 FROM approvals WHERE correlation_id=? AND action=? AND status='approved' LIMIT 1",
+                            (approved_for_run, skill_name),
+                        ).fetchone()
+                        _conn.close()
+                        _bypass = bool(_row)
+                        if _bypass:
+                            import logging as _logging
+                            _logging.getLogger("MCP_Server.UMA").info(
+                                f"[UMA HitL] Bypass gate for {skill_name} (approved in run {approved_for_run})"
+                            )
+                    except Exception as _db_err:
+                        import logging as _logging
+                        _logging.getLogger("MCP_Server.UMA").warning(
+                            f"[UMA HitL] approval-lookup failed, default to gate: {_db_err}"
+                        )
+                        _bypass = False
+                if not _bypass:
+                    return {
+                        "status": "requires_approval",
+                        "tool_name": skill_name,
+                        "risk_description": meta.get(
+                            "risk_description",
+                            f"技能「{skill_name}」被標記為高風險操作，需要使用者授權後才可執行。"
+                        ),
+                        "pending_args": arg_dict,
+                    }
 
         mode = self._detect_execution_mode(skill_name)
         # Resolve real on-disk directory (works across system/dept/personal scopes)

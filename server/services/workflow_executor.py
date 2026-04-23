@@ -596,6 +596,14 @@ class WorkflowExecutor:
         resolved_vars = self._resolve_variables(variables, user_input, user_context, user_inputs)
         logger.info(f"[WFExec] Resolved {len(resolved_vars)} variables")
 
+        # Phase 2 HitL Resume support: if this run_id already has successful
+        # checkpoints, skip the corresponding blocks. Used by workflow_resume
+        # endpoint after an approval is approved.
+        from server.services.workflow_checkpoint import get_run_block_status_map, upsert_block_run
+        _ck = get_run_block_status_map(run_id)
+        if _ck:
+            logger.info(f"[WFExec] Resume: {len(_ck)} checkpointed blocks ({sum(1 for v in _ck.values() if v=='success')} success)")
+
         # ── Step 2: Topological sort ──
         blocks = {b["id"]: b for b in blocks_data}
         indeg = {bid: 0 for bid in blocks}
@@ -675,6 +683,9 @@ class WorkflowExecutor:
             async def _runner(bid):
                 block = blocks[bid]
                 block_type = block.get("type", "")
+                # Phase 2 HitL Resume: skip blocks already checkpointed as success in this run
+                if _ck.get(bid) == "success":
+                    return {"entry": {"block_id": bid, "type": block_type, "status": "skipped", "reason": "checkpoint"}, "output_text": "", "should_stop": False}
                 # Control nodes — synthetic immediate completion
                 if block_type in ("start", "end", "branch"):
                     return {"entry": {"block_id": bid, "type": block_type, "status": "skipped"}, "output_text": "", "should_stop": False}
@@ -690,6 +701,9 @@ class WorkflowExecutor:
                     "on_error": on_error,
                     "max_retries": max_retries,
                     "preds_of": preds_of,
+                    # Phase 2 HitL: _execute_one_block_async needs these to create approvals
+                    "workflow_id": workflow_id,
+                    "run_id": run_id,
                 }
                 return await self._execute_one_block_async(bid, block, ctx)
 
@@ -715,6 +729,25 @@ class WorkflowExecutor:
                 entry = r.get("entry")
                 if entry:
                     results.append(entry)
+                    # Phase 2 HitL checkpoint — persist success / requires_approval
+                    # states so workflow_resume can pick up where we left off.
+                    # Keeps parity with ClawCoding original (no checkpoint for error
+                    # blocks, to allow retry on resume).
+                    _st = entry.get("status")
+                    if _st in ("success", "requires_approval"):
+                        try:
+                            upsert_block_run(
+                                run_id=run_id,
+                                workflow_id=workflow_id,
+                                block_id=bid,
+                                skill_name=entry.get("skill") or entry.get("type") or "",
+                                status=_st,
+                                output_preview=(r.get("output_text") or entry.get("output_preview") or "")[:300],
+                                resolved_vars=resolved_vars,
+                                accumulated_context=accumulated_context,
+                            )
+                        except Exception as _ck_err:
+                            logger.warning(f"[WFExec] Checkpoint write failed for block {bid}: {_ck_err}")
                 out_txt = r.get("output_text") or ""
                 if out_txt:
                     # Per-block output variable — downstream blocks reference
@@ -799,9 +832,14 @@ class WorkflowExecutor:
             )
 
         # Determine overall status based on step results
+        # Phase 2 HitL: requires_approval takes precedence over error/success;
+        # workflow is paused pending human decision.
+        _any_req = any(r.get("status") == "requires_approval" for r in results)
         _any_error = any(r.get("status") == "error" for r in results)
         _any_ok = any(r.get("status") == "success" for r in results)
-        if _any_error and _any_ok:
+        if _any_req:
+            overall_status = "requires_approval"
+        elif _any_error and _any_ok:
             overall_status = "partial"
         elif _any_error:
             overall_status = "error"
@@ -1095,10 +1133,89 @@ class WorkflowExecutor:
         _block_start_ms = int(time.time() * 1000)
         while retries <= (max_retries if block_on_error == "retry" else 0):
             try:
+                # Phase 2 HitL (option β): pass run_id so UMA can bypass the
+                # risk gate when this skill was already approved for this run.
+                # See uma_core.execute_tool_call docstring + §10-1.
+                _run_id_for_gate = ctx.get("run_id") or ""
                 result = await loop.run_in_executor(
                     None,
-                    lambda: uma.execute_tool_call(skill_name, json.dumps(block_params, ensure_ascii=False)),
+                    lambda: uma.execute_tool_call(
+                        skill_name,
+                        json.dumps(block_params, ensure_ascii=False),
+                        approved_for_run=_run_id_for_gate,
+                    ),
                 )
+                # ── Phase 2 HitL: skill self-reports requires_approval ──
+                # Skills marked risk_level=high short-circuit in UMA and return
+                # this status instead of running. Create an approval record
+                # with TTL 10 min and pause the workflow. The caller (wave
+                # loop) will write a checkpoint + honor should_stop.
+                # NOTE: Known limitation — resume path re-enters this branch
+                # (skill still returns requires_approval). See
+                # docs/CLAWCODING_INTEGRATION_NOTES.md §10-1 HitL-RESUME-LOOP.
+                if isinstance(result, dict) and result.get("status") == "requires_approval":
+                    from server.services.policy import authorize
+                    from server.services.approvals_service import create_approval
+                    from server.services.audit_logger import log_event
+
+                    _wf_id = ctx.get("workflow_id", "")
+                    _run_id = ctx.get("run_id", "")
+                    caller_ctx = user_context or {}
+                    subject_id = caller_ctx.get("user_id") or caller_ctx.get("employee_id") or "guest"
+
+                    dec = authorize(
+                        subject_ctx=caller_ctx,
+                        action="skill.requires_approval",
+                        resource_type="skill",
+                        resource_id=skill_name,
+                        context={"workflow_id": _wf_id, "block_id": bid},
+                    )
+                    approval_id = create_approval(
+                        correlation_id=_run_id,
+                        requested_by_subject_id=subject_id,
+                        action=skill_name,
+                        resource_type="workflow_block",
+                        resource_id=f"{_wf_id}:{bid}",
+                        request_summary=f"工作流 {_wf_id} 需要批准高風險技能：{skill_name}",
+                        payload={
+                            "workflow_id": _wf_id,
+                            "run_id": _run_id,
+                            "block_id": bid,
+                            "skill_name": skill_name,
+                            "pending_args": result.get("pending_args") or block_params,
+                            "user_input": ctx.get("user_input", ""),
+                            # Store originating chat session_id so workflow_resume
+                            # can append the completion message back to the user's
+                            # chat history. Without this the Web UI has no idea
+                            # the background resume finished.
+                            "session_id": (user_context or {}).get("session_id", ""),
+                        },
+                        ttl_seconds=600,
+                    )
+                    log_event(
+                        correlation_id=_run_id,
+                        subject_id=subject_id,
+                        action="approval.request",
+                        resource_type="approval",
+                        resource_id=approval_id,
+                        decision="allow",
+                        reason_code=dec.reason_code,
+                        reason=dec.reason,
+                        input_obj={"skill": skill_name, "block_id": bid},
+                    )
+                    logger.info(f"[WFExec] Block {bid} ({skill_name}) paused for approval: {approval_id}")
+                    return {
+                        "entry": {
+                            "block_id": bid, "type": block_type, "skill": skill_name,
+                            "model_used": block_model, "status": "requires_approval",
+                            "approval_id": approval_id,
+                            "risk_description": result.get("risk_description", ""),
+                            "output_preview": (result.get("risk_description") or "")[:300],
+                        },
+                        "output_text": result.get("risk_description", ""),
+                        "should_stop": True,
+                    }
+
                 if isinstance(result, dict) and result.get("status") == "error":
                     # Still record the failed call so admin dashboard sees it
                     self._record_skill_usage(

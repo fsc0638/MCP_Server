@@ -1586,6 +1586,13 @@
             }
             removeTyping(task.sessionId);
             showTaskBubble(task, true);
+            // Phase 2 HitL: if the workflow is paused awaiting approval, start
+            // polling session history so that when an admin approves/rejects
+            // in the 審核中心, the completion message written by
+            // workflow_resume / approvals.reject automatically renders here.
+            if (parsed.workflow_status === "requires_approval") {
+              _startApprovalPolling(task.sessionId, parsed.run_id || "");
+            }
             return task.text;
           }
           if (parsed.status === "cancelled") {
@@ -2254,4 +2261,93 @@
     window.loadConversationById(state.sessionId, true);
     syncComposerState();
   });
+
+  // ─────────────────────────────────────────────────────────────
+  // Phase 2 HitL: Approval-pending session polling
+  // ─────────────────────────────────────────────────────────────
+  // When chat_core reports workflow_status=requires_approval, we poll the
+  // session every 5s to pick up any NEW assistant message that
+  // workflow_resume / approvals.reject appends in the background (after
+  // admin approves/rejects in the 審核中心).
+  //
+  // Stops when:
+  //   - A new assistant message is detected and rendered
+  //   - 10 minutes pass (approval TTL)
+  //   - User switches away from the session (handled via state.sessionId)
+  //
+  // One poller per (sessionId, run_id) — if called twice with the same
+  // key, the earlier poll is cancelled first.
+
+  var _hitl_pollers = {};
+
+  async function _startApprovalPolling(sessionId, runId) {
+    if (!sessionId) return;
+    var key = sessionId + "|" + (runId || "");
+    // Cancel any prior poll for the same (session, run)
+    if (_hitl_pollers[key]) {
+      clearInterval(_hitl_pollers[key].timer);
+      delete _hitl_pollers[key];
+    }
+    // Snapshot current message count so we know what "new" means
+    var baselineCount = -1;
+    try {
+      var r0 = await fetch("/chat/session/" + encodeURIComponent(sessionId));
+      if (r0.ok) {
+        var d0 = await r0.json();
+        baselineCount = Array.isArray(d0.history) ? d0.history.length : 0;
+      }
+    } catch (_) { /* best-effort */ }
+    if (baselineCount < 0) baselineCount = 0;
+
+    var startedAt = Date.now();
+    var MAX_MS = 10 * 60 * 1000; // 10 min
+
+    async function tick() {
+      // Auto-stop if the user left this session
+      if (state && state.sessionId !== sessionId) {
+        clearInterval(_hitl_pollers[key].timer);
+        delete _hitl_pollers[key];
+        return;
+      }
+      // Timeout
+      if (Date.now() - startedAt > MAX_MS) {
+        clearInterval(_hitl_pollers[key].timer);
+        delete _hitl_pollers[key];
+        return;
+      }
+      try {
+        var r = await fetch("/chat/session/" + encodeURIComponent(sessionId));
+        if (!r.ok) return;
+        var d = await r.json();
+        var hist = Array.isArray(d.history) ? d.history : [];
+        if (hist.length > baselineCount) {
+          // New message(s) arrived — render only the newly-added suffix
+          var newMsgs = hist.slice(baselineCount);
+          for (var i = 0; i < newMsgs.length; i++) {
+            var m = newMsgs[i] || {};
+            if (m.role === "assistant" && m.content) {
+              renderMessage(sessionId, "assistant", m.content, m.timestamp || Date.now());
+            }
+          }
+          baselineCount = hist.length;
+          // Stop polling — workflow either finished or was rejected
+          clearInterval(_hitl_pollers[key].timer);
+          delete _hitl_pollers[key];
+          // Notify user with a toast too (in case they scrolled away)
+          try { showToast && showToast("工作流續跑已完成", "success"); } catch (_) {}
+        }
+      } catch (_) { /* keep trying */ }
+    }
+
+    // First tick immediately (covers very fast approvals), then every 5s
+    _hitl_pollers[key] = {
+      timer: setInterval(tick, 5000),
+      startedAt: startedAt,
+    };
+    // Fire one ASAP (race-safe: if no new msg yet, subsequent ticks will catch it)
+    setTimeout(tick, 500);
+  }
+
+  // Expose for debugging
+  window._hitl_pollers = _hitl_pollers;
 })();

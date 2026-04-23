@@ -31,6 +31,7 @@
     workflows: renderWorkflows,
     schedules: renderSchedules,
     tokens: renderTokens,
+    approvals: renderApprovals,
     users: renderUsers,
     settings: renderSettings,
   };
@@ -1866,6 +1867,351 @@
     });
 
     results.innerHTML = html || '<div class="admin-cmdk-empty">無搜尋結果</div>';
+  }
+
+  // ══════════════════════════════════════════════════════════
+  // Approvals Center (HitL)
+  // ══════════════════════════════════════════════════════════
+
+  async function renderApprovals() {
+    content.innerHTML = `
+      <h1 class="admin-page-title">審核中心</h1>
+      <p class="admin-page-desc">高風險操作（External Write）一律需人工批准（TTL 10 分鐘）</p>
+
+      <div class="page-chat-panel-tabs" style="margin:0 0 14px; background:transparent; padding:0;">
+        <button class="page-chat-panel-tab" id="apTabPending" onclick="_adminSetApprovalTab('pending')">待審核</button>
+        <button class="page-chat-panel-tab" id="apTabApproved" onclick="_adminSetApprovalTab('approved')">已批准</button>
+        <button class="page-chat-panel-tab" id="apTabRejected" onclick="_adminSetApprovalTab('rejected')">已拒絕</button>
+        <button class="page-chat-panel-tab" id="apTabExpired" onclick="_adminSetApprovalTab('expired')">已過期</button>
+      </div>
+
+      <div class="admin-toolbar">
+        <input class="admin-search" id="adminApprovalSearch" type="text" placeholder="搜尋摘要、Action、資源..." />
+        <button class="admin-btn" onclick="_adminReloadApprovals()">重新整理</button>
+        <div class="admin-toolbar-spacer"></div>
+        <span style="font-size:0.72rem;color:var(--text-tertiary);" id="adminApprovalCount"></span>
+      </div>
+
+      <div class="admin-table-wrap">
+        <table class="admin-table">
+          <thead><tr>
+            <th>狀態</th>
+            <th>Action</th>
+            <th>摘要</th>
+            <th>Run</th>
+            <th>請求者</th>
+            <th>請求時間</th>
+            <th>到期</th>
+            <th>操作</th>
+          </tr></thead>
+          <tbody id="adminApprovalTableBody"></tbody>
+        </table>
+      </div>
+
+      <div class="admin-chart-card" style="margin-top:16px;">
+        <div class="admin-chart-title" style="margin-bottom:10px;">最近續跑活動</div>
+        <div class="admin-feed" id="adminApprovalFeed"></div>
+      </div>
+    `;
+
+    window._adminApprovalTab = window._adminApprovalTab || 'pending';
+    _adminApplyApprovalTabUi();
+    await _adminLoadApprovals();
+
+    const q = document.getElementById('adminApprovalSearch');
+    q?.addEventListener('input', () => _adminRenderApprovalsTable());
+  }
+
+  function _adminApplyApprovalTabUi() {
+    const tab = window._adminApprovalTab || 'pending';
+    const map = {
+      pending: 'apTabPending',
+      approved: 'apTabApproved',
+      rejected: 'apTabRejected',
+      expired: 'apTabExpired',
+    };
+    Object.entries(map).forEach(([k, id]) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.toggle('active', k === tab);
+    });
+  }
+
+  window._adminSetApprovalTab = async function (tab) {
+    window._adminApprovalTab = tab;
+    _adminApplyApprovalTabUi();
+    await _adminLoadApprovals();
+  };
+
+  window._adminReloadApprovals = async function () {
+    await _adminLoadApprovals();
+  };
+
+  let _allApprovals = [];
+
+  async function _adminLoadApprovals() {
+    const tab = window._adminApprovalTab || 'pending';
+    const body = document.getElementById('adminApprovalTableBody');
+    if (body) body.innerHTML = `<tr><td colspan="8" style="padding:18px;color:var(--text-tertiary);">載入中...</td></tr>`;
+
+    try {
+      const resp = await fetch(`/api/approvals?status=${encodeURIComponent(tab)}&limit=100`);
+      if (!resp.ok) throw new Error('fetch failed');
+      const data = await resp.json();
+      _allApprovals = data.approvals || [];
+    } catch (_) {
+      _allApprovals = [];
+    }
+
+    await _adminLoadApprovalFeed();
+    _adminRenderApprovalsTable();
+  }
+
+  async function _adminLoadApprovalFeed() {
+    const feed = document.getElementById('adminApprovalFeed');
+    if (!feed) return;
+    feed.innerHTML = '<div style="padding:10px 0;color:var(--text-tertiary);font-size:0.75rem;">載入中...</div>';
+    try {
+      const resp = await fetch('/api/audit/recent?limit=30');
+      if (!resp.ok) throw new Error('fetch failed');
+      const data = await resp.json();
+      const evs = (data.events || []).filter(e => {
+        const a = (e.action || '');
+        return a.startsWith('approval.') || a.startsWith('workflow.resume');
+      }).slice(0, 12);
+      if (!evs.length) {
+        feed.innerHTML = '<div style="padding:10px 0;color:var(--text-tertiary);font-size:0.75rem;">尚無活動</div>';
+        return;
+      }
+      feed.innerHTML = evs.map(e => {
+        const dot = (e.action||'').startsWith('approval.') ? 'var(--color-warning)' : 'var(--color-info)';
+        return `<div class="admin-feed-item">
+          <div class="admin-feed-dot" style="background:${dot}"></div>
+          <div class="admin-feed-text">
+            <div style="font-weight:600;color:var(--text-primary);">${_esc(e.action||'')}</div>
+            <div style="margin-top:2px;color:var(--text-secondary);font-size:0.72rem;">run=${_esc(e.correlation_id||'')} | ${_esc(e.reason||'')}</div>
+          </div>
+          <div class="admin-feed-time">${_fmtTs(e.ts||'')}</div>
+        </div>`;
+      }).join('');
+    } catch (_) {
+      feed.innerHTML = '<div style="padding:10px 0;color:var(--text-tertiary);font-size:0.75rem;">無法取得活動</div>';
+    }
+  }
+
+  function _fmtTs(ts) {
+    if (!ts) return '';
+    try {
+      // keep it short
+      return ts.replace('T', ' ').slice(0, 16);
+    } catch (_) { return ts; }
+  }
+
+  function _ttlBadge(ap) {
+    if (!ap || !ap.ts_expires) return '';
+    try {
+      const exp = new Date(ap.ts_expires);
+      const now = new Date();
+      const ms = exp - now;
+      const min = Math.floor(ms / 60000);
+      if (ms <= 0) return `<span class="admin-scope-badge system" style="background:#fee2e2;color:#991b1b;">已過期</span>`;
+      if (min <= 2) return `<span class="admin-scope-badge system" style="background:#ffedd5;color:#9a3412;">剩 ${min}m</span>`;
+      return `<span class="admin-scope-badge personal" style="background:#e0f2fe;color:#075985;">剩 ${min}m</span>`;
+    } catch (_) { return ''; }
+  }
+
+  function _statusDot(status) {
+    const s = (status || '').toLowerCase();
+    const color = s === 'pending' ? 'var(--color-warning)' : s === 'approved' ? 'var(--color-success)' : s === 'rejected' ? 'var(--color-error)' : 'var(--text-tertiary)';
+    return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px;"></span>${_esc(status||'')}`;
+  }
+
+  let _adminOpenRunId = '';
+  let _adminRunDetails = null;
+  let _adminRunPollTimer = null;
+
+  function _adminStopRunPolling() {
+    if (_adminRunPollTimer) {
+      clearTimeout(_adminRunPollTimer);
+      _adminRunPollTimer = null;
+    }
+  }
+
+  function _adminShouldKeepPolling(d) {
+    const overall = (d && d.overall) ? String(d.overall) : '';
+    // Stop when fully success OR fully error; keep polling when pending approval/unknown
+    return !(overall === 'success' || overall === 'error');
+  }
+
+  async function _adminFetchRunDetails(runId) {
+    if (!runId) return;
+    try {
+      const resp = await fetch(`/api/workflows/runs/${encodeURIComponent(runId)}`);
+      if (!resp.ok) throw new Error('fetch failed');
+      const data = await resp.json();
+      _adminRunDetails = data;
+    } catch (_) {
+      _adminRunDetails = { status: 'error', run_id: runId, overall: 'error', blocks: [] };
+    }
+    _adminRenderApprovalsTable();
+
+    // schedule next poll
+    if (_adminOpenRunId === runId && _adminShouldKeepPolling(_adminRunDetails)) {
+      const delay = 2500; // 2.5s
+      _adminRunPollTimer = setTimeout(() => _adminFetchRunDetails(runId), delay);
+    } else {
+      _adminStopRunPolling();
+    }
+  }
+
+  async function _adminToggleRunDetails(runId) {
+    if (!runId) return;
+    if (_adminOpenRunId === runId) {
+      _adminOpenRunId = '';
+      _adminRunDetails = null;
+      _adminStopRunPolling();
+      _adminRenderApprovalsTable();
+      return;
+    }
+
+    _adminOpenRunId = runId;
+    _adminRunDetails = null;
+    _adminStopRunPolling();
+    _adminRenderApprovalsTable();
+
+    await _adminFetchRunDetails(runId);
+  }
+
+  function _adminRenderRunDetailsRow() {
+    if (!_adminOpenRunId) return '';
+    const d = _adminRunDetails;
+    if (!d) {
+      return `<tr><td colspan="8" style="padding:12px;color:var(--text-tertiary);">run=${_esc(_adminOpenRunId)} 載入中...</td></tr>`;
+    }
+    const blocks = d.blocks || [];
+    const header = `<div style="display:flex;gap:10px;align-items:center;">
+      <div style="font-weight:700;">Run 詳細</div>
+      <div style="font-family:monospace;font-size:0.75rem;color:var(--text-secondary);">${_esc(d.run_id||'')}</div>
+      <div style="font-size:0.75rem;color:var(--text-secondary);">overall=${_esc(d.overall||'')}</div>
+    </div>`;
+
+    if (!blocks.length) {
+      return `<tr><td colspan="8" style="padding:12px;">
+        ${header}
+        <div style="margin-top:8px;color:var(--text-tertiary);font-size:0.75rem;">尚無 checkpoint 資料</div>
+      </td></tr>`;
+    }
+
+    const rows = blocks.map(b => {
+      const st = (b.status||'');
+      const color = st === 'success' ? 'var(--color-success)' : st === 'requires_approval' ? 'var(--color-warning)' : st === 'error' ? 'var(--color-error)' : 'var(--text-tertiary)';
+      return `<div style="display:flex;gap:10px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--border-subtle);">
+        <div style="width:10px;height:10px;border-radius:50%;background:${color};margin-top:4px;"></div>
+        <div style="flex:1;">
+          <div style="font-family:monospace;font-size:0.72rem;">block=${_esc(b.block_id||'')} | skill=${_esc(b.skill_name||'')}</div>
+          <div style="font-size:0.72rem;color:var(--text-secondary);margin-top:2px;">status=${_esc(st)} | ${_esc(_fmtTs(b.ts||''))}</div>
+          ${b.output_preview ? `<div style="margin-top:4px;font-size:0.72rem;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:900px;">${_esc(b.output_preview)}</div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    return `<tr><td colspan="8" style="padding:12px;">
+      ${header}
+      <div style="margin-top:8px;">${rows}</div>
+    </td></tr>`;
+  }
+
+  async function _adminApprove(id) {
+    if (!confirm('確認批准？')) return;
+    try {
+      const r = await fetch(`/api/approvals/${id}/approve`, { method: 'POST' });
+      if (r.ok) {
+        const d = await r.json().catch(() => ({}));
+        if (d.resume_scheduled) {
+          window.showToast && window.showToast('✓ 已批准，工作流正在自動續跑…', 'success');
+        } else {
+          window.showToast && window.showToast('✓ 已批准', 'success');
+        }
+      } else {
+        window.showToast && window.showToast('✗ 批准失敗：HTTP ' + r.status, 'error');
+      }
+    } catch (e) {
+      window.showToast && window.showToast('✗ 批准失敗：' + (e && e.message || e), 'error');
+    }
+    await _adminLoadApprovals();
+  }
+
+  async function _adminReject(id) {
+    if (!confirm('確認拒絕？')) return;
+    try {
+      const r = await fetch(`/api/approvals/${id}/reject`, { method: 'POST' });
+      if (r.ok) {
+        window.showToast && window.showToast('已拒絕，本次執行已終止', 'warning');
+      } else {
+        window.showToast && window.showToast('✗ 拒絕失敗：HTTP ' + r.status, 'error');
+      }
+    } catch (e) {
+      window.showToast && window.showToast('✗ 拒絕失敗：' + (e && e.message || e), 'error');
+    }
+    await _adminLoadApprovals();
+  }
+
+  function _adminRenderApprovalsTable() {
+    const body = document.getElementById('adminApprovalTableBody');
+    const count = document.getElementById('adminApprovalCount');
+    if (!body) return;
+
+    const q = (document.getElementById('adminApprovalSearch')?.value || '').toLowerCase().trim();
+    let rows = _allApprovals || [];
+    if (q) {
+      rows = rows.filter(ap => {
+        const hay = [ap.action, ap.request_summary, ap.resource_type, ap.resource_id, ap.requested_by_subject_id].join(' ').toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    if (count) count.textContent = `共 ${rows.length} 筆`;
+
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="8" style="padding:18px;color:var(--text-tertiary);">目前沒有資料</td></tr>`;
+      return;
+    }
+
+    const tab = (window._adminApprovalTab || 'pending');
+    const isPending = tab === 'pending';
+
+    const html = [];
+    for (const ap of rows) {
+      const actions = isPending
+        ? `<div class="admin-table-actions">
+             <button class="admin-table-action" onclick="(${_adminApprove.toString()})('${ap.approval_id}')">批准</button>
+             <button class="admin-table-action danger" onclick="(${_adminReject.toString()})('${ap.approval_id}')">拒絕</button>
+           </div>`
+        : `<span style="font-size:0.72rem;color:var(--text-tertiary);">—</span>`;
+
+      const run = ap.correlation_id || '';
+      const isOpen = run && (_adminOpenRunId === run);
+      const runHtml = run
+        ? `<button class="admin-table-action" style="padding:4px 8px;${isOpen ? 'background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.35);' : ''}" onclick="(${_adminToggleRunDetails.toString()})('${_esc(run)}')">${_esc(run)}</button>`
+        : `<span style="color:var(--text-tertiary);">—</span>`;
+
+      html.push(`<tr>
+        <td>${_statusDot(ap.status)}</td>
+        <td style="font-family:monospace;font-size:0.72rem;">${_esc(ap.action||'')}</td>
+        <td style="max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(ap.request_summary||'')}</td>
+        <td>${runHtml}</td>
+        <td style="font-family:monospace;font-size:0.72rem;">${_esc(ap.requested_by_subject_id||'')}</td>
+        <td>${_fmtTs(ap.ts_requested)}</td>
+        <td>${_fmtTs(ap.ts_expires)} ${_ttlBadge(ap)}</td>
+        <td>${actions}</td>
+      </tr>`);
+
+      if (isOpen) {
+        html.push(_adminRenderRunDetailsRow());
+      }
+    }
+
+    body.innerHTML = html.join('');
   }
 
 })();

@@ -128,6 +128,15 @@ async def process_chat_native(req: ChatRequest):
     except Exception:
         pass
 
+    # Always inject session_id so downstream (workflow_executor / HitL approval
+    # payload / workflow_resume) can write completion messages back to this
+    # session's history. Without this, background resume has nowhere to
+    # notify the originating Web chat UI.
+    if _user_context is None:
+        _user_context = {}
+    if not _user_context.get("session_id"):
+        _user_context["session_id"] = _sid
+
     adapter = create_adapter(
         provider=provider,
         uma=uma,
@@ -246,18 +255,37 @@ async def process_chat_native(req: ChatRequest):
                                 user_input=req.user_input,
                                 user_context=_user_context,
                             )
-                            final_text = wf_result.get("final_output", "")
-                            if not final_text:
-                                final_text = f"工作流 {_match_info['name']} 執行完成（{wf_result.get('blocks_executed', 0)} 個節點）"
+                            # Phase 2 HitL: workflow paused — tell the user clearly
+                            # instead of silently falling through to "執行完成".
+                            if wf_result.get("status") == "requires_approval":
+                                _req_entries = [r for r in wf_result.get("results", []) if r.get("status") == "requires_approval"]
+                                _skill_names = sorted({r.get("skill", "") for r in _req_entries if r.get("skill")})
+                                final_text = (
+                                    f"⏸️ 工作流「{_match_info['name']}」包含高風險技能"
+                                    f"（{', '.join(_skill_names) or '未知'}），執行已暫停等待人工審批。\n\n"
+                                    f"請至 **管理後台 → 審核中心** 批准後，工作流會自動繼續；"
+                                    f"或點擊「拒絕」終止本次執行。"
+                                )
+                            else:
+                                final_text = wf_result.get("final_output", "")
+                                if not final_text:
+                                    final_text = f"工作流 {_match_info['name']} 執行完成（{wf_result.get('blocks_executed', 0)} 個節點）"
                             # Phase 6: enrich match_info with source + run_id for promotion card
                             _match_info["source"] = wf_match["workflow"].get("source", "")
                             _match_info["run_id"] = wf_result.get("run_id", "")
                             session_mgr.append_message(session_id, "assistant", final_text)
                             task_registry.mark_completed(task_id, final_text=final_text, assistant_message_persisted=True)
-                            yield {"data": json.dumps({"status": "success", "content": final_text,
-                                                       "workflow_match": _match_info,
-                                                       "task_id": task_id, "session_id": session_id,
-                                                       "turn_id": turn_id}, ensure_ascii=False)}
+                            # Phase 2 HitL: flag paused workflows so chat.js can start a
+                            # polling loop to pick up the completion / rejection message
+                            # that workflow_resume / approvals.reject will later append.
+                            _payload = {"status": "success", "content": final_text,
+                                        "workflow_match": _match_info,
+                                        "task_id": task_id, "session_id": session_id,
+                                        "turn_id": turn_id}
+                            if wf_result.get("status") == "requires_approval":
+                                _payload["workflow_status"] = "requires_approval"
+                                _payload["run_id"] = wf_result.get("run_id", "")
+                            yield {"data": json.dumps(_payload, ensure_ascii=False)}
                         except Exception as e:
                             logger.error(f"[WF-First] Execution failed: {e}")
                             error_msg = f"工作流執行失敗: {str(e)}"
@@ -358,14 +386,31 @@ async def process_chat_native(req: ChatRequest):
                             user_input=pending_wf.get("user_input", ""),
                             user_context=_user_context,
                         )
-                        final_text = wf_result.get("final_output", "")
-                        if not final_text:
-                            final_text = f"工作流執行完成（{wf_result.get('blocks_executed', 0)} 個節點）"
+                        # Phase 2 HitL: workflow paused — show explicit waiting message
+                        if wf_result.get("status") == "requires_approval":
+                            _req_entries = [r for r in wf_result.get("results", []) if r.get("status") == "requires_approval"]
+                            _skill_names = sorted({r.get("skill", "") for r in _req_entries if r.get("skill")})
+                            _wf_name = pending_wf.get("name") or pending_wf.get("workflow_id") or "工作流"
+                            final_text = (
+                                f"⏸️ 工作流「{_wf_name}」包含高風險技能"
+                                f"（{', '.join(_skill_names) or '未知'}），執行已暫停等待人工審批。\n\n"
+                                f"請至 **管理後台 → 審核中心** 批准後，工作流會自動繼續；"
+                                f"或點擊「拒絕」終止本次執行。"
+                            )
+                        else:
+                            final_text = wf_result.get("final_output", "")
+                            if not final_text:
+                                final_text = f"工作流執行完成（{wf_result.get('blocks_executed', 0)} 個節點）"
                         session_mgr.append_message(session_id, "assistant", final_text)
                         task_registry.mark_completed(task_id, final_text=final_text, assistant_message_persisted=True)
-                        yield {"data": json.dumps({"status": "success", "content": final_text,
-                                                   "task_id": task_id, "session_id": session_id,
-                                                   "turn_id": turn_id}, ensure_ascii=False)}
+                        # Phase 2 HitL: flag paused workflows (confirm-mode path)
+                        _payload = {"status": "success", "content": final_text,
+                                    "task_id": task_id, "session_id": session_id,
+                                    "turn_id": turn_id}
+                        if wf_result.get("status") == "requires_approval":
+                            _payload["workflow_status"] = "requires_approval"
+                            _payload["run_id"] = wf_result.get("run_id", "")
+                        yield {"data": json.dumps(_payload, ensure_ascii=False)}
                     except Exception as e:
                         error_msg = f"工作流執行失敗: {str(e)}"
                         session_mgr.append_message(session_id, "assistant", error_msg)
