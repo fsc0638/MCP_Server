@@ -48,6 +48,80 @@ def _skill_friendly_name(skill_id: str) -> str:
     return _SKILL_FRIENDLY_NAMES.get(skill_id, skill_id or "步驟")
 
 
+def _format_terminal_output(skill_id: str, raw_output: str, wf_name: str = "") -> str:
+    """Produce a user-facing message for a workflow's final step.
+
+    A workflow is a pipeline — the user should see the end deliverable,
+    not every intermediate skill's raw output. This helper:
+
+    1. Detects download files in python-executor / image-generator output
+       (PDF/DOCX/XLSX/PNG/JPG saved under workspace/downloads/) and
+       formats them as a clickable markdown link with a greeting/closing.
+    2. Otherwise formats the raw output via the same per-skill markdown
+       formatter used in concat mode, so web-search tables, calendar
+       events, etc. still render cleanly when they ARE the end result.
+    """
+    import os as _os
+    import re as _re
+    if not raw_output:
+        return "✅ 工作流已完成，但沒有輸出。"
+
+    stripped = raw_output.strip()
+
+    # ── Detect a generated download file ─────────────────────────────
+    # python-executor convention: print("OK: filename.ext")
+    # image-generator JSON: {"image_url": "...", "filename": "..."}
+    # We look for any filename saved under workspace/downloads/ and wrap
+    # with a download link served by the /downloads/ FastAPI route.
+    _download_filename = ""
+    _download_url = ""
+
+    # Pattern A: python-executor stdout "OK: XXX.pdf" / "Saved: XXX.docx"
+    _m = _re.search(
+        r"(?:OK|Saved|已生成|完成)\s*[:：]\s*([^\s]+\.(?:pdf|docx|xlsx|csv|png|jpg|jpeg|zip))",
+        stripped, flags=_re.IGNORECASE,
+    )
+    if _m:
+        _download_filename = _m.group(1)
+
+    # Pattern B: image-generator JSON with image_url
+    if not _download_filename:
+        try:
+            import json as _json
+            d = _json.loads(stripped)
+            if isinstance(d, dict):
+                if d.get("image_url"):
+                    _download_url = d["image_url"]
+                    _download_filename = d.get("filename", "image.png")
+                elif d.get("filename"):
+                    _download_filename = d["filename"]
+        except Exception:
+            pass
+
+    if _download_filename:
+        if not _download_url:
+            # Resolve via /downloads/ endpoint; path is relative to workspace/
+            # Keep only the basename in case the skill emitted a full path.
+            base = _os.path.basename(_download_filename)
+            _download_url = f"/downloads/{base}"
+        label = wf_name or "檔案"
+        return (
+            f"✅ {label} 已產出完成！\n\n"
+            f"📎 [點此下載：{_os.path.basename(_download_filename)}]({_download_url})\n\n"
+            f"如有任何問題歡迎再次使用。"
+        )
+
+    # ── No download — render the last step's output via per-skill fmt ──
+    md = _format_skill_output_as_markdown(skill_id, raw_output)
+    if not md:
+        return "✅ 工作流已完成。"
+    # If the last step is semantic-text-like (analyzer / chat), the content
+    # is already a narrative — return it directly with a tiny closing.
+    if skill_id and "analyzer" in skill_id.lower():
+        return md.strip() + "\n\n— 工作流已完成"
+    return md
+
+
 def _format_skill_output_as_markdown(skill_id: str, raw_output: str) -> str:
     """Convert a skill's raw JSON output into readable markdown.
 
@@ -650,10 +724,16 @@ class WorkflowExecutor:
                     should_stop = True
 
         # ── Build final_output ──
-        # Aggregate ALL successful skill outputs into a labeled markdown
-        # summary so the user sees everything, not just whichever branch
-        # finished first. Each skill's raw JSON is passed through a per-skill
-        # markdown formatter for readability.
+        # A workflow is a pipeline — intermediate steps are implementation
+        # detail. The user should see the FINAL deliverable, not every
+        # skill's raw output concatenated with debug headers.
+        #
+        # Output modes (workflow.execution.output_mode):
+        #   "last"   (DEFAULT) — only the last successful sequential block's
+        #                        output. Download files are auto-detected
+        #                        and wrapped as a friendly message.
+        #   "concat" (legacy)  — label-and-concatenate every skill's output;
+        #                        useful during design/debug.
         def _extract_text(block_result) -> str:
             if not isinstance(block_result, dict):
                 return ""
@@ -670,22 +750,40 @@ class WorkflowExecutor:
 
         success_entries = [r for r in results if r.get("status") == "success"
                            and r.get("type") not in ("start", "end", "branch")]
-        if len(success_entries) == 0:
+
+        exec_cfg = workflow.get("execution") or {}
+        output_mode = (exec_cfg.get("output_mode") or "last").lower()
+        wf_name_for_msg = workflow.get("display_name") or workflow.get("name") or ""
+
+        if not success_entries:
             final_output = ""
-        elif len(success_entries) == 1:
-            e = success_entries[0]
-            final_output = _format_skill_output_as_markdown(
-                e.get("skill") or e.get("type", ""), _extract_text(e),
-            )
+        elif output_mode == "concat":
+            # Legacy: label every block and concatenate
+            if len(success_entries) == 1:
+                e = success_entries[0]
+                final_output = _format_skill_output_as_markdown(
+                    e.get("skill") or e.get("type", ""), _extract_text(e),
+                )
+            else:
+                _parts = []
+                for e in success_entries:
+                    skill = e.get("skill") or e.get("type") or f"block_{e.get('block_id')}"
+                    label = e.get("label") or _skill_friendly_name(skill)
+                    md = _format_skill_output_as_markdown(skill, _extract_text(e))
+                    if md:
+                        _parts.append(f"### {label}\n\n{md}")
+                final_output = "\n\n---\n\n".join(_parts)
         else:
-            _parts = []
-            for e in success_entries:
-                skill = e.get("skill") or e.get("type") or f"block_{e.get('block_id')}"
-                label = e.get("label") or _skill_friendly_name(skill)
-                md = _format_skill_output_as_markdown(skill, _extract_text(e))
-                if md:
-                    _parts.append(f"### {label}\n\n{md}")
-            final_output = "\n\n---\n\n".join(_parts)
+            # "last" (default) — only the terminal block's output. If that
+            # block produced a download file, wrap it in a friendly message
+            # so the user sees a clickable link instead of a raw stdout line.
+            last = success_entries[-1]
+            last_text = _extract_text(last)
+            final_output = _format_terminal_output(
+                last.get("skill") or last.get("type", ""),
+                last_text,
+                wf_name_for_msg,
+            )
 
         # Determine overall status based on step results
         _any_error = any(r.get("status") == "error" for r in results)

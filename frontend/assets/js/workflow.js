@@ -3976,6 +3976,15 @@
           </select></div>
         <div class="wf-settings-field"><label>最大重試次數</label>
           <input type="number" id="wfSetExecRetries" value="${ex.max_retries || 3}" min="1" max="10" /></div>
+        <div class="wf-settings-field"><label>最終輸出格式</label>
+          <select id="wfSetExecOutputMode">
+            <option value="last" ${(ex.output_mode || "last") === "last" ? "selected" : ""}>只顯示最後一步結果（推薦）</option>
+            <option value="concat" ${ex.output_mode === "concat" ? "selected" : ""}>顯示每一步的輸出（設計 / 除錯用）</option>
+          </select>
+          <div class="wf-settings-hint">
+            預設「最後一步」— 工作流是管道式執行，只給使用者最終成品（例如 PDF 下載連結）。<br>
+            切「每一步」可在設計時看到每個 skill 的中間輸出，確認流程正確。
+          </div></div>
       `;
     } else if (tab === "security") {
       const sec = wd.security || {};
@@ -4340,6 +4349,8 @@
       if (exOnErr) wd.execution.on_error = exOnErr.value;
       const exRetries = document.getElementById("wfSetExecRetries");
       if (exRetries) wd.execution.max_retries = parseInt(exRetries.value) || 3;
+      const exOutMode = document.getElementById("wfSetExecOutputMode");
+      if (exOutMode) wd.execution.output_mode = exOutMode.value;
     }
 
     // Security
