@@ -1202,6 +1202,28 @@ trigger 欄位**，系統會自動接 APScheduler 觸發整個工作流：
 - 步驟盡量少：能一步搞定就別拆兩步
 - 若任務是「定期推送」類，最後一步用 mcp-schedule-manager 設排程，不要自己寫 while 迴圈
 
+【摘要 / 重點提取 — 必須用 mcp-text-summarizer，不要用 txt-llm-analyzer】
+- 任何「把長文本壓成 N 則重點 / N 條摘要 / 每則 XX 字」的需求，**一律**用
+  `mcp-text-summarizer`（專門做摘要）。**不要**誤用 `mcp-txt-llm-analyzer`，
+  那個是文字排版 / log 排錯 / 格式轉換用的，不做摘要。
+- 常見參數範例：
+  {{
+    "skill_id": "mcp-text-summarizer",
+    "input_map": {{
+      "text":      "${{newsResults}}",   ← 接上一步 output_var
+      "count":     10,                   ← 使用者要幾則
+      "min_chars": 200,                  ← 每則最少字元
+      "max_chars": 400,
+      "style":     "news-brief",         ← news-brief | bullet | narrative
+      "focus":     "台灣經濟 / 財經",      ← 可選主題過濾
+      "language":  "繁體中文"
+    }},
+    "output_var": "newsSummaries",
+    "on_fail":    "abort"
+  }}
+- 回傳包含 `output`（已排版好的 markdown 字串，可直接餵給 python-executor 生 PDF）
+  + `items`（結構化陣列），兩種都可用。
+
 【搜尋技巧 — mcp-web-search】
 - query 要用使用者描述的原語言 + 具體關鍵字：
   中文任務 → 中文 query（例：「今日 台灣 經濟新聞」，不要用 "latest economic news"）
