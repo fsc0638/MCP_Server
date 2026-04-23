@@ -274,11 +274,32 @@ Push commands: `git push origin fsc` / `git push origin AgentK_UAT`
 ## Adding a New Skill
 
 1. Create `Agent_skills/system_skills/mcp-{name}/SKILL.md` with YAML frontmatter
-2. Optionally add `Scripts/main.py` (reads JSON from stdin, prints JSON to stdout)
+2. Optionally add `scripts/main.py` (reads JSON from stdin, prints JSON to stdout)
 3. For long-running skills, add `execution_timeout: N` to SKILL.md (default 30s)
-4. Restart the server or call `POST /skills/reload` — UMA rescans on startup
-5. `skills_manifest.json` is regenerated automatically
-6. Commit submodule first, then update parent repo reference
+4. **MANDATORY if the skill calls any LLM internally** — the stdout JSON must
+   include a top-level `"_usage"` field so WorkflowExecutor can feed token
+   costs into `workspace/analytics/token_usage.jsonl` and the admin Dashboard.
+   Copy `Agent_skills/templates/main.py.template` as a starting point. Shape:
+   ```json
+   {
+     "status": "success",
+     "output": "...",
+     "_usage": {
+       "model": "gpt-4o-mini",
+       "input_tokens": 2340,
+       "output_tokens": 890,
+       "total_tokens": 3230,
+       "skill_total_tokens": 3230
+     }
+   }
+   ```
+   Skills that chain multiple LLM calls (e.g. `mcp-meeting-to-notion` runs
+   3 sequential prompts) must aggregate token counts across all calls into
+   `skill_total_tokens`. Pure API wrappers without LLM calls should emit
+   `"_usage": {"total_tokens": 0}`. Full spec in `Agent_skills/README.md`.
+5. Restart the server or call `POST /skills/reload` — UMA rescans on startup
+6. `skills_manifest.json` is regenerated automatically
+7. Commit submodule first, then update parent repo reference
 
 ## Active Skills Reference
 
