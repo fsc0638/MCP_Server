@@ -858,6 +858,7 @@ class WorkflowExecutor:
         loop = asyncio.get_event_loop()
         retries = 0
         last_error = None
+        _block_start_ms = int(time.time() * 1000)
         while retries <= (max_retries if block_on_error == "retry" else 0):
             try:
                 result = await loop.run_in_executor(
@@ -865,6 +866,15 @@ class WorkflowExecutor:
                     lambda: uma.execute_tool_call(skill_name, json.dumps(block_params, ensure_ascii=False)),
                 )
                 if isinstance(result, dict) and result.get("status") == "error":
+                    # Still record the failed call so admin dashboard sees it
+                    self._record_skill_usage(
+                        skill_name=skill_name,
+                        user_context=user_context,
+                        model=block_model,
+                        result=result,
+                        duration_ms=int(time.time() * 1000) - _block_start_ms,
+                        status="error",
+                    )
                     raise Exception(f"Skill error: {result.get('message', result.get('error', 'unknown'))}")
                 if isinstance(result, dict):
                     output_text = (
@@ -873,6 +883,23 @@ class WorkflowExecutor:
                     )
                 else:
                     output_text = str(result)
+
+                # ── Record skill invocation to TokenTracker ──
+                # Workflow executor bypasses the chat adapter entirely, so skill
+                # calls made from within a workflow were completely invisible to
+                # the analytics pipeline (token_usage.jsonl). This closes that
+                # gap so by_skill / by_user / daily.skill_calls reflect workflow
+                # usage alongside chat usage. Token counts default to 0 unless
+                # the skill returned a _usage field (future contract extension).
+                self._record_skill_usage(
+                    skill_name=skill_name,
+                    user_context=user_context,
+                    model=block_model,
+                    result=result,
+                    duration_ms=int(time.time() * 1000) - _block_start_ms,
+                    status="success",
+                )
+
                 return {
                     "entry": {
                         "block_id": bid, "type": block_type, "skill": skill_name,
@@ -924,6 +951,7 @@ class WorkflowExecutor:
                 accumulated_context,
                 user_input,
             )
+            _branch_start_ms = int(time.time() * 1000)
             try:
                 # uma.execute_tool_call is synchronous; wrap in run_in_executor
                 loop = asyncio.get_event_loop()
@@ -931,8 +959,25 @@ class WorkflowExecutor:
                     None, lambda: uma.execute_tool_call(skill_id, json.dumps(params, ensure_ascii=False))
                 )
                 if isinstance(result, dict) and result.get("status") == "error":
+                    self._record_skill_usage(
+                        skill_name=skill_id,
+                        user_context=None,
+                        model="",
+                        result=result,
+                        duration_ms=int(time.time() * 1000) - _branch_start_ms,
+                        status="error",
+                    )
                     return {"idx": idx, "skill": skill_id, "status": "error",
                             "error": result.get("message", "skill error"), "output": ""}
+                # Record successful parallel-branch skill call
+                self._record_skill_usage(
+                    skill_name=skill_id,
+                    user_context=None,  # parallel branches don't currently carry user_context
+                    model="",
+                    result=result,
+                    duration_ms=int(time.time() * 1000) - _branch_start_ms,
+                    status="success",
+                )
                 out_text = ""
                 if isinstance(result, dict):
                     out_text = result.get("output") or result.get("guide") or result.get("content") or ""
@@ -1202,6 +1247,62 @@ class WorkflowExecutor:
         if changed:
             logger.info(f"[WFExec] Coerced params for {skill_name}: {', '.join(changed)}")
         return out
+
+    def _record_skill_usage(
+        self,
+        skill_name: str,
+        user_context: Optional[dict],
+        model: str,
+        result: Any,
+        duration_ms: int,
+        status: str,
+    ) -> None:
+        """Append a token_usage.jsonl record for a workflow-invoked skill.
+
+        Previously, workflow-triggered skill calls were invisible to the admin
+        analytics because the executor bypasses openai_adapter (which is the
+        only place TokenTracker.record_usage() was wired in). Without this,
+        Dashboard's by_skill/daily.skill_calls only reflected chat-driven
+        usage; workflow-driven usage (which can be >>> chat for cron-heavy
+        setups) didn't show up at all.
+
+        Token counts default to 0 because most executable skills don't report
+        internal LLM usage yet. When a skill DOES populate a "_usage" field
+        in its JSON response, those numbers get folded in as
+        skill_internal_tokens — same convention as the adapter path.
+        """
+        try:
+            from server.services.token_tracker import TokenTracker
+            uc = user_context or {}
+            skill_tokens = 0
+            if isinstance(result, dict):
+                usage = result.get("_usage") or {}
+                if isinstance(usage, dict):
+                    skill_tokens = (
+                        usage.get("skill_total_tokens", 0)
+                        or usage.get("total_tokens", 0)
+                        or 0
+                    )
+
+            pr = os.getenv("PROJECT_ROOT", str(Path(__file__).resolve().parents[2]))
+            tracker = TokenTracker(pr)
+            tracker.record_usage(
+                session_id=uc.get("session_id", ""),
+                user_id=uc.get("user_id") or uc.get("employee_id", ""),
+                chat_type=uc.get("chat_type", "workflow"),
+                chat_id=uc.get("chat_id", ""),
+                skill=skill_name,
+                model=model or "",
+                tier="workflow",           # distinguishes from chat tiers
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+                skill_internal_tokens=skill_tokens,
+                duration_ms=duration_ms,
+                status=status,
+            )
+        except Exception as e:
+            logger.debug(f"[WFExec] Token tracking skipped for {skill_name}: {e}")
 
 
 # ── Singleton ──
