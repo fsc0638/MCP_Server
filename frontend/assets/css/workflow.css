@@ -18,13 +18,19 @@
 .page-chat-body.wf-mode .wf-dashboard-wrap { display: flex; flex-direction: column; height: 100%; }
 
 /* ── Workflow Landing Overlay ─────────────────────────────────── */
-/* Fixed overlay below header, covers entire viewport — no layout conflicts */
+/* Fixed overlay below header. Leaves the 96px primary-nav column
+   (.page-chat-primary-nav) visible on the left so the main sidebar
+   stays accessible while workflow landing is open — requested
+   2026-04-23. The two narrower breakpoints match the grid in
+   chat.css (.page-chat-body grid-template-columns). */
 .wf-landing-overlay {
   display: none; position: fixed;
-  top: 52px; left: 0; right: 0; bottom: 0;
+  top: 52px; left: 96px; right: 0; bottom: 0;
   z-index: 100; background: var(--bg-main, #F8F9FB);
   flex-direction: row;
 }
+@media (max-width: 1200px) { .wf-landing-overlay { left: 88px; } }
+@media (max-width: 900px)  { .wf-landing-overlay { left: 78px; } }
 .wf-landing-overlay.open { display: flex; }
 
 .wf-landing-left {
