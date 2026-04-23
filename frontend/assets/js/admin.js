@@ -327,7 +327,7 @@
           { label: "Skill Calls", data: daily.map(d => d.skill_calls || 0), borderColor: "#F5A623", backgroundColor: "rgba(245,166,35,0.08)", fill: false, tension: 0.4, borderWidth: 2, pointRadius: _dashTokenDays > 30 ? 0 : 3, yAxisID: "y1" },
           // Chart.js doesn't resolve var(--wf-purple), so hex literal here
           // is intentional (matches the token in style.css).
-          { label: "Workflow Calls", data: daily.map(d => d.workflow_calls || 0), borderColor: "#8e44ad", backgroundColor: "rgba(142,68,173,0.10)", fill: false, tension: 0.4, borderWidth: 2, pointRadius: _dashTokenDays > 30 ? 0 : 3, borderDash: [4, 3], yAxisID: "y1" },
+          { label: "Workflow Calls", data: daily.map(d => d.workflow_calls || 0), borderColor: "#8e44ad", backgroundColor: "rgba(142,68,173,0.10)", fill: false, tension: 0.4, borderWidth: 2, pointRadius: _dashTokenDays > 30 ? 0 : 3, yAxisID: "y1" },
         ],
       },
       options: {
@@ -501,7 +501,7 @@
             { label: "Skill Calls", data: daily.map(d => d.skill_calls || 0), borderColor: "#F5A623", backgroundColor: "rgba(245,166,35,0.08)", fill: false, tension: 0.3, borderWidth: 2, yAxisID: "y1" },
             // Workflow executions from audit logs — shares y1 (right) axis
             // with Skill Calls since both are count-based.
-            { label: "Workflow Calls", data: daily.map(d => d.workflow_calls || 0), borderColor: "#8e44ad", backgroundColor: "rgba(142,68,173,0.08)", fill: false, tension: 0.3, borderWidth: 2, borderDash: [4, 3], yAxisID: "y1" },
+            { label: "Workflow Calls", data: daily.map(d => d.workflow_calls || 0), borderColor: "#8e44ad", backgroundColor: "rgba(142,68,173,0.08)", fill: false, tension: 0.3, borderWidth: 2, yAxisID: "y1" },
           ],
         },
         options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
