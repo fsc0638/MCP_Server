@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import json as _json
+import os as _os
+from pathlib import Path as _Path
+from typing import Any, Dict, Optional
+
 from fastapi import APIRouter, HTTPException, Cookie, BackgroundTasks
 
 from server.services.permissions import resolve_caller_context
@@ -13,6 +18,103 @@ router = APIRouter(tags=["Approvals"])
 
 def _role(ctx) -> str:
     return (ctx or {}).get("role", "guest").lower() or "guest"
+
+
+# ─────────────────────────────────────────────────────────────
+# Display enrichment — turn raw DB fields into user-friendly labels
+# ─────────────────────────────────────────────────────────────
+
+_WF_NAME_CACHE: Dict[str, str] = {}
+
+
+def _lookup_skill_display_name(skill_name: str) -> str:
+    """Get SKILL.md's display_name; fall back to skill_name."""
+    if not skill_name:
+        return ""
+    try:
+        from server.dependencies.uma import get_uma_instance as _get_uma
+        uma = _get_uma()
+        data = uma.registry.get_skill(skill_name)
+        if data:
+            meta = data.get("metadata", {}) or {}
+            dn = meta.get("display_name")
+            if dn and isinstance(dn, str) and dn.strip():
+                return dn.strip()
+    except Exception:
+        pass
+    return skill_name
+
+
+def _lookup_workflow_name(workflow_id: str) -> str:
+    """Find workspace/workflows/**/{id}.json and return its display_name/name."""
+    if not workflow_id:
+        return ""
+    if workflow_id in _WF_NAME_CACHE:
+        return _WF_NAME_CACHE[workflow_id]
+    try:
+        pr = _Path(_os.getenv("PROJECT_ROOT", str(_Path(__file__).resolve().parents[2])))
+        base = pr / "workspace" / "workflows"
+        for scope in ("system", "department", "personal"):
+            scope_dir = base / scope
+            if not scope_dir.exists():
+                continue
+            for f in scope_dir.rglob(f"{workflow_id}.json"):
+                try:
+                    d = _json.loads(f.read_text(encoding="utf-8"))
+                    name = d.get("display_name") or d.get("name") or workflow_id
+                    _WF_NAME_CACHE[workflow_id] = name
+                    return name
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    _WF_NAME_CACHE[workflow_id] = workflow_id
+    return workflow_id
+
+
+def _lookup_requester_display(subject_id: str) -> str:
+    """Format as '<員編> - <姓名>' when possible; fall back to raw id."""
+    if not subject_id:
+        return ""
+    try:
+        pr = _Path(_os.getenv("PROJECT_ROOT", str(_Path(__file__).resolve().parents[2])))
+        # Web / LINE sessions are keyed by session id in workspace/users/
+        sess_path = pr / "workspace" / "users" / f"{subject_id}.json"
+        if sess_path.exists():
+            d = _json.loads(sess_path.read_text(encoding="utf-8"))
+            emp_id = (d.get("employee_id") or "").strip()
+            name = (d.get("name") or "").strip()
+            if emp_id and name:
+                return f"{emp_id} - {name}"
+            if name:
+                return name
+    except Exception:
+        pass
+    # Second chance: subject_id might BE the employee_id
+    try:
+        from server.services.employee_lookup import lookup_by_employee_id
+        emp = lookup_by_employee_id(subject_id)
+        if emp:
+            return f"{emp.get('employee_id','')} - {emp.get('name','')}".strip(" -")
+    except Exception:
+        pass
+    return subject_id
+
+
+def _enrich_approval_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach display_* fields. Also parse workflow_id out of resource_id
+    (stored as '{workflow_id}:{block_id}' by workflow_executor HitL branch)."""
+    r = dict(row)
+    # Skill display name (action = skill_name for workflow-originated approvals)
+    r["skill_display_name"] = _lookup_skill_display_name(r.get("action") or "")
+    # Workflow name — resource_id is '{wf_id}:{block_id}' for workflow_block
+    _rid = r.get("resource_id") or ""
+    _wf_id = _rid.split(":", 1)[0] if _rid else ""
+    r["workflow_id"] = _wf_id
+    r["workflow_name"] = _lookup_workflow_name(_wf_id)
+    # Requester display (員編 - 姓名)
+    r["requester_display"] = _lookup_requester_display(r.get("requested_by_subject_id") or "")
+    return r
 
 
 @router.get("/api/approvals")
@@ -66,7 +168,11 @@ def list_approvals(status: str = "pending", limit: int = 50, mcp_session: str = 
         ).fetchall()
 
     conn.close()
-    return {"status": "success", "total": len(rows), "approvals": [dict(r) for r in rows]}
+    return {
+        "status": "success",
+        "total": len(rows),
+        "approvals": [_enrich_approval_row(r) for r in rows],
+    }
 
 
 @router.get("/api/approvals/{approval_id}")

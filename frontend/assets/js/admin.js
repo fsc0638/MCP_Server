@@ -1878,11 +1878,11 @@
       <h1 class="admin-page-title">審核中心</h1>
       <p class="admin-page-desc">高風險操作（External Write）一律需人工批准（TTL 10 分鐘）</p>
 
-      <div class="page-chat-panel-tabs" style="margin:0 0 14px; background:transparent; padding:0;">
-        <button class="page-chat-panel-tab" id="apTabPending" onclick="_adminSetApprovalTab('pending')">待審核</button>
-        <button class="page-chat-panel-tab" id="apTabApproved" onclick="_adminSetApprovalTab('approved')">已批准</button>
-        <button class="page-chat-panel-tab" id="apTabRejected" onclick="_adminSetApprovalTab('rejected')">已拒絕</button>
-        <button class="page-chat-panel-tab" id="apTabExpired" onclick="_adminSetApprovalTab('expired')">已過期</button>
+      <div class="admin-tabs" role="tablist">
+        <button class="admin-tab-btn" id="apTabPending" onclick="_adminSetApprovalTab('pending')">待審核</button>
+        <button class="admin-tab-btn" id="apTabApproved" onclick="_adminSetApprovalTab('approved')">已批准</button>
+        <button class="admin-tab-btn" id="apTabRejected" onclick="_adminSetApprovalTab('rejected')">已拒絕</button>
+        <button class="admin-tab-btn" id="apTabExpired" onclick="_adminSetApprovalTab('expired')">已過期</button>
       </div>
 
       <div class="admin-toolbar">
@@ -1933,7 +1933,7 @@
     Object.entries(map).forEach(([k, id]) => {
       const el = document.getElementById(id);
       if (!el) return;
-      el.classList.toggle('active', k === tab);
+      el.classList.toggle('is-active', k === tab);
     });
   }
 
@@ -2014,16 +2014,20 @@
       const now = new Date();
       const ms = exp - now;
       const min = Math.floor(ms / 60000);
-      if (ms <= 0) return `<span class="admin-scope-badge system" style="background:#fee2e2;color:#991b1b;">已過期</span>`;
-      if (min <= 2) return `<span class="admin-scope-badge system" style="background:#ffedd5;color:#9a3412;">剩 ${min}m</span>`;
-      return `<span class="admin-scope-badge personal" style="background:#e0f2fe;color:#075985;">剩 ${min}m</span>`;
+      if (ms <= 0) return `<span class="admin-ttl-chip admin-ttl-chip--expired">已過期</span>`;
+      if (min <= 2) return `<span class="admin-ttl-chip admin-ttl-chip--warn">剩 ${min}m</span>`;
+      return `<span class="admin-ttl-chip admin-ttl-chip--ok">剩 ${min}m</span>`;
     } catch (_) { return ''; }
   }
 
-  function _statusDot(status) {
+  function _statusBadge(status) {
     const s = (status || '').toLowerCase();
-    const color = s === 'pending' ? 'var(--color-warning)' : s === 'approved' ? 'var(--color-success)' : s === 'rejected' ? 'var(--color-error)' : 'var(--text-tertiary)';
-    return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px;"></span>${_esc(status||'')}`;
+    const labelMap = {
+      pending: '待審核', approved: '已批准', rejected: '已拒絕', expired: '已過期',
+    };
+    const cls = ['pending', 'approved', 'rejected', 'expired'].includes(s) ? s : 'pending';
+    const label = labelMap[s] || status || '';
+    return `<span class="admin-status-badge admin-status-badge--${cls}">${_esc(label)}</span>`;
   }
 
   let _adminOpenRunId = '';
@@ -2121,40 +2125,103 @@
     </td></tr>`;
   }
 
+  // ── Custom confirm modal (replaces window.confirm for admin flows) ──
+  // Returns a Promise<boolean> — resolved true if user confirms, false on cancel.
+  // Usage: const ok = await _adminConfirm({ title, body, confirmLabel, kind });
+  function _adminConfirm(opts) {
+    const { title, body, confirmLabel, cancelLabel, kind } = opts || {};
+    return new Promise((resolve) => {
+      // Remove any existing dialog
+      const existing = document.getElementById('adminConfirmOverlay');
+      if (existing) existing.remove();
+
+      const overlay = document.createElement('div');
+      overlay.id = 'adminConfirmOverlay';
+      overlay.className = 'admin-confirm-overlay';
+      overlay.innerHTML = `
+        <div class="admin-confirm-dialog" role="dialog" aria-modal="true">
+          <h3 class="admin-confirm-title">${_esc(title || '確認操作')}</h3>
+          <p class="admin-confirm-body">${_esc(body || '')}</p>
+          <div class="admin-confirm-actions">
+            <button type="button" class="admin-confirm-btn" data-act="cancel">${_esc(cancelLabel || '取消')}</button>
+            <button type="button" class="admin-confirm-btn ${kind === 'danger' ? 'danger' : 'primary'}" data-act="ok">${_esc(confirmLabel || '確定')}</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      // Trigger open animation next frame
+      requestAnimationFrame(() => overlay.classList.add('is-open'));
+
+      const close = (result) => {
+        overlay.classList.remove('is-open');
+        setTimeout(() => overlay.remove(), 180);
+        document.removeEventListener('keydown', onKey);
+        resolve(!!result);
+      };
+      overlay.addEventListener('click', (e) => {
+        const act = e.target && e.target.getAttribute && e.target.getAttribute('data-act');
+        if (act === 'ok') close(true);
+        else if (act === 'cancel' || e.target === overlay) close(false);
+      });
+      const onKey = (e) => {
+        if (e.key === 'Escape') close(false);
+        if (e.key === 'Enter') close(true);
+      };
+      document.addEventListener('keydown', onKey);
+    });
+  }
+
   async function _adminApprove(id) {
-    if (!confirm('確認批准？')) return;
+    const ok = await _adminConfirm({
+      title: '確認批准?',
+      body: '批准後會立即放行工作流內這個高風險步驟,並在背景繼續執行剩餘節點。',
+      confirmLabel: '批准',
+      kind: 'primary',
+    });
+    if (!ok) return;
     try {
       const r = await fetch(`/api/approvals/${id}/approve`, { method: 'POST' });
       if (r.ok) {
         const d = await r.json().catch(() => ({}));
         if (d.resume_scheduled) {
-          window.showToast && window.showToast('✓ 已批准，工作流正在自動續跑…', 'success');
+          window.showToast && window.showToast('已批准,工作流正在自動續跑…', 'success');
         } else {
-          window.showToast && window.showToast('✓ 已批准', 'success');
+          window.showToast && window.showToast('已批准', 'success');
         }
       } else {
-        window.showToast && window.showToast('✗ 批准失敗：HTTP ' + r.status, 'error');
+        window.showToast && window.showToast('批准失敗:HTTP ' + r.status, 'error');
       }
     } catch (e) {
-      window.showToast && window.showToast('✗ 批准失敗：' + (e && e.message || e), 'error');
+      window.showToast && window.showToast('批准失敗:' + (e && e.message || e), 'error');
     }
     await _adminLoadApprovals();
   }
 
   async function _adminReject(id) {
-    if (!confirm('確認拒絕？')) return;
+    const ok = await _adminConfirm({
+      title: '確認拒絕?',
+      body: '拒絕後本次工作流執行將立即終止,且已執行的步驟不會回滾。若您要繼續,請改點「批准」。',
+      confirmLabel: '拒絕',
+      kind: 'danger',
+    });
+    if (!ok) return;
     try {
       const r = await fetch(`/api/approvals/${id}/reject`, { method: 'POST' });
       if (r.ok) {
-        window.showToast && window.showToast('已拒絕，本次執行已終止', 'warning');
+        window.showToast && window.showToast('已拒絕,本次執行已終止', 'warning');
       } else {
-        window.showToast && window.showToast('✗ 拒絕失敗：HTTP ' + r.status, 'error');
+        window.showToast && window.showToast('拒絕失敗:HTTP ' + r.status, 'error');
       }
     } catch (e) {
-      window.showToast && window.showToast('✗ 拒絕失敗：' + (e && e.message || e), 'error');
+      window.showToast && window.showToast('拒絕失敗:' + (e && e.message || e), 'error');
     }
     await _adminLoadApprovals();
   }
+
+  // Expose approve/reject + run-details toggle to inline onclick handlers
+  window._adminApprove = _adminApprove;
+  window._adminReject = _adminReject;
+  window._adminToggleRunDetails = _adminToggleRunDetails;
 
   function _adminRenderApprovalsTable() {
     const body = document.getElementById('adminApprovalTableBody');
@@ -2184,23 +2251,33 @@
     for (const ap of rows) {
       const actions = isPending
         ? `<div class="admin-table-actions">
-             <button class="admin-table-action" onclick="(${_adminApprove.toString()})('${ap.approval_id}')">批准</button>
-             <button class="admin-table-action danger" onclick="(${_adminReject.toString()})('${ap.approval_id}')">拒絕</button>
+             <button class="admin-table-action primary" onclick="_adminApprove('${ap.approval_id}')">批准</button>
+             <button class="admin-table-action danger" onclick="_adminReject('${ap.approval_id}')">拒絕</button>
            </div>`
         : `<span style="font-size:0.72rem;color:var(--text-tertiary);">—</span>`;
 
       const run = ap.correlation_id || '';
       const isOpen = run && (_adminOpenRunId === run);
       const runHtml = run
-        ? `<button class="admin-table-action" style="padding:4px 8px;${isOpen ? 'background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.35);' : ''}" onclick="(${_adminToggleRunDetails.toString()})('${_esc(run)}')">${_esc(run)}</button>`
+        ? `<button class="admin-table-action" style="padding:4px 8px;font-family:monospace;font-size:0.7rem;${isOpen ? 'background:rgba(59,130,246,0.12);border-color:rgba(59,130,246,0.35);' : ''}" onclick="window._adminToggleRunDetails && window._adminToggleRunDetails('${_esc(run)}')">${_esc(run)}</button>`
         : `<span style="color:var(--text-tertiary);">—</span>`;
 
+      // Prefer backend-enriched display fields; fall back to raw when missing
+      const actionDisplay = ap.skill_display_name || ap.action || '';
+      const wfName = ap.workflow_name || ap.workflow_id || '';
+      // Construct a friendly summary "工作流「<name>」需要批准高風險技能：<skill>"
+      // (backend request_summary uses the raw workflow_id — we substitute)
+      const summary = wfName
+        ? `工作流「${wfName}」需要批准高風險技能：${actionDisplay}`
+        : (ap.request_summary || '');
+      const requester = ap.requester_display || ap.requested_by_subject_id || '';
+
       html.push(`<tr>
-        <td>${_statusDot(ap.status)}</td>
-        <td style="font-family:monospace;font-size:0.72rem;">${_esc(ap.action||'')}</td>
-        <td style="max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(ap.request_summary||'')}</td>
+        <td>${_statusBadge(ap.status)}</td>
+        <td>${_esc(actionDisplay)}</td>
+        <td style="max-width:420px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${_esc(summary)}">${_esc(summary)}</td>
         <td>${runHtml}</td>
-        <td style="font-family:monospace;font-size:0.72rem;">${_esc(ap.requested_by_subject_id||'')}</td>
+        <td>${_esc(requester)}</td>
         <td>${_fmtTs(ap.ts_requested)}</td>
         <td>${_fmtTs(ap.ts_expires)} ${_ttlBadge(ap)}</td>
         <td>${actions}</td>
