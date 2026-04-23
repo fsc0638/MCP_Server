@@ -76,34 +76,47 @@ def _format_terminal_output(skill_id: str, raw_output: str, wf_name: str = "") -
     _download_filename = ""
     _download_url = ""
 
-    # Pattern A: python-executor stdout "OK: XXX.pdf" / "Saved: XXX.docx"
-    _m = _re.search(
-        r"(?:OK|Saved|已生成|完成)\s*[:：]\s*([^\s]+\.(?:pdf|docx|xlsx|csv|png|jpg|jpeg|zip))",
-        stripped, flags=_re.IGNORECASE,
-    )
-    if _m:
-        _download_filename = _m.group(1)
+    # Pattern A: skill returned structured fields (preferred — explicit)
+    #   {download_url, download_filename} ← mcp-python-executor after diff
+    #   {image_url, filename}              ← mcp-image-generator
+    try:
+        import json as _json
+        d = _json.loads(stripped)
+        if isinstance(d, dict):
+            if d.get("download_url"):
+                _download_url = d["download_url"]
+                _download_filename = d.get("download_filename") or _os.path.basename(_download_url)
+            elif d.get("image_url"):
+                _download_url = d["image_url"]
+                _download_filename = d.get("filename", "image.png")
+            elif d.get("filename"):
+                _download_filename = d["filename"]
+    except Exception:
+        pass
 
-    # Pattern B: image-generator JSON with image_url
+    # Pattern B: python-executor free-text stdout "OK: XXX.pdf" etc.
+    # Fall back to regex when the skill didn't (yet) return structured fields.
     if not _download_filename:
-        try:
-            import json as _json
-            d = _json.loads(stripped)
-            if isinstance(d, dict):
-                if d.get("image_url"):
-                    _download_url = d["image_url"]
-                    _download_filename = d.get("filename", "image.png")
-                elif d.get("filename"):
-                    _download_filename = d["filename"]
-        except Exception:
-            pass
+        _m = _re.search(
+            r"(?:OK|Saved|已生成|完成)\s*[:：]\s*([^\s]+\.(?:pdf|docx|xlsx|csv|png|jpg|jpeg|zip))",
+            stripped, flags=_re.IGNORECASE,
+        )
+        if _m:
+            _download_filename = _m.group(1)
 
     if _download_filename:
         if not _download_url:
-            # Resolve via /downloads/ endpoint; path is relative to workspace/
-            # Keep only the basename in case the skill emitted a full path.
+            # Build an ABSOLUTE URL. Chat UI renders markdown links fine,
+            # but LINE treats the message as plain text — absolute links
+            # let LINE auto-detect the URL and make it tappable. Also
+            # future-proofs against UI renderers that don't join a /path
+            # with window.location.
             base = _os.path.basename(_download_filename)
-            _download_url = f"/downloads/{base}"
+            _base_url = _os.environ.get("BASE_URL", "http://localhost:8500").rstrip("/")
+            _download_url = f"{_base_url}/downloads/{base}"
+        elif _download_url.startswith("/"):
+            _base_url = _os.environ.get("BASE_URL", "http://localhost:8500").rstrip("/")
+            _download_url = _base_url + _download_url
         label = wf_name or "檔案"
         return (
             f"✅ {label} 已產出完成！\n\n"

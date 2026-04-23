@@ -242,9 +242,31 @@
   }
 
   function formatText(text) {
-    return escapeHtml(text)
-      .replace(/\n/g, "<br>")
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    // Escape everything first so we don't accidentally render user HTML.
+    let out = escapeHtml(text);
+    // Markdown links: [label](url)  → clickable <a>
+    // url group captures everything up to the closing paren; escapeHtml ran
+    // first so ( / ) in the original text would already be turned into HTML
+    // entities and wouldn't match — we only see legit markdown paren pairs.
+    // download attr tells the browser to trigger a download for files we serve.
+    out = out.replace(
+      /\[([^\]]+?)\]\(((?:https?:\/\/|\/)[^\s)]+)\)/g,
+      (_m, label, url) => {
+        const isDl = /\/downloads\//.test(url) || /\.(pdf|docx|xlsx|csv|zip)(?:$|\?)/i.test(url);
+        const attrs = isDl ? ' download' : ' target="_blank" rel="noopener"';
+        return `<a href="${url}"${attrs} class="page-chat-link">${label}</a>`;
+      }
+    );
+    // Bare URLs (http/https) that weren't already wrapped in a markdown link.
+    // Skip if the URL appears immediately after `href="` (already a link).
+    out = out.replace(
+      /(^|[\s>])(https?:\/\/[^\s<]+)/g,
+      (m, pre, url) => `${pre}<a href="${url}" target="_blank" rel="noopener" class="page-chat-link">${url}</a>`
+    );
+    // Newlines and bold (existing behavior).
+    out = out.replace(/\n/g, "<br>")
+             .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    return out;
   }
 
   function getRelativeTimeString(timestamp) {

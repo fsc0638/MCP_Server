@@ -1882,6 +1882,28 @@
 
   function _escHtml(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
+  // Workflow final_output commonly ends with a markdown download link
+  // emitted by server/services/workflow_executor.py::_format_terminal_output.
+  // _escHtml alone would turn the link into visible text — this helper
+  // escapes HTML first, then selectively unescapes [label](url) patterns
+  // into clickable anchors (download trigger for /downloads/* paths).
+  function _renderFinalOutputHtml(text) {
+    let out = _escHtml(text || "");
+    out = out.replace(
+      /\[([^\]]+?)\]\(((?:https?:\/\/|\/)[^\s)]+)\)/g,
+      (_m, label, url) => {
+        const isDl = /\/downloads\//.test(url) || /\.(pdf|docx|xlsx|csv|zip)(?:$|\?)/i.test(url);
+        const attrs = isDl ? ' download' : ' target="_blank" rel="noopener"';
+        return `<a href="${url}"${attrs} style="color:var(--kway-blue);text-decoration:underline;">${label}</a>`;
+      }
+    );
+    out = out.replace(
+      /(^|[\s>])(https?:\/\/[^\s<]+)/g,
+      (_m, pre, url) => `${pre}<a href="${url}" target="_blank" rel="noopener" style="color:var(--kway-blue);text-decoration:underline;">${url}</a>`
+    );
+    return out;
+  }
+
   async function _showWorkflowLanding() {
     const overlay = document.getElementById("wfLandingOverlay");
     if (!overlay) return;
@@ -2156,7 +2178,7 @@
       }).join("");
     const outputHtml = data.final_output
       ? `<div style="margin-top:12px;"><div style="font-size:0.75rem;font-weight:700;color:#555;margin-bottom:6px;">最終輸出</div>
-         <div style="background:var(--bg-sidebar);border-radius:8px;padding:12px;font-size:0.8rem;white-space:pre-wrap;max-height:220px;overflow-y:auto;">${_escHtml(data.final_output)}</div></div>`
+         <div style="background:var(--bg-sidebar);border-radius:8px;padding:12px;font-size:0.8rem;white-space:pre-wrap;max-height:220px;overflow-y:auto;">${_renderFinalOutputHtml(data.final_output)}</div></div>`
       : "";
     overlay.innerHTML = `
       <div style="background:#fff;border-radius:var(--modal-radius);box-shadow:var(--modal-shadow);padding:24px 24px 18px;width:var(--modal-width-md);max-width:92vw;max-height:85vh;overflow-y:auto;">
@@ -2439,7 +2461,9 @@
           const outDiv = document.createElement("div");
           outDiv.className = "wf-llm-output-div";
           outDiv.style.cssText = "background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:10px;margin-top:10px;font-size:0.78rem;color:#14532d;max-height:200px;overflow-y:auto;white-space:pre-wrap;";
-          outDiv.textContent = "最終輸出：\n" + (data.execution.final_output || "").slice(0, 1500);
+          // Render with clickable markdown links (PDF/image download links)
+          const fo = (data.execution.final_output || "").slice(0, 1500);
+          outDiv.innerHTML = "<strong>最終輸出：</strong><br>" + _renderFinalOutputHtml(fo);
           previewEl.insertAdjacentElement("afterend", outDiv);
         }
 
