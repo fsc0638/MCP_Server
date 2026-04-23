@@ -1819,7 +1819,7 @@
       // Landing is open → close landing, back to chat
       body.classList.remove("wf-mode");
       body.classList.remove("wf-readonly");
-      if (btn) btn.classList.remove("active");
+      if (btn) btn.classList.remove("active", "is-active");
       if (_overlay) _overlay.classList.remove("open");
       const _pp = document.getElementById("wfPropPanel");
       if (_pp) _pp.classList.add("hidden");
@@ -1872,7 +1872,10 @@
 
     } else {
       // Not in workflow → open Landing
-      if (btn) btn.classList.add("active");
+      // Add both legacy `active` (top-bar styling) and `is-active` (sidebar
+      // styling) so the button lights up regardless of which location hosts
+      // it — the button was moved to the sidebar 2026-04-23.
+      if (btn) btn.classList.add("active", "is-active");
       _showWorkflowLanding();
     }
   }
@@ -5161,9 +5164,35 @@
   // ── Utility ───────────────────────────────────────────────────
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+  // ── Sidebar entry: open skill-editor directly ───────────────────
+  // Called from chat.html's 「技能管理」 sidebar button (added 2026-04-23).
+  // Previously the skill editor was only reachable via the workflow
+  // designer's palette header → this shortcut cuts the detour: enter
+  // workflow mode if needed, then flip into skill-edit mode in one step.
+  async function openSkillManager() {
+    const body = document.querySelector(".page-chat-body");
+    const inWfMode = body && body.classList.contains("wf-mode");
+    // Not yet in workflow mode → enter it first (this shows the designer
+    // palette + canvas). toggleWorkflowView handles the open-landing flow.
+    if (!inWfMode) {
+      await toggleWorkflowView();
+    }
+    // If landing overlay is visible, close it so we go straight to the
+    // designer + palette where skill-edit mode can take over.
+    const overlay = document.getElementById("wfLandingOverlay");
+    if (overlay && overlay.classList.contains("open")) {
+      overlay.classList.remove("open");
+    }
+    // Flip to skill-edit mode if we're not already there.
+    if (!_skillEditMode) {
+      await toggleSkillEditMode();
+    }
+  }
+
   // Expose to global
   window.toggleWorkflowView = toggleWorkflowView;
   window.toggleSkillEditMode = toggleSkillEditMode;
+  window.openSkillManager = openSkillManager;
   window.closeWfPropPanel = closeWfPropPanel;
 
   // Auto-open workflow landing or specific workflow from query params
@@ -5176,7 +5205,7 @@
       function _tryLanding() {
         const btn = document.getElementById("btnWorkflowDesigner");
         if (!btn) { requestAnimationFrame(_tryLanding); return; }
-        btn.classList.add("active");
+        btn.classList.add("active", "is-active");
         _showWorkflowLanding();
       }
       if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", _tryLanding);
@@ -5198,7 +5227,7 @@
       const body = document.querySelector(".page-chat-body");
       if (body) body.classList.add("wf-mode");
       const btn = document.getElementById("btnWorkflowDesigner");
-      if (btn) btn.classList.add("active");
+      if (btn) btn.classList.add("active", "is-active");
       _enterWorkflowCanvas(wfId, scope, owner);
     }
     if (document.readyState === "loading") {
