@@ -8,6 +8,16 @@
 .admin-body {
   display: flex; height: calc(100vh - 52px);
 }
+
+/* Main menu rail shared with chat.html (added 2026-04-23). Uses the
+   same page-chat-primary-nav visual system so sidebar feels identical
+   across pages; a modest fixed width keeps the admin-sidebar aligned
+   with its chat.html grid counterpart. */
+.admin-primary-nav {
+  width: 96px; flex-shrink: 0;
+}
+@media (max-width: 1200px) { .admin-primary-nav { width: 88px; } }
+@media (max-width: 900px)  { .admin-primary-nav { width: 78px; } }
 /* Mark active nav tab in topbar */
 .page-chat-workspace-tag.active {
   background: var(--kway-blue); color: #fff !important;

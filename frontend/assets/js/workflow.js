@@ -5272,6 +5272,22 @@
       return;
     }
 
+    // ?openSkillManager=1 → jump straight into skill editor (used by the
+    // main-menu link on admin.html so users can return to skill maintenance
+    // with one click from anywhere, 2026-04-23).
+    if (params.get("openSkillManager")) {
+      history.replaceState(null, "", window.location.pathname);
+      function _trySkillManager() {
+        if (typeof window.openSkillManager !== "function") {
+          requestAnimationFrame(_trySkillManager); return;
+        }
+        window.openSkillManager();
+      }
+      if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", _trySkillManager);
+      else _trySkillManager();
+      return;
+    }
+
     // ?wf=xxx → open specific workflow canvas
     const wfId = params.get("wf");
     if (!wfId) return;
