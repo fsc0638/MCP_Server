@@ -359,7 +359,7 @@ class WorkflowExecutor:
         """
         adapter = self._get_adapter(model)
         if adapter is None:
-            return {"content": "", "usage": {}}
+            return {"content": "", "usage": {}, "error": "OpenAI adapter 不可用（API Key 未設定？）"}
 
         messages = [
             {"role": "system", "content": guide or ""},
@@ -379,7 +379,17 @@ class WorkflowExecutor:
             )
         except Exception as e:
             logger.warning(f"[WFExec] Semantic LLM call failed for {skill_name}: {e}")
-            return {"content": "", "usage": {}}
+            # Map common OpenAI error strings to actionable Chinese messages
+            _low = str(e).lower()
+            if "insufficient_quota" in _low or "exceeded your current quota" in _low or "billing" in _low:
+                err = "OpenAI API 配額已用完 / 帳單異常，請檢查 platform.openai.com/account/billing"
+            elif "rate_limit" in _low or "rate limit" in _low:
+                err = "OpenAI API rate limit — 請稍候再試"
+            elif "invalid_api_key" in _low or "incorrect api key" in _low or "401" in str(e):
+                err = "OpenAI API Key 無效，請檢查 .env 中的 OPENAI_API_KEY"
+            else:
+                err = f"OpenAI 呼叫失敗：{str(e)[:150]}"
+            return {"content": "", "usage": {}, "error": err}
 
         content = ""
         usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
@@ -1033,8 +1043,25 @@ class WorkflowExecutor:
                             f"total={llm_result['usage'].get('total_tokens',0)}"
                         )
                     else:
-                        # LLM failed — fall back to raw guide (better than crashing)
-                        output_text = guide
+                        # LLM failed (quota exhausted, network error, etc).
+                        # Do NOT fall back to the raw SKILL.md guide — that
+                        # pollutes downstream blocks with a prompt template
+                        # masquerading as analysis output. Surface as a
+                        # real block error so the workflow's on_error policy
+                        # fires (abort / skip / retry).
+                        _err_msg = llm_result.get("error") or (
+                            "LLM 呼叫失敗，Semantic skill 無法產出分析結果。"
+                            "常見原因：OpenAI API 配額用盡 / Key 無效 / 網路中斷。"
+                        )
+                        self._record_skill_usage(
+                            skill_name=skill_name,
+                            user_context=user_context,
+                            model=block_model,
+                            result={"status": "error", "message": _err_msg},
+                            duration_ms=int(time.time() * 1000) - _block_start_ms,
+                            status="error",
+                        )
+                        raise Exception(f"Semantic skill error: {_err_msg}")
                 elif isinstance(result, dict):
                     output_text = (
                         result.get("output") or result.get("guide") or result.get("content")
