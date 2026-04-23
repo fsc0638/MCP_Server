@@ -913,9 +913,11 @@ html, body { height: 100%; overflow: hidden; }
 }
 .toast.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.show       { opacity: 1; transform: translateX(-50%) translateY(0); }
-.toast.error      { background: #b91c1c; white-space: normal; max-width: 90vw; text-align: left; }
-.toast.warning    { background: #b45309; white-space: normal; max-width: 90vw; text-align: left; }
-.toast.info       { background: #1e40af; }
+.toast.error      { background: var(--color-error,   #b91c1c); white-space: normal; max-width: 90vw; text-align: left; }
+.toast.warning    { background: var(--color-warning, #b45309); white-space: normal; max-width: 90vw; text-align: left; }
+/* info = brand-teal (was hard-coded #1e40af indigo). Routes through
+   --kway-blue so it themes correctly across all 8 color themes. */
+.toast.info       { background: var(--kway-blue,     #1a9aaa); }
 
 /* ── prefers-reduced-motion ─────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
