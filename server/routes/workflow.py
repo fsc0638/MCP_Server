@@ -1492,6 +1492,60 @@ async def llm_generate_workflow(
     if not wf["steps"]:
         raise HTTPException(status_code=422, detail="LLM 產生的工作流無可用步驟（可能全部引用到白名單外技能）")
 
+    # ── Reconcile output_var ↔ ${placeholder} mismatches ──
+    # LLMs love to emit:
+    #   step A: output_var = "step_1_output"
+    #   step B: input_map.text = "${newsResults}"
+    # …where `newsResults` was never declared anywhere. Our interpolator
+    # then passes the literal string "${newsResults}" to the skill, which
+    # corrupts every downstream block.
+    #
+    # Deterministic fix: scan each sequential step's input_map for
+    # ${PLACEHOLDER} references. If a placeholder doesn't match any
+    # prior step's output_var and isn't a declared variable, rename the
+    # immediately prior sequential step's output_var to match (renames
+    # are safe because nothing references the old name yet — the LLM
+    # already "forgot" the correct name).
+    import re as _re_varsync
+    _known_var_names = set()
+    for _v in (wf.get("variables") or {}).get("definitions", []) or []:
+        if isinstance(_v, dict) and _v.get("name"):
+            _known_var_names.add(_v["name"])
+
+    _prior_outputs = []  # ordered list of output_var names, mutated as we fix
+    _renames = 0
+    for _step in wf["steps"]:
+        if not isinstance(_step, dict) or _step.get("type") != "sequential":
+            continue
+        _im = _step.get("input_map") or {}
+        for _pname, _pval in list(_im.items()):
+            if not isinstance(_pval, str):
+                continue
+            for _m in _re_varsync.finditer(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", _pval):
+                _ref = _m.group(1)
+                if _ref in _known_var_names or _ref in _prior_outputs:
+                    continue
+                # Unknown reference — rename the most recent prior step to match.
+                if _prior_outputs:
+                    _old = _prior_outputs[-1]
+                    # Walk backwards to find the step with that output_var
+                    for _prev in reversed(wf["steps"][: wf["steps"].index(_step)]):
+                        if _prev.get("output_var") == _old:
+                            _prev["output_var"] = _ref
+                            _prior_outputs[-1] = _ref
+                            _renames += 1
+                            logger.info(
+                                f"[LLM-Gen] Reconciled var name: renamed upstream "
+                                f"output_var {_old!r} -> {_ref!r} (referenced by "
+                                f"{_step.get('skill_id')})"
+                            )
+                            break
+        _ov = _step.get("output_var")
+        if _ov:
+            _prior_outputs.append(_ov)
+    if _renames:
+        logger.info(f"[LLM-Gen] Reconciled {_renames} output_var mismatch(es)")
+
     # ── Promote schedule-manager type=workflow step → trigger.schedule ──
     # New architecture: recurring workflows should use workflow.trigger.schedule
     # directly (APScheduler picks it up). If LLM still emits a legacy
