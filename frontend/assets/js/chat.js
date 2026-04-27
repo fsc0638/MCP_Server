@@ -31,6 +31,7 @@
     modelIndex: 0,
     sessionId: localStorage.getItem("kway_chat_session") || generateDraftSessionId(),
     meetingText: "",
+    userDocuments: [],
     sessions: JSON.parse(localStorage.getItem("kway_sessions") || "[]"),
     activeApprovalTaskId: null,
     // ── Per-session isolation state ──
@@ -58,8 +59,36 @@
   const chatMessages = document.getElementById("chatMessages");
   const chatInput = document.getElementById("chatInput");
   const sendBtn = document.getElementById("sendBtn");
+  const audioUploadBtn = document.getElementById("audioUploadBtn");
+  const audioRecorderBtn = document.getElementById("audioRecorderBtn");
+  const audioFileInput = document.getElementById("audioFileInput");
   const modelName = document.getElementById("modelName");
   const chatTitleText = document.getElementById("chatTitleText");
+  const chatRoot = document.querySelector(".page-chat-root");
+  const chatBody = document.getElementById("chatBody");
+  const chatMobileOverlay = document.getElementById("chatMobileOverlay");
+  const chatPrimaryNav = document.getElementById("chatPrimaryNav");
+  const chatSidebarLeft = document.getElementById("chatSidebarLeft");
+  const primaryNavToggleButtons = [
+    document.getElementById("chatPrimaryNavToggle"),
+    document.getElementById("chatPrimaryNavInlineToggle"),
+  ].filter(Boolean);
+  const leftPanelToggleButtons = [document.getElementById("chatSidebarLeftToggle")].filter(Boolean);
+  const rightPanelToggleButtons = [document.getElementById("chatSidebarRightToggle")].filter(Boolean);
+  const rightPanelCloseButton = document.getElementById("chatSidebarRightCloseBtn");
+  const columnResizerHandles = Array.from(document.querySelectorAll(".page-chat-column-resizer"));
+  const PRIMARY_NAV_COLLAPSED_KEY = "kway_chat_primary_nav_collapsed";
+  const CHAT_DESKTOP_LAYOUT_KEY = "kway_chat_desktop_layout";
+  const DESKTOP_LAYOUT_MEDIA = window.matchMedia("(min-width: 1101px)");
+  const RIGHT_PANEL_DRAWER_MEDIA = window.matchMedia("(max-width: 1280px)");
+  const SIDE_PANEL_DRAWER_MEDIA = window.matchMedia("(max-width: 1024px)");
+  const DEFAULT_DESKTOP_LAYOUT = { nav: 96, left: 240, right: 276 };
+  const MIN_DESKTOP_LAYOUT = { nav: 72, left: 200, right: 220, main: 420 };
+  const MAX_DESKTOP_LAYOUT = { nav: 180, left: 420, right: 420 };
+  let isPrimaryNavCollapsed = true;
+  let desktopLayoutWidths = { ...DEFAULT_DESKTOP_LAYOUT };
+  let activeColumnResize = null;
+  let openResponsivePanel = null;
   const initialWelcomeMarkup = (() => {
     const staticWelcome = document.getElementById("chatWelcome");
     if (!staticWelcome) return "";
@@ -67,6 +96,601 @@
     staticWelcome.remove();
     return markup;
   })();
+  const audioRecorderState = {
+    supported:
+      !!(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function")
+      && typeof window.MediaRecorder !== "undefined",
+    isRecording: false,
+    isProcessing: false,
+    stream: null,
+    mediaRecorder: null,
+    chunks: [],
+    startedAt: 0,
+    mimeType: "",
+    fileExtension: "webm",
+    monitorContext: null,
+    monitorSource: null,
+    monitorAnalyser: null,
+    monitorTimerId: 0,
+    signalPeak: 0,
+    inputLabel: "",
+  };
+
+  function readStoredBoolean(key, fallbackValue) {
+    const stored = localStorage.getItem(key);
+    if (stored === null) return fallbackValue;
+    return stored === "1";
+  }
+
+  function clamp(value, minValue, maxValue) {
+    return Math.min(Math.max(value, minValue), maxValue);
+  }
+
+  function sanitizeWidth(value, fallbackValue) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallbackValue;
+    return numeric;
+  }
+
+  function resolveRecordedAudioMimeType() {
+    if (typeof window.MediaRecorder === "undefined" || typeof window.MediaRecorder.isTypeSupported !== "function") {
+      return "";
+    }
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/mp4",
+      "audio/ogg;codecs=opus",
+      "audio/ogg",
+    ];
+    return candidates.find((candidate) => window.MediaRecorder.isTypeSupported(candidate)) || "";
+  }
+
+  function inferAudioExtensionFromMimeType(mimeType) {
+    const normalized = String(mimeType || "").toLowerCase();
+    if (normalized.indexOf("mp4") !== -1 || normalized.indexOf("m4a") !== -1 || normalized.indexOf("aac") !== -1) {
+      return "m4a";
+    }
+    if (normalized.indexOf("ogg") !== -1) {
+      return "ogg";
+    }
+    if (normalized.indexOf("wav") !== -1) {
+      return "wav";
+    }
+    return "webm";
+  }
+
+  function buildRecordedAudioFilename(extension) {
+    const now = new Date();
+    const yyyy = String(now.getFullYear());
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const hh = String(now.getHours()).padStart(2, "0");
+    const min = String(now.getMinutes()).padStart(2, "0");
+    const sec = String(now.getSeconds()).padStart(2, "0");
+    return "recording-" + yyyy + mm + dd + "-" + hh + min + sec + "." + (extension || "webm");
+  }
+
+  function createRecordedAudioFile(blob, filename) {
+    if (typeof window.File === "function") {
+      return new File([blob], filename, { type: blob.type || "audio/webm" });
+    }
+    blob.name = filename;
+    return blob;
+  }
+
+  async function waitForAudioTrackReady(track, timeoutMs) {
+    if (!track || !track.muted) return;
+    const waitMs = Math.max(0, Number(timeoutMs || 1200));
+    await new Promise(function (resolve) {
+      let settled = false;
+      let timerId = 0;
+
+      function finish() {
+        if (settled) return;
+        settled = true;
+        if (timerId) window.clearTimeout(timerId);
+        track.removeEventListener("unmute", finish);
+        resolve();
+      }
+
+      track.addEventListener("unmute", finish, { once: true });
+      timerId = window.setTimeout(finish, waitMs);
+    });
+  }
+
+  function stopAudioSignalMonitor() {
+    if (audioRecorderState.monitorTimerId) {
+      window.clearInterval(audioRecorderState.monitorTimerId);
+      audioRecorderState.monitorTimerId = 0;
+    }
+    if (audioRecorderState.monitorSource) {
+      try {
+        audioRecorderState.monitorSource.disconnect();
+      } catch (_err) {
+        // ignore disconnect errors
+      }
+      audioRecorderState.monitorSource = null;
+    }
+    if (audioRecorderState.monitorAnalyser) {
+      try {
+        audioRecorderState.monitorAnalyser.disconnect();
+      } catch (_err) {
+        // ignore disconnect errors
+      }
+      audioRecorderState.monitorAnalyser = null;
+    }
+    if (audioRecorderState.monitorContext) {
+      try {
+        audioRecorderState.monitorContext.close();
+      } catch (_err) {
+        // ignore close errors
+      }
+      audioRecorderState.monitorContext = null;
+    }
+  }
+
+  function startAudioSignalMonitor(stream) {
+    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    audioRecorderState.signalPeak = 0;
+    if (!AudioContextCtor || !stream) return;
+
+    try {
+      const ctx = new AudioContextCtor();
+      if (typeof ctx.resume === "function") {
+        ctx.resume().catch(function () {
+          // ignore resume errors and keep best-effort monitoring
+        });
+      }
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      source.connect(analyser);
+
+      audioRecorderState.monitorContext = ctx;
+      audioRecorderState.monitorSource = source;
+      audioRecorderState.monitorAnalyser = analyser;
+
+      const sampleFloat = typeof analyser.getFloatTimeDomainData === "function";
+      const floatBuffer = sampleFloat ? new Float32Array(analyser.fftSize) : null;
+      const byteBuffer = sampleFloat ? null : new Uint8Array(analyser.fftSize);
+
+      audioRecorderState.monitorTimerId = window.setInterval(function () {
+        let peak = 0;
+        if (floatBuffer) {
+          analyser.getFloatTimeDomainData(floatBuffer);
+          for (let i = 0; i < floatBuffer.length; i += 1) {
+            const level = Math.abs(floatBuffer[i]);
+            if (level > peak) peak = level;
+          }
+        } else if (byteBuffer) {
+          analyser.getByteTimeDomainData(byteBuffer);
+          for (let i = 0; i < byteBuffer.length; i += 1) {
+            const level = Math.abs((byteBuffer[i] - 128) / 128);
+            if (level > peak) peak = level;
+          }
+        }
+        if (peak > audioRecorderState.signalPeak) {
+          audioRecorderState.signalPeak = peak;
+        }
+      }, 120);
+    } catch (_err) {
+      stopAudioSignalMonitor();
+    }
+  }
+
+  function releaseAudioRecorderStream() {
+    if (!audioRecorderState.stream) return;
+    audioRecorderState.stream.getTracks().forEach((track) => {
+      try {
+        track.stop();
+      } catch (_err) {
+        // ignore track stop errors
+      }
+    });
+    audioRecorderState.stream = null;
+  }
+
+  function resetAudioRecorderState() {
+    stopAudioSignalMonitor();
+    releaseAudioRecorderStream();
+    audioRecorderState.isRecording = false;
+    audioRecorderState.isProcessing = false;
+    audioRecorderState.mediaRecorder = null;
+    audioRecorderState.chunks = [];
+    audioRecorderState.startedAt = 0;
+    audioRecorderState.mimeType = "";
+    audioRecorderState.fileExtension = "webm";
+    audioRecorderState.signalPeak = 0;
+    audioRecorderState.inputLabel = "";
+  }
+
+  function explainRecorderError(err) {
+    const name = err && err.name ? String(err.name) : "";
+    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+      return "尚未取得麥克風權限，請允許瀏覽器使用麥克風後再試一次。";
+    }
+    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+      return "找不到可用的麥克風裝置，請確認手機、平板或電腦已接上麥克風。";
+    }
+    if (name === "NotReadableError" || name === "TrackStartError") {
+      return "麥克風目前被其他程式占用，請關閉其他錄音應用後再試。";
+    }
+    if (name === "SecurityError") {
+      return "目前頁面環境不允許直接錄音，請改用安全連線或既有的音檔上傳。";
+    }
+    return "無法啟動錄音功能，請稍後再試或改用音檔上傳。";
+  }
+
+  function syncAudioRecorderButton() {
+    if (!audioRecorderBtn) return;
+    const isUnsupported = !audioRecorderState.supported;
+    const isRecording = !!audioRecorderState.isRecording;
+    const isProcessing = !!audioRecorderState.isProcessing;
+
+    audioRecorderBtn.classList.toggle("is-recording", isRecording);
+    audioRecorderBtn.classList.toggle("is-processing", isProcessing);
+    audioRecorderBtn.disabled = isProcessing;
+    audioRecorderBtn.setAttribute("aria-pressed", isRecording ? "true" : "false");
+
+    if (isUnsupported) {
+      audioRecorderBtn.setAttribute("aria-label", "目前瀏覽器不支援直接錄音");
+      audioRecorderBtn.setAttribute("title", "目前瀏覽器不支援直接錄音");
+      return;
+    }
+    if (isRecording) {
+      audioRecorderBtn.setAttribute("aria-label", "停止錄音並決定是否儲存到文件中心");
+      audioRecorderBtn.setAttribute("title", "錄音中，點一下停止並決定是否儲存到文件中心");
+      return;
+    }
+    if (isProcessing) {
+      audioRecorderBtn.setAttribute("aria-label", "正在處理錄音");
+      audioRecorderBtn.setAttribute("title", "正在處理錄音");
+      return;
+    }
+    audioRecorderBtn.setAttribute("aria-label", "開始錄音並可儲存到文件中心");
+    audioRecorderBtn.setAttribute("title", "開始錄音並可儲存到文件中心");
+  }
+
+  function readStoredDesktopLayout() {
+    try {
+      const raw = localStorage.getItem(CHAT_DESKTOP_LAYOUT_KEY);
+      if (!raw) return { ...DEFAULT_DESKTOP_LAYOUT };
+      const parsed = JSON.parse(raw);
+      return {
+        nav: sanitizeWidth(parsed.nav, DEFAULT_DESKTOP_LAYOUT.nav),
+        left: sanitizeWidth(parsed.left, DEFAULT_DESKTOP_LAYOUT.left),
+        right: sanitizeWidth(parsed.right, DEFAULT_DESKTOP_LAYOUT.right),
+      };
+    } catch (_err) {
+      return { ...DEFAULT_DESKTOP_LAYOUT };
+    }
+  }
+
+  function normalizeDesktopLayout(widths) {
+    const next = {
+      nav: clamp(
+        sanitizeWidth(widths && widths.nav, DEFAULT_DESKTOP_LAYOUT.nav),
+        MIN_DESKTOP_LAYOUT.nav,
+        MAX_DESKTOP_LAYOUT.nav
+      ),
+      left: clamp(
+        sanitizeWidth(widths && widths.left, DEFAULT_DESKTOP_LAYOUT.left),
+        MIN_DESKTOP_LAYOUT.left,
+        MAX_DESKTOP_LAYOUT.left
+      ),
+      right: clamp(
+        sanitizeWidth(widths && widths.right, DEFAULT_DESKTOP_LAYOUT.right),
+        MIN_DESKTOP_LAYOUT.right,
+        MAX_DESKTOP_LAYOUT.right
+      ),
+    };
+
+    if (!chatBody) return next;
+
+    const containerWidth = chatBody.getBoundingClientRect().width || 0;
+    if (!DESKTOP_LAYOUT_MEDIA.matches || !containerWidth) return next;
+
+    let overflow =
+      next.nav + next.left + next.right - Math.max(containerWidth - MIN_DESKTOP_LAYOUT.main, 0);
+
+    if (overflow > 0) {
+      const shrinkOrder = [
+        ["right", MIN_DESKTOP_LAYOUT.right],
+        ["left", MIN_DESKTOP_LAYOUT.left],
+        ["nav", MIN_DESKTOP_LAYOUT.nav],
+      ];
+
+      shrinkOrder.forEach(function (entry) {
+        const key = entry[0];
+        const minWidth = entry[1];
+        if (overflow <= 0) return;
+        const available = Math.max(0, next[key] - minWidth);
+        const reduction = Math.min(available, overflow);
+        next[key] -= reduction;
+        overflow -= reduction;
+      });
+    }
+
+    return next;
+  }
+
+  function clearDesktopLayoutStyles() {
+    if (!chatRoot) return;
+    chatRoot.style.removeProperty("--chat-nav-width-expanded");
+    chatRoot.style.removeProperty("--chat-left-width");
+    chatRoot.style.removeProperty("--chat-right-width");
+  }
+
+  function applyDesktopLayout(widths, options) {
+    const opts = options || {};
+    const normalized = normalizeDesktopLayout(widths || desktopLayoutWidths);
+    desktopLayoutWidths = normalized;
+
+    if (!DESKTOP_LAYOUT_MEDIA.matches) {
+      clearDesktopLayoutStyles();
+      return normalized;
+    }
+
+    if (chatRoot) {
+      chatRoot.style.setProperty("--chat-nav-width-expanded", normalized.nav + "px");
+      chatRoot.style.setProperty("--chat-left-width", normalized.left + "px");
+      chatRoot.style.setProperty("--chat-right-width", normalized.right + "px");
+    }
+
+    if (opts.persist !== false) {
+      localStorage.setItem(CHAT_DESKTOP_LAYOUT_KEY, JSON.stringify(normalized));
+    }
+
+    return normalized;
+  }
+
+  function getVisiblePrimaryNavWidth() {
+    return isPrimaryNavCollapsed ? 0 : desktopLayoutWidths.nav;
+  }
+
+  function stopColumnResize() {
+    if (!activeColumnResize) return;
+    activeColumnResize = null;
+    if (chatBody) {
+      chatBody.classList.remove("is-layout-resizing");
+    }
+    window.removeEventListener("pointermove", handleColumnResizeMove);
+    window.removeEventListener("pointerup", stopColumnResize);
+    window.removeEventListener("pointercancel", stopColumnResize);
+    applyDesktopLayout(desktopLayoutWidths);
+  }
+
+  function handleColumnResizeMove(event) {
+    if (!activeColumnResize || !chatBody || !DESKTOP_LAYOUT_MEDIA.matches) return;
+
+    const rect = chatBody.getBoundingClientRect();
+    const pointerOffset = clamp(event.clientX - rect.left, 0, rect.width);
+    const nextLayout = { ...desktopLayoutWidths };
+    const visibleNavWidth = getVisiblePrimaryNavWidth();
+
+    if (activeColumnResize.edge === "nav") {
+      nextLayout.nav = pointerOffset;
+    } else if (activeColumnResize.edge === "left") {
+      nextLayout.left = pointerOffset - visibleNavWidth;
+    } else if (activeColumnResize.edge === "right") {
+      nextLayout.right = rect.width - pointerOffset;
+    }
+
+    applyDesktopLayout(nextLayout, { persist: false });
+  }
+
+  function startColumnResize(event) {
+    if (!DESKTOP_LAYOUT_MEDIA.matches || !chatBody) return;
+
+    const handle = event.currentTarget;
+    const edge = handle && handle.dataset ? handle.dataset.resizeEdge : "";
+    if (!edge) return;
+
+    activeColumnResize = { edge: edge };
+    chatBody.classList.add("is-layout-resizing");
+    if (typeof handle.setPointerCapture === "function") {
+      handle.setPointerCapture(event.pointerId);
+    }
+
+    window.addEventListener("pointermove", handleColumnResizeMove);
+    window.addEventListener("pointerup", stopColumnResize);
+    window.addEventListener("pointercancel", stopColumnResize);
+    event.preventDefault();
+  }
+
+  function handleDesktopLayoutResize() {
+    if (activeColumnResize) {
+      stopColumnResize();
+    }
+
+    if (DESKTOP_LAYOUT_MEDIA.matches) {
+      applyDesktopLayout(desktopLayoutWidths, { persist: false });
+    } else {
+      clearDesktopLayoutStyles();
+    }
+
+    syncResponsivePanels();
+  }
+
+  function usesResponsiveDrawer(panelName) {
+    if (panelName === "right") return RIGHT_PANEL_DRAWER_MEDIA.matches;
+    if (panelName === "left" || panelName === "nav") return SIDE_PANEL_DRAWER_MEDIA.matches;
+    return false;
+  }
+
+  function updatePanelToggleButtons() {
+    const navExpanded = usesResponsiveDrawer("nav")
+      ? openResponsivePanel === "nav"
+      : !isPrimaryNavCollapsed;
+
+    primaryNavToggleButtons.forEach(function (button) {
+      const usesDrawer = usesResponsiveDrawer("nav");
+      button.setAttribute("aria-expanded", String(navExpanded));
+      button.setAttribute("title", usesDrawer ? (navExpanded ? "關閉主選單" : "開啟主選單") : (navExpanded ? "隱藏主選單" : "展開主選單"));
+      button.classList.toggle("is-active", navExpanded);
+    });
+
+    leftPanelToggleButtons.forEach(function (button) {
+      const isOpen = openResponsivePanel === "left";
+      button.setAttribute("aria-expanded", String(isOpen));
+      button.setAttribute("title", isOpen ? "關閉對話記錄" : "開啟對話記錄");
+      button.classList.toggle("is-active", isOpen);
+    });
+
+    rightPanelToggleButtons.forEach(function (button) {
+      const isOpen = openResponsivePanel === "right";
+      button.setAttribute("aria-expanded", String(isOpen));
+      button.setAttribute("title", isOpen ? "關閉工作面板" : "開啟工作面板");
+      button.classList.toggle("is-active", isOpen);
+    });
+  }
+
+  function setResponsivePanel(panelName) {
+    const nextPanel = panelName && usesResponsiveDrawer(panelName) ? panelName : null;
+    openResponsivePanel = nextPanel;
+
+    if (chatBody) {
+      chatBody.classList.toggle("is-primary-nav-drawer-open", nextPanel === "nav");
+      chatBody.classList.toggle("is-left-panel-open", nextPanel === "left");
+      chatBody.classList.toggle("is-right-panel-open", nextPanel === "right");
+    }
+
+    if (chatMobileOverlay) {
+      chatMobileOverlay.classList.toggle("is-open", !!nextPanel);
+    }
+
+    updatePanelToggleButtons();
+  }
+
+  function closeResponsivePanels() {
+    setResponsivePanel(null);
+  }
+
+  function toggleResponsivePanel(panelName) {
+    if (!usesResponsiveDrawer(panelName)) return;
+    setResponsivePanel(openResponsivePanel === panelName ? null : panelName);
+  }
+
+  function syncResponsivePanels() {
+    if (openResponsivePanel && !usesResponsiveDrawer(openResponsivePanel)) {
+      closeResponsivePanels();
+      return;
+    }
+    setResponsivePanel(openResponsivePanel);
+  }
+
+  function applyPrimaryNavCollapsed(nextCollapsed, options) {
+    const opts = options || {};
+    isPrimaryNavCollapsed = !!nextCollapsed;
+
+    if (chatBody) {
+      chatBody.classList.toggle("is-primary-nav-collapsed", isPrimaryNavCollapsed);
+    }
+    updatePanelToggleButtons();
+
+    if (opts.persist !== false) {
+      localStorage.setItem(PRIMARY_NAV_COLLAPSED_KEY, isPrimaryNavCollapsed ? "1" : "0");
+    }
+  }
+
+  function togglePrimaryNav(forceCollapsed) {
+    if (usesResponsiveDrawer("nav")) {
+      const shouldOpen = typeof forceCollapsed === "boolean" ? !forceCollapsed : openResponsivePanel !== "nav";
+      setResponsivePanel(shouldOpen ? "nav" : null);
+      return;
+    }
+
+    const nextCollapsed =
+      typeof forceCollapsed === "boolean" ? forceCollapsed : !isPrimaryNavCollapsed;
+    applyPrimaryNavCollapsed(nextCollapsed);
+  }
+
+  window.togglePrimaryNav = togglePrimaryNav;
+
+  primaryNavToggleButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      togglePrimaryNav();
+    });
+  });
+
+  leftPanelToggleButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      toggleResponsivePanel("left");
+    });
+  });
+
+  rightPanelToggleButtons.forEach(function (button) {
+    button.addEventListener("click", function () {
+      toggleResponsivePanel("right");
+    });
+  });
+
+  if (rightPanelCloseButton) {
+    rightPanelCloseButton.addEventListener("click", function () {
+      if (usesResponsiveDrawer("right")) {
+        closeResponsivePanels();
+      }
+    });
+  }
+
+  if (chatMobileOverlay) {
+    chatMobileOverlay.addEventListener("click", function () {
+      closeResponsivePanels();
+    });
+  }
+
+  if (chatPrimaryNav) {
+    chatPrimaryNav.addEventListener("click", function (event) {
+      if (usesResponsiveDrawer("nav") && event.target.closest(".page-chat-primary-nav-btn")) {
+        closeResponsivePanels();
+      }
+    });
+  }
+
+  if (chatSidebarLeft) {
+    chatSidebarLeft.addEventListener("click", function (event) {
+      if (!usesResponsiveDrawer("left")) return;
+      if (
+        event.target.closest(".page-chat-conv-item") ||
+        event.target.closest(".page-chat-new-btn") ||
+        event.target.closest(".page-chat-sidebar-header .btn-icon")
+      ) {
+        closeResponsivePanels();
+      }
+    });
+  }
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && openResponsivePanel) {
+      closeResponsivePanels();
+    }
+  });
+
+  columnResizerHandles.forEach(function (handle) {
+    handle.addEventListener("pointerdown", startColumnResize);
+  });
+
+  applyPrimaryNavCollapsed(readStoredBoolean(PRIMARY_NAV_COLLAPSED_KEY, true), { persist: false });
+  desktopLayoutWidths = normalizeDesktopLayout(readStoredDesktopLayout());
+  applyDesktopLayout(desktopLayoutWidths, { persist: false });
+  window.addEventListener("resize", handleDesktopLayoutResize);
+  if (typeof DESKTOP_LAYOUT_MEDIA.addEventListener === "function") {
+    DESKTOP_LAYOUT_MEDIA.addEventListener("change", handleDesktopLayoutResize);
+  } else if (typeof DESKTOP_LAYOUT_MEDIA.addListener === "function") {
+    DESKTOP_LAYOUT_MEDIA.addListener(handleDesktopLayoutResize);
+  }
+  if (typeof RIGHT_PANEL_DRAWER_MEDIA.addEventListener === "function") {
+    RIGHT_PANEL_DRAWER_MEDIA.addEventListener("change", syncResponsivePanels);
+  } else if (typeof RIGHT_PANEL_DRAWER_MEDIA.addListener === "function") {
+    RIGHT_PANEL_DRAWER_MEDIA.addListener(syncResponsivePanels);
+  }
+  if (typeof SIDE_PANEL_DRAWER_MEDIA.addEventListener === "function") {
+    SIDE_PANEL_DRAWER_MEDIA.addEventListener("change", syncResponsivePanels);
+  } else if (typeof SIDE_PANEL_DRAWER_MEDIA.addListener === "function") {
+    SIDE_PANEL_DRAWER_MEDIA.addListener(syncResponsivePanels);
+  }
+  syncResponsivePanels();
 
   async function hydrateAuthFromServer() {
     try {
@@ -233,6 +857,933 @@
     }, _dur);
   }
   window.showToast = showToast;
+
+  function formatFileSize(bytes) {
+    const value = Number(bytes || 0);
+    if (!value) return "0 KB";
+    if (value < 1024 * 1024) return Math.max(1, Math.round(value / 1024)) + " KB";
+    return (value / (1024 * 1024)).toFixed(1) + " MB";
+  }
+
+  function getUserDocumentStatusMeta(status) {
+    switch (String(status || "").toLowerCase()) {
+      case "ready":
+        return { label: "可讀取", className: "" };
+      case "pending":
+        return { label: "整理中", className: " is-pending" };
+      case "failed":
+        return { label: "抽取失敗", className: " is-failed" };
+      default:
+        return { label: "可預覽", className: "" };
+    }
+  }
+
+  function formatUserDocumentExpiry(expiresAt) {
+    if (!expiresAt) return "";
+    const target = new Date(expiresAt);
+    if (Number.isNaN(target.getTime())) return "";
+    const diffMs = target.getTime() - Date.now();
+    const diffDays = Math.ceil(diffMs / 86400000);
+    if (diffDays <= 0) return "今天到期";
+    if (diffDays === 1) return "1 天後到期";
+    return diffDays + " 天後到期";
+  }
+
+  function formatAudioClock(seconds) {
+    const sec = Math.max(0, Math.floor(Number(seconds || 0)));
+    const hours = Math.floor(sec / 3600);
+    const minutes = Math.floor((sec % 3600) / 60);
+    const remain = sec % 60;
+    if (hours > 0) {
+      return String(hours) + ":" + String(minutes).padStart(2, "0") + ":" + String(remain).padStart(2, "0");
+    }
+    return String(minutes).padStart(2, "0") + ":" + String(remain).padStart(2, "0");
+  }
+
+  function formatDocumentTimestamp(value) {
+    if (!value) return "";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "";
+    try {
+      return parsed.toLocaleString("zh-TW", { hour12: false });
+    } catch (_err) {
+      return parsed.toISOString().replace("T", " ").slice(0, 19);
+    }
+  }
+
+  function buildAudioMetaPill(label, value) {
+    if (!value) return null;
+    const pill = document.createElement("div");
+    pill.className = "page-chat-audio-preview-pill";
+
+    const labelEl = document.createElement("span");
+    labelEl.className = "page-chat-audio-preview-pill-label";
+    labelEl.textContent = label;
+
+    const valueEl = document.createElement("strong");
+    valueEl.className = "page-chat-audio-preview-pill-value";
+    valueEl.textContent = value;
+
+    pill.appendChild(labelEl);
+    pill.appendChild(valueEl);
+    return pill;
+  }
+
+  function createAudioPreviewPanel(options) {
+    const panel = document.createElement("section");
+    panel.className = "page-chat-audio-preview";
+    panel.tabIndex = 0;
+
+    const src = String(options.audioSrc || "");
+    const meta = options.audioMeta || {};
+
+    const summary = document.createElement("div");
+    summary.className = "page-chat-audio-preview-summary";
+    [
+      buildAudioMetaPill("格式", ((meta.extension || "").replace(".", "").toUpperCase()) || "AUDIO"),
+      buildAudioMetaPill("大小", meta.size ? formatFileSize(meta.size) : ""),
+      buildAudioMetaPill("MIME", meta.mimeType || ""),
+      buildAudioMetaPill("建立時間", formatDocumentTimestamp(meta.createdAt)),
+    ].forEach(function (pill) {
+      if (pill) summary.appendChild(pill);
+    });
+
+    const waveform = document.createElement("div");
+    waveform.className = "page-chat-audio-preview-waveform";
+    waveform.setAttribute("aria-hidden", "true");
+    for (let i = 0; i < 36; i += 1) {
+      const bar = document.createElement("span");
+      bar.className = "page-chat-audio-preview-wave-bar";
+      bar.style.animationDelay = String((i % 9) * 0.08) + "s";
+      bar.style.height = String(18 + ((i * 7) % 42)) + "px";
+      waveform.appendChild(bar);
+    }
+
+    const audio = document.createElement("audio");
+    audio.className = "page-chat-audio-preview-native";
+    audio.preload = "metadata";
+    audio.src = src;
+    audio.setAttribute("playsinline", "playsinline");
+
+    const controlCard = document.createElement("div");
+    controlCard.className = "page-chat-audio-preview-controls";
+
+    const timelineHead = document.createElement("div");
+    timelineHead.className = "page-chat-audio-preview-timeline-head";
+    const currentTimeEl = document.createElement("span");
+    currentTimeEl.textContent = "00:00";
+    const durationEl = document.createElement("span");
+    durationEl.textContent = "--:--";
+    timelineHead.appendChild(currentTimeEl);
+    timelineHead.appendChild(durationEl);
+
+    const timelineRange = document.createElement("input");
+    timelineRange.className = "page-chat-audio-preview-timeline";
+    timelineRange.type = "range";
+    timelineRange.min = "0";
+    timelineRange.max = "1000";
+    timelineRange.value = "0";
+    timelineRange.disabled = true;
+    timelineRange.setAttribute("aria-label", "音訊播放進度");
+
+    const row = document.createElement("div");
+    row.className = "page-chat-audio-preview-control-row";
+
+    const transport = document.createElement("div");
+    transport.className = "page-chat-audio-preview-transport";
+
+    const backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.className = "page-chat-audio-preview-btn";
+    backBtn.textContent = "⟲ 10 秒";
+
+    const playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = "page-chat-audio-preview-btn is-primary";
+    playBtn.textContent = "播放";
+
+    const forwardBtn = document.createElement("button");
+    forwardBtn.type = "button";
+    forwardBtn.className = "page-chat-audio-preview-btn";
+    forwardBtn.textContent = "10 秒 ⟳";
+
+    transport.appendChild(backBtn);
+    transport.appendChild(playBtn);
+    transport.appendChild(forwardBtn);
+
+    const settings = document.createElement("div");
+    settings.className = "page-chat-audio-preview-settings";
+
+    const speedWrap = document.createElement("label");
+    speedWrap.className = "page-chat-audio-preview-field";
+    speedWrap.textContent = "速度";
+
+    const speedSelect = document.createElement("select");
+    speedSelect.className = "page-chat-audio-preview-select";
+    [0.75, 1, 1.25, 1.5, 2].forEach(function (rate) {
+      const opt = document.createElement("option");
+      opt.value = String(rate);
+      opt.textContent = String(rate) + "x";
+      if (rate === 1) opt.selected = true;
+      speedSelect.appendChild(opt);
+    });
+    speedWrap.appendChild(speedSelect);
+
+    const volumeWrap = document.createElement("label");
+    volumeWrap.className = "page-chat-audio-preview-field";
+    volumeWrap.textContent = "音量";
+
+    const volumeRange = document.createElement("input");
+    volumeRange.className = "page-chat-audio-preview-volume";
+    volumeRange.type = "range";
+    volumeRange.min = "0";
+    volumeRange.max = "100";
+    volumeRange.step = "1";
+    volumeRange.value = "100";
+    volumeRange.setAttribute("aria-label", "音量");
+    volumeWrap.appendChild(volumeRange);
+
+    settings.appendChild(speedWrap);
+    settings.appendChild(volumeWrap);
+
+    row.appendChild(transport);
+    row.appendChild(settings);
+
+    const hint = document.createElement("div");
+    hint.className = "page-chat-audio-preview-hint";
+    hint.textContent = "支援快捷鍵：空白鍵播放/暫停，← / → 快退或快進 10 秒。";
+
+    const error = document.createElement("div");
+    error.className = "page-chat-audio-preview-error";
+    error.style.display = "none";
+
+    controlCard.appendChild(timelineHead);
+    controlCard.appendChild(timelineRange);
+    controlCard.appendChild(row);
+    controlCard.appendChild(hint);
+    controlCard.appendChild(error);
+
+    panel.appendChild(summary);
+    panel.appendChild(waveform);
+    panel.appendChild(controlCard);
+    panel.appendChild(audio);
+
+    if (!src) {
+      error.style.display = "";
+      error.textContent = "音訊來源遺失，請改用「下載原檔」後再試。";
+      return panel;
+    }
+
+    let isSeeking = false;
+
+    function syncPlayButton() {
+      playBtn.textContent = audio.paused ? (audio.ended ? "重播" : "播放") : "暫停";
+    }
+
+    function syncTimeline(fromSeekInput) {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      const current = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+      currentTimeEl.textContent = formatAudioClock(current);
+      durationEl.textContent = duration > 0 ? formatAudioClock(duration) : "--:--";
+      timelineRange.disabled = duration <= 0;
+      if (!isSeeking || fromSeekInput) {
+        timelineRange.value = duration > 0 ? String(Math.round((current / duration) * 1000)) : "0";
+      }
+      syncPlayButton();
+    }
+
+    function seekBy(seconds) {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      if (!duration) return;
+      const next = Math.min(Math.max(0, audio.currentTime + seconds), duration);
+      audio.currentTime = next;
+      syncTimeline(true);
+    }
+
+    playBtn.addEventListener("click", function () {
+      if (audio.paused) {
+        if (audio.ended) audio.currentTime = 0;
+        audio.play().catch(function () {
+          error.style.display = "";
+          error.textContent = "播放失敗，請確認瀏覽器已允許音訊播放。";
+        });
+      } else {
+        audio.pause();
+      }
+      syncPlayButton();
+    });
+
+    backBtn.addEventListener("click", function () {
+      seekBy(-10);
+    });
+
+    forwardBtn.addEventListener("click", function () {
+      seekBy(10);
+    });
+
+    timelineRange.addEventListener("input", function () {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      if (!duration) return;
+      isSeeking = true;
+      const ratio = Number(timelineRange.value) / 1000;
+      currentTimeEl.textContent = formatAudioClock(duration * ratio);
+    });
+
+    timelineRange.addEventListener("change", function () {
+      const duration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      if (!duration) return;
+      const ratio = Number(timelineRange.value) / 1000;
+      audio.currentTime = duration * ratio;
+      isSeeking = false;
+      syncTimeline(true);
+    });
+
+    timelineRange.addEventListener("pointerup", function () {
+      isSeeking = false;
+    });
+
+    speedSelect.addEventListener("change", function () {
+      const rate = Number(speedSelect.value);
+      audio.playbackRate = Number.isFinite(rate) && rate > 0 ? rate : 1;
+    });
+
+    volumeRange.addEventListener("input", function () {
+      const level = Number(volumeRange.value);
+      audio.volume = Number.isFinite(level) ? Math.min(Math.max(level / 100, 0), 1) : 1;
+    });
+
+    panel.addEventListener("keydown", function (event) {
+      if (event.target && (event.target.tagName === "INPUT" || event.target.tagName === "SELECT")) return;
+      if (event.code === "Space") {
+        event.preventDefault();
+        playBtn.click();
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        seekBy(-10);
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        seekBy(10);
+      }
+    });
+
+    audio.addEventListener("loadedmetadata", function () {
+      error.style.display = "none";
+      syncTimeline(false);
+    });
+    audio.addEventListener("timeupdate", function () {
+      syncTimeline(false);
+    });
+    audio.addEventListener("play", syncPlayButton);
+    audio.addEventListener("pause", syncPlayButton);
+    audio.addEventListener("ended", syncPlayButton);
+    audio.addEventListener("error", function () {
+      error.style.display = "";
+      error.textContent = "無法載入這個音訊檔，請改用「下載原檔」檢查檔案。";
+    });
+
+    syncTimeline(false);
+    return panel;
+  }
+
+  function syncDocumentCenterVisibility(activeTab) {
+    document.querySelectorAll(".page-chat-doc-center-panel").forEach(function (el) {
+      el.style.display = activeTab === "docs" ? "" : "none";
+    });
+  }
+
+  let userDocModalPseudoFullscreen = false;
+
+  function isUserDocumentModalBrowserFullscreen(modal) {
+    return !!modal && (
+      document.fullscreenElement === modal ||
+      document.webkitFullscreenElement === modal
+    );
+  }
+
+  function syncUserDocumentModalFullscreenUi() {
+    const modal = document.getElementById("userDocModal");
+    const fullscreenBtn = document.getElementById("userDocModalFullscreenBtn");
+    if (!modal) return;
+
+    const isFullscreen = userDocModalPseudoFullscreen || isUserDocumentModalBrowserFullscreen(modal);
+    modal.classList.toggle("is-fullscreen", isFullscreen);
+
+    if (fullscreenBtn) {
+      fullscreenBtn.textContent = isFullscreen ? "退出全螢幕" : "全螢幕";
+      fullscreenBtn.setAttribute("aria-pressed", isFullscreen ? "true" : "false");
+    }
+  }
+
+  async function exitUserDocumentModalFullscreen() {
+    const modal = document.getElementById("userDocModal");
+    if (!modal) return;
+
+    userDocModalPseudoFullscreen = false;
+    if (isUserDocumentModalBrowserFullscreen(modal)) {
+      try {
+        if (typeof document.exitFullscreen === "function") {
+          await document.exitFullscreen();
+        } else if (typeof document.webkitExitFullscreen === "function") {
+          document.webkitExitFullscreen();
+        }
+      } catch (_err) {
+        // Ignore and let the modal fall back to normal size.
+      }
+    }
+
+    syncUserDocumentModalFullscreenUi();
+  }
+
+  async function toggleUserDocumentModalFullscreen() {
+    const modal = document.getElementById("userDocModal");
+    if (!modal) return;
+
+    if (userDocModalPseudoFullscreen || isUserDocumentModalBrowserFullscreen(modal)) {
+      await exitUserDocumentModalFullscreen();
+      return;
+    }
+
+    try {
+      if (typeof modal.requestFullscreen === "function") {
+        await modal.requestFullscreen();
+      } else if (typeof modal.webkitRequestFullscreen === "function") {
+        modal.webkitRequestFullscreen();
+      } else {
+        userDocModalPseudoFullscreen = true;
+      }
+    } catch (_err) {
+      userDocModalPseudoFullscreen = true;
+    }
+
+    syncUserDocumentModalFullscreenUi();
+  }
+
+  function openUserDocumentModal(options) {
+    const modal = document.getElementById("userDocModal");
+    const title = document.getElementById("userDocModalTitle");
+    const subtitle = document.getElementById("userDocModalSubtitle");
+    const body = document.getElementById("userDocModalBody");
+    const link = document.getElementById("userDocModalLink");
+    const expandBtn = document.getElementById("userDocModalExpandBtn");
+    const fullscreenBtn = document.getElementById("userDocModalFullscreenBtn");
+    if (!modal || !title || !subtitle || !body || !link || !expandBtn || !fullscreenBtn) return;
+
+    title.textContent = options.title || "文件預覽";
+    subtitle.textContent = options.subtitle || "";
+    body.innerHTML = "";
+
+    if (options.mode === "loading") {
+      const loading = document.createElement("div");
+      loading.className = "page-chat-doc-modal-loading";
+      loading.textContent = options.loadingText || "正在讀取文件...";
+      body.appendChild(loading);
+    } else if (options.mode === "audio") {
+      body.appendChild(createAudioPreviewPanel(options));
+    } else if (options.mode === "iframe") {
+      const iframe = document.createElement("iframe");
+      iframe.className = "page-chat-doc-modal-frame";
+      iframe.src = options.src || "";
+      iframe.title = options.title || "文件預覽";
+      body.appendChild(iframe);
+    } else {
+      const pre = document.createElement("pre");
+      pre.className = "page-chat-doc-modal-text";
+      pre.textContent = options.text || "沒有可顯示的內容";
+      body.appendChild(pre);
+    }
+
+    if (options.linkHref) {
+      link.style.display = "inline-flex";
+      link.href = options.linkHref;
+      link.textContent = options.linkLabel || "下載原檔";
+    } else {
+      link.style.display = "none";
+      link.removeAttribute("href");
+    }
+
+    if (typeof options.onExpand === "function") {
+      expandBtn.style.display = "inline-flex";
+      expandBtn.textContent = options.expandLabel || "載入全文";
+      expandBtn.onclick = options.onExpand;
+    } else {
+      expandBtn.style.display = "none";
+      expandBtn.onclick = null;
+    }
+
+    fullscreenBtn.style.display = options.mode === "iframe" ? "inline-flex" : "none";
+    userDocModalPseudoFullscreen = false;
+    syncUserDocumentModalFullscreenUi();
+    modal.style.display = "flex";
+  }
+
+  function closeUserDocumentModal() {
+    const modal = document.getElementById("userDocModal");
+    const body = document.getElementById("userDocModalBody");
+    const expandBtn = document.getElementById("userDocModalExpandBtn");
+    const fullscreenBtn = document.getElementById("userDocModalFullscreenBtn");
+    if (body) {
+      body.querySelectorAll("audio").forEach(function (node) {
+        try {
+          node.pause();
+          node.currentTime = 0;
+        } catch (_err) {
+          // ignore pause errors
+        }
+      });
+      body.innerHTML = "";
+    }
+    if (expandBtn) expandBtn.onclick = null;
+    if (fullscreenBtn) fullscreenBtn.style.display = "none";
+    exitUserDocumentModalFullscreen();
+    if (modal) modal.style.display = "none";
+  }
+  window.closeUserDocumentModal = closeUserDocumentModal;
+
+  function handleDocumentAction(action, task) {
+    if (!action || !task) return;
+    if (action.type === "open_preview" && action.doc_id) {
+      if (task.sessionId === state.sessionId) {
+        setTimeout(function () {
+          openUserDocumentPreview(action.doc_id);
+        }, 0);
+      } else if (!task.documentToastShown) {
+        task.documentToastShown = true;
+        showToast("「" + (action.display_name || "文件") + "」已可預覽", "info");
+      }
+    }
+  }
+
+  function updateUserDocumentStats() {
+    const count = Array.isArray(state.userDocuments) ? state.userDocuments.length : 0;
+    const countEl = document.getElementById("userDocumentCount");
+    const statEl = document.getElementById("statUserDocCount");
+    if (countEl) countEl.textContent = String(count);
+    if (statEl) statEl.textContent = String(count);
+  }
+
+  function renderUserDocumentEmpty(message) {
+    const empty = document.getElementById("userDocumentEmpty");
+    const list = document.getElementById("userDocumentList");
+    if (!empty || !list) return;
+    empty.textContent = message || "尚未上傳文件";
+    empty.style.display = "";
+    list.innerHTML = "";
+    updateUserDocumentStats();
+  }
+
+  function isAudioUserDocument(doc) {
+    if (!doc) return false;
+    if (doc.preview_type === "audio-inline") return true;
+    const ext = String(doc.extension || "").toLowerCase();
+    return [".mp3", ".wav", ".m4a", ".aac", ".ogg", ".opus", ".webm", ".flac"].indexOf(ext) !== -1;
+  }
+
+  function isTextExtractableUserDocument(doc) {
+    if (!doc) return false;
+    const ext = String(doc.extension || "").toLowerCase();
+    return [".txt", ".md", ".pdf", ".docx"].indexOf(ext) !== -1;
+  }
+
+  function supportsTodoUserDocument(doc) {
+    return isAudioUserDocument(doc) || isTextExtractableUserDocument(doc);
+  }
+
+  function buildUserDocumentActionPrompt(doc, action) {
+    const name = doc && (doc.display_name || doc.original_filename || doc.doc_id) || "這份檔案";
+    if (action === "meeting_notes") {
+      return "請使用我在文件中心指定的檔案「" + name + "」整理會議紀錄，包含重點、決策、風險與後續行動。";
+    }
+    if (action === "transcript") {
+      return "請使用我在文件中心指定的檔案「" + name + "」先產出逐字稿，盡量保留說話者分段。";
+    }
+    if (action === "todo") {
+      return "請使用我在文件中心指定的檔案「" + name + "」，整理出可執行的 Todo 清單與優先順序。";
+    }
+    return "請使用我在文件中心指定的檔案「" + name + "」協助處理。";
+  }
+
+  function triggerUserDocumentAction(doc, action) {
+    if (!doc || !doc.doc_id) return;
+    const normalizedAction = String(action || "").trim();
+    if (!normalizedAction) return;
+    if (listActiveTasksForSession(state.sessionId).length > 0) {
+      showToast("目前仍有任務執行中，請稍候再試", "info");
+      return;
+    }
+    const prompt = buildUserDocumentActionPrompt(doc, normalizedAction);
+    showToast("已使用「" + (doc.display_name || doc.original_filename || "文件") + "」啟動任務", "info");
+    sendMessage(prompt, {
+      userDocumentId: doc.doc_id,
+      userDocumentAction: normalizedAction,
+    });
+  }
+
+  function renderUserDocuments(documents) {
+    const list = document.getElementById("userDocumentList");
+    const empty = document.getElementById("userDocumentEmpty");
+    if (!list || !empty) return;
+
+    state.userDocuments = Array.isArray(documents) ? documents.slice() : [];
+    updateUserDocumentStats();
+    list.innerHTML = "";
+
+    if (!state.userDocuments.length) {
+      empty.textContent = "尚未上傳文件";
+      empty.style.display = "";
+      return;
+    }
+
+    empty.style.display = "none";
+
+    state.userDocuments.forEach(function (doc) {
+      const item = document.createElement("div");
+      item.className = "page-chat-doc-item";
+
+      const head = document.createElement("div");
+      head.className = "page-chat-doc-item-head";
+
+      const info = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "page-chat-doc-item-name";
+      name.textContent = doc.display_name || doc.original_filename || doc.stored_filename || doc.doc_id;
+
+      const meta = document.createElement("div");
+      meta.className = "page-chat-doc-item-meta";
+      const metaParts = [
+        (doc.extension || "").replace(".", "").toUpperCase() || "FILE",
+        formatFileSize(doc.size),
+      ];
+      const expiryLabel = formatUserDocumentExpiry(doc.expires_at);
+      if (expiryLabel) metaParts.push(expiryLabel);
+      meta.textContent = metaParts.join(" · ");
+
+      info.appendChild(name);
+      info.appendChild(meta);
+
+      const statusMeta = getUserDocumentStatusMeta(doc.text_extract_status);
+      const status = document.createElement("span");
+      status.className = "page-chat-doc-status" + statusMeta.className;
+      status.textContent = statusMeta.label;
+
+      head.appendChild(info);
+      head.appendChild(status);
+
+      const actions = document.createElement("div");
+      actions.className = "page-chat-doc-item-actions";
+
+      const previewBtn = document.createElement("button");
+      previewBtn.type = "button";
+      previewBtn.className = "page-chat-doc-action-btn";
+      previewBtn.textContent = "預覽";
+      previewBtn.addEventListener("click", function () {
+        openUserDocumentPreview(doc.doc_id);
+      });
+
+      const textBtn = document.createElement("button");
+      textBtn.type = "button";
+      textBtn.className = "page-chat-doc-action-btn";
+      if (isAudioUserDocument(doc)) {
+        textBtn.textContent = "原檔";
+        textBtn.addEventListener("click", function () {
+          window.open(
+            "/api/user-documents/" + encodeURIComponent(doc.doc_id) + "/file?disposition=inline",
+            "_blank",
+            "noopener"
+          );
+        });
+      } else {
+        textBtn.textContent = "文字";
+        textBtn.addEventListener("click", function () {
+          openUserDocumentText(doc.doc_id, doc.display_name || doc.original_filename || "文件");
+        });
+      }
+
+      const renameBtn = document.createElement("button");
+      renameBtn.type = "button";
+      renameBtn.className = "page-chat-doc-action-btn";
+      renameBtn.textContent = "改名";
+      renameBtn.addEventListener("click", function () {
+        renameUserDocument(doc.doc_id, doc.display_name || doc.original_filename || "");
+      });
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "page-chat-doc-action-btn is-danger";
+      deleteBtn.textContent = "刪除";
+      deleteBtn.addEventListener("click", function () {
+        deleteUserDocument(doc.doc_id, doc.display_name || doc.original_filename || "文件");
+      });
+      const todoBtn = document.createElement("button");
+      todoBtn.type = "button";
+      todoBtn.className = "page-chat-doc-action-btn";
+      todoBtn.textContent = "Todo";
+      todoBtn.addEventListener("click", function () {
+        triggerUserDocumentAction(doc, "todo");
+      });
+
+      actions.appendChild(previewBtn);
+      actions.appendChild(textBtn);
+
+      if (isAudioUserDocument(doc)) {
+        const meetingBtn = document.createElement("button");
+        meetingBtn.type = "button";
+        meetingBtn.className = "page-chat-doc-action-btn";
+        meetingBtn.textContent = "會議紀錄";
+        meetingBtn.addEventListener("click", function () {
+          triggerUserDocumentAction(doc, "meeting_notes");
+        });
+
+        const transcriptBtn = document.createElement("button");
+        transcriptBtn.type = "button";
+        transcriptBtn.className = "page-chat-doc-action-btn";
+        transcriptBtn.textContent = "逐字稿";
+        transcriptBtn.addEventListener("click", function () {
+          triggerUserDocumentAction(doc, "transcript");
+        });
+
+        actions.appendChild(meetingBtn);
+        actions.appendChild(transcriptBtn);
+      }
+
+      if (supportsTodoUserDocument(doc)) {
+        actions.appendChild(todoBtn);
+      }
+
+      actions.appendChild(renameBtn);
+      actions.appendChild(deleteBtn);
+
+      item.appendChild(head);
+      item.appendChild(actions);
+      list.appendChild(item);
+    });
+  }
+
+  async function loadUserDocuments(options) {
+    const opts = options || {};
+    if (!opts.silent) {
+      renderUserDocumentEmpty("正在讀取文件列表...");
+    }
+    try {
+      const res = await fetch("/api/user-documents", { credentials: "same-origin" });
+      if (res.status === 401) {
+        state.userDocuments = [];
+        renderUserDocumentEmpty("登入後即可使用文件中心");
+        return;
+      }
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        throw new Error(data.detail || "Load failed");
+      }
+      renderUserDocuments(data.documents || []);
+      if (opts.withToast) showToast("已刷新文件列表", "success");
+    } catch (err) {
+      state.userDocuments = [];
+      renderUserDocumentEmpty("文件列表載入失敗");
+      if (!opts.silent) showToast("文件列表載入失敗：" + (err.message || "未知錯誤"), "error");
+    }
+  }
+
+  async function openUserDocumentPreview(docId) {
+    openUserDocumentModal({
+      title: "文件預覽",
+      subtitle: "正在準備內容...",
+      mode: "loading",
+      loadingText: "正在讀取文件...",
+    });
+    try {
+      const res = await fetch("/api/user-documents/" + encodeURIComponent(docId) + "/preview", {
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        throw new Error(data.detail || "Preview failed");
+      }
+
+      const displayName = (data.document && (data.document.display_name || data.document.original_filename)) || "文件";
+      if (data.preview_type === "audio-inline") {
+        openUserDocumentModal({
+          title: displayName,
+          subtitle: "服務內音訊預覽",
+          mode: "audio",
+          audioSrc: data.inline_url || "",
+          audioMeta: {
+            extension: data.document && data.document.extension,
+            mimeType: data.document && data.document.mime_type,
+            size: data.document && data.document.size,
+            createdAt: data.document && data.document.created_at,
+          },
+          linkHref: data.viewer_url || data.download_url || data.inline_url,
+          linkLabel: data.viewer_url ? "完整預覽頁" : "下載原檔",
+        });
+        return;
+      }
+
+      if (data.preview_type === "pdf-inline" || data.preview_type === "html-inline") {
+        const htmlPreviewLink = data.viewer_url || data.download_url;
+        const pdfPreviewLink = data.preview_type === "html-inline" ? (data.pdf_viewer_url || data.pdf_inline_url) : null;
+        openUserDocumentModal({
+          title: displayName,
+          subtitle:
+            data.preview_type === "pdf-inline"
+              ? "服務內 PDF 預覽"
+              : "服務內 DOCX HTML 預覽",
+          mode: "iframe",
+          src: data.inline_url || data.viewer_url,
+          linkHref: pdfPreviewLink || htmlPreviewLink,
+          linkLabel: pdfPreviewLink ? "PDF 預覽" : "完整預覽",
+          onExpand: data.preview_type === "html-inline" && htmlPreviewLink
+            ? function () {
+                window.open(htmlPreviewLink, "_blank", "noopener");
+              }
+            : null,
+          expandLabel: data.preview_type === "html-inline" && htmlPreviewLink ? "新分頁開啟" : undefined,
+        });
+        return;
+      }
+
+      openUserDocumentModal({
+        title: displayName,
+        subtitle: data.truncated ? "目前顯示預覽片段" : "目前顯示文件文字內容",
+        mode: "text",
+        text: data.text_preview || "",
+        linkHref: data.viewer_url || data.download_url,
+        linkLabel: data.viewer_url ? "完整預覽" : "下載原檔",
+        onExpand: data.truncated
+          ? function () {
+              openUserDocumentText(docId, displayName);
+            }
+          : null,
+      });
+    } catch (err) {
+      openUserDocumentModal({
+        title: "文件預覽",
+        subtitle: "",
+        mode: "text",
+        text: "文件預覽失敗：" + (err.message || "未知錯誤"),
+      });
+    }
+  }
+
+  async function openUserDocumentText(docId, displayName) {
+    openUserDocumentModal({
+      title: displayName || "文件文字內容",
+      subtitle: "正在讀取全文...",
+      mode: "loading",
+      loadingText: "正在載入全文...",
+    });
+    try {
+      const res = await fetch(
+        "/api/user-documents/" + encodeURIComponent(docId) + "/content?offset=0&limit=200000",
+        { credentials: "same-origin" }
+      );
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        throw new Error(data.detail || "Content failed");
+      }
+      openUserDocumentModal({
+        title: displayName || ((data.document && data.document.display_name) || "文件文字內容"),
+        subtitle: data.truncated ? "已載入首段內容，完整內容可改用預覽頁查看" : "已載入完整文字",
+        mode: "text",
+        text: (data.content || "") + (data.truncated ? "\n\n[內容仍然很長，建議改用完整預覽頁閱讀。]" : ""),
+        linkHref: "/api/user-documents/" + encodeURIComponent(docId) + "/file?disposition=attachment",
+        linkLabel: "下載原檔",
+        onExpand: data.truncated
+          ? function () {
+              window.open("/api/user-documents/" + encodeURIComponent(docId) + "/viewer", "_blank", "noopener");
+            }
+          : null,
+        expandLabel: "完整預覽",
+      });
+    } catch (err) {
+      openUserDocumentModal({
+        title: displayName || "文件文字內容",
+        subtitle: "",
+        mode: "text",
+        text: "文字內容載入失敗：" + (err.message || "未知錯誤"),
+      });
+    }
+  }
+
+  async function renameUserDocument(docId, currentName) {
+    const nextName = window.prompt("新的文件名稱", currentName || "");
+    if (!nextName || nextName === currentName) return;
+    try {
+      const res = await fetch("/api/user-documents/" + encodeURIComponent(docId) + "/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ display_name: nextName }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        throw new Error(data.detail || "Rename failed");
+      }
+      showToast("已更新文件名稱", "success");
+      loadUserDocuments({ silent: true });
+    } catch (err) {
+      showToast("文件改名失敗：" + (err.message || "未知錯誤"), "error");
+    }
+  }
+
+  async function deleteUserDocument(docId, currentName) {
+    if (!window.confirm("確定要刪除「" + (currentName || "文件") + "」嗎？")) return;
+    try {
+      const res = await fetch("/api/user-documents/" + encodeURIComponent(docId), {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== "success") {
+        throw new Error(data.detail || "Delete failed");
+      }
+      showToast("已刪除文件", "success");
+      loadUserDocuments({ silent: true });
+      closeUserDocumentModal();
+    } catch (err) {
+      showToast("文件刪除失敗：" + (err.message || "未知錯誤"), "error");
+    }
+  }
+
+  function triggerUserDocumentUpload() {
+    const input = document.getElementById("userDocUploadInput");
+    if (!input) return;
+    input.value = "";
+    input.onchange = async function () {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const MAX_BYTES = 25 * 1024 * 1024;
+      if (file.size > MAX_BYTES) {
+        showToast("文件過大，請控制在 25 MB 內", "error");
+        return;
+      }
+
+      showToast("正在上傳「" + file.name + "」...", "info");
+      const formData = new FormData();
+      formData.append("file", file);
+
+      try {
+        const res = await fetch("/api/user-documents/upload", {
+          method: "POST",
+          credentials: "same-origin",
+          body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok || data.status !== "success") {
+          throw new Error(data.detail || "Upload failed");
+        }
+        showToast("已上傳「" + file.name + "」", "success");
+        loadUserDocuments({ silent: true });
+      } catch (err) {
+        showToast("文件上傳失敗：" + (err.message || "未知錯誤"), "error");
+      }
+    };
+    input.click();
+  }
+
+  window.refreshUserDocuments = function () {
+    loadUserDocuments({ silent: false, withToast: true });
+  };
+  window.triggerUserDocumentUpload = triggerUserDocumentUpload;
 
   function escapeHtml(text) {
     return String(text)
@@ -849,6 +2400,7 @@
         '<polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>' +
         '</svg>';
     }
+    syncAudioRecorderButton();
   }
 
   // Cancel all active tasks for the current session (server + client side)
@@ -1287,7 +2839,7 @@
 
   async function loadSideInfo() {
     try {
-      const [skillsRes, docsRes] = await Promise.all([fetch("/skills/list"), fetch("/api/documents/list")]);
+      const skillsRes = await fetch("/skills/list");
 
       const toolsTab = document.querySelector("#tab-tools .page-chat-info-section");
       if (toolsTab && skillsRes.ok) {
@@ -1306,19 +2858,6 @@
           });
         }
         toolsTab.innerHTML = html;
-      }
-
-      if (docsRes.ok) {
-        const docs = await docsRes.json();
-        const infoCards = document.querySelectorAll("#tab-info .page-chat-info-card");
-        if (infoCards[0]) {
-          infoCards[0].insertAdjacentHTML(
-            "beforeend",
-            '<div class="page-chat-stat-row"><span class="page-chat-stat-row-label">Indexed docs</span><span class="page-chat-stat-row-value">' +
-              String(docs.total || 0) +
-              '</span></div>'
-          );
-        }
       }
     } catch (_err) {
       // non-blocking enhancement
@@ -1593,6 +3132,7 @@
             if (parsed.workflow_status === "requires_approval") {
               _startApprovalPolling(task.sessionId, parsed.run_id || "");
             }
+            handleDocumentAction(parsed.document_action, task);
             return task.text;
           }
           if (parsed.status === "cancelled") {
@@ -1702,12 +3242,17 @@
     const opts = options || {};
     const content = (text || "").trim();
     let requestSessionId = state.sessionId;
-    const pendingAudio = state.sessionPendingAudioFile[requestSessionId] || null;
+    const explicitUserDocumentId =
+      typeof opts.userDocumentId === "string" ? opts.userDocumentId.trim() : "";
+    const explicitUserDocumentAction =
+      typeof opts.userDocumentAction === "string" ? opts.userDocumentAction.trim() : "";
+    const shouldUseQueuedAttachment = !explicitUserDocumentId;
+    const pendingAudio = shouldUseQueuedAttachment ? (state.sessionPendingAudioFile[requestSessionId] || null) : null;
     const explicitAttachedFile =
       typeof opts.attachedFile === "string" ? opts.attachedFile.trim() : "";
     // Generic attachment queued via 📎 button (takes precedence if neither of
     // explicit nor pending audio applies).
-    const pendingAttachment = !explicitAttachedFile && !(pendingAudio && pendingAudio.path)
+    const pendingAttachment = shouldUseQueuedAttachment && !explicitAttachedFile && !(pendingAudio && pendingAudio.path)
       ? _takeSessionAttachment(requestSessionId)
       : null;
     const attachedFileForTurn =
@@ -1726,7 +3271,6 @@
 
     if (chatInput) {
       chatInput.value = "";
-      // 同步清除該 session 的草稿
       state.sessionInputDrafts[requestSessionId] = "";
       autoResize(chatInput);
     }
@@ -1757,13 +3301,28 @@
       const rawSettings = localStorage.getItem("kway_settings");
       let language = "繁體中文";
       let detailLevel = "詳細";
+      let hasLocalLanguage = false;
       if (rawSettings) {
         try {
           const settings = JSON.parse(rawSettings);
-          language = settings.language || language;
+          if (typeof settings.language === "string" && settings.language.trim()) {
+            language = settings.language.trim();
+            hasLocalLanguage = true;
+          }
           detailLevel = settings.detail || detailLevel;
         } catch (_err) {
           // ignore malformed settings
+        }
+      }
+      if (!hasLocalLanguage) {
+        try {
+          const sessionUser = JSON.parse(sessionStorage.getItem("kway_user") || "{}");
+          const sessionLang = sessionUser?.preferences?.language;
+          if (typeof sessionLang === "string" && sessionLang.trim()) {
+            language = sessionLang.trim();
+          }
+        } catch (_err) {
+          // ignore malformed session user
         }
       }
 
@@ -1779,6 +3338,12 @@
       if (attachedFileForTurn) {
         payload.attached_file = attachedFileForTurn;
       }
+      if (explicitUserDocumentId) {
+        payload.user_document_id = explicitUserDocumentId;
+      }
+      if (explicitUserDocumentAction) {
+        payload.user_document_action = explicitUserDocumentAction;
+      }
       if (uploadHandoff) {
         payload.upload_handoff = true;
       }
@@ -1786,12 +3351,34 @@
       const res = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
         removeTyping(requestSessionId);
         const errText = await res.text();
-        throw new Error("HTTP " + res.status + ": " + errText);
+        let detail = errText;
+        try {
+          const parsed = JSON.parse(errText);
+          detail = parsed.detail || parsed.message || errText;
+        } catch (_err) {
+          // keep raw text
+        }
+        throw new Error("HTTP " + res.status + ": " + detail);
+      }
+
+      const contentType = (res.headers.get("content-type") || "").toLowerCase();
+      if (!contentType.includes("text/event-stream")) {
+        removeTyping(requestSessionId);
+        const rawText = await res.text();
+        let detail = rawText || "Server did not return an event stream";
+        try {
+          const parsed = JSON.parse(rawText);
+          detail = parsed.detail || parsed.message || rawText;
+        } catch (_err) {
+          // keep raw text
+        }
+        throw new Error(detail);
       }
       if (attachedFileForTurn && !keepPendingAudio) {
         delete state.sessionPendingAudioFile[requestSessionId];
@@ -1812,12 +3399,15 @@
   window.switchTab = function (btn, name) {
     document.querySelectorAll(".page-chat-tab-btn").forEach(function (item) {
       item.classList.remove("is-active");
+      item.setAttribute("aria-selected", "false");
     });
     btn.classList.add("is-active");
-    ["info", "tools", "history"].forEach(function (tab) {
+    btn.setAttribute("aria-selected", "true");
+    ["info", "tools", "history", "docs"].forEach(function (tab) {
       const el = document.getElementById("tab-" + tab);
       if (el) el.style.display = tab === name ? "block" : "none";
     });
+    syncDocumentCenterVisibility(name);
   };
 
   window.cycleModel = function () {
@@ -2143,8 +3733,191 @@
     return att;
   }
 
+  async function uploadRecordedAudioToDocumentCenter(file) {
+    if (!file) return false;
+    const MAX_BYTES = 25 * 1024 * 1024;
+    if (file.size > MAX_BYTES) {
+      showToast("錄音檔過大，請控制在 25 MB 內", "error");
+      return false;
+    }
+
+    const filename = String(file.name || buildRecordedAudioFilename("webm"));
+    showToast("正在儲存錄音到文件中心...", "info");
+    const formData = new FormData();
+    formData.append("file", file, filename);
+
+    try {
+      const res = await fetch("/api/user-documents/upload", {
+        method: "POST",
+        credentials: "same-origin",
+        body: formData,
+      });
+      const rawText = await res.text();
+      let data = null;
+      try {
+        data = rawText ? JSON.parse(rawText) : null;
+      } catch (_err) {
+        data = null;
+      }
+      if (!res.ok || !data || data.status !== "success") {
+        throw new Error((data && (data.detail || data.message)) || rawText || ("HTTP " + res.status));
+      }
+      showToast("錄音已儲存到文件中心", "success");
+      loadUserDocuments({ silent: true });
+      return true;
+    } catch (err) {
+      showToast("錄音儲存失敗：" + (err.message || "未知錯誤"), "error");
+      return false;
+    }
+  }
+
+  async function handleRecordedAudioStopped() {
+    stopAudioSignalMonitor();
+    releaseAudioRecorderStream();
+    const chunks = audioRecorderState.chunks.slice();
+    const mimeType = audioRecorderState.mimeType || "audio/webm";
+    const fileExtension = audioRecorderState.fileExtension || inferAudioExtensionFromMimeType(mimeType);
+    const signalPeak = Number(audioRecorderState.signalPeak || 0);
+    const inputLabel = audioRecorderState.inputLabel || "";
+
+    audioRecorderState.mediaRecorder = null;
+    audioRecorderState.chunks = [];
+    audioRecorderState.startedAt = 0;
+
+    if (!chunks.length) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast("沒有錄到音訊內容，請再試一次。", "error");
+      return;
+    }
+
+    const blob = new Blob(chunks, { type: mimeType });
+    if (!blob.size) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast("錄音內容為空白，請確認麥克風正常後再試一次。", "error");
+      return;
+    }
+
+    if (signalPeak < 0.0035) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast(
+        "這段錄音沒有收到有效聲音，可能選到靜音或錯誤的麥克風"
+          + (inputLabel ? "（目前裝置：" + inputLabel + "）" : "")
+          + "，所以沒有儲存。",
+        "error"
+      );
+      return;
+    }
+
+    const filename = buildRecordedAudioFilename(fileExtension);
+    const shouldSave = window.confirm("要將剛才的錄音儲存到文件中心嗎？");
+    if (!shouldSave) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast("已取消儲存錄音", "info");
+      return;
+    }
+
+    const recordedFile = createRecordedAudioFile(blob, filename);
+    await uploadRecordedAudioToDocumentCenter(recordedFile);
+    resetAudioRecorderState();
+    syncAudioRecorderButton();
+  }
+
+  async function startAudioRecording() {
+    if (!audioRecorderState.supported) {
+      showToast("目前瀏覽器不支援直接錄音，請改用音檔上傳。", "error");
+      return;
+    }
+    if (audioRecorderState.isRecording || audioRecorderState.isProcessing) {
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
+      });
+      const audioTrack = stream.getAudioTracks && stream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = true;
+        audioRecorderState.inputLabel = audioTrack.label || "";
+        await waitForAudioTrackReady(audioTrack, 1200);
+      }
+      const preferredMimeType = resolveRecordedAudioMimeType();
+      const recorderOptions = preferredMimeType ? { mimeType: preferredMimeType } : undefined;
+      const mediaRecorder = recorderOptions ? new MediaRecorder(stream, recorderOptions) : new MediaRecorder(stream);
+
+      audioRecorderState.stream = stream;
+      audioRecorderState.mediaRecorder = mediaRecorder;
+      audioRecorderState.startedAt = Date.now();
+      audioRecorderState.mimeType = mediaRecorder.mimeType || preferredMimeType || "";
+      audioRecorderState.fileExtension = inferAudioExtensionFromMimeType(audioRecorderState.mimeType);
+      audioRecorderState.chunks = [];
+      audioRecorderState.isRecording = true;
+      audioRecorderState.isProcessing = false;
+      audioRecorderState.signalPeak = 0;
+
+      mediaRecorder.ondataavailable = function (event) {
+        if (event.data && event.data.size > 0) {
+          audioRecorderState.chunks.push(event.data);
+        }
+      };
+      mediaRecorder.onerror = function () {
+        resetAudioRecorderState();
+        syncAudioRecorderButton();
+        showToast("錄音過程發生錯誤，請再試一次。", "error");
+      };
+      mediaRecorder.onstop = function () {
+        handleRecordedAudioStopped().catch(function (err) {
+          resetAudioRecorderState();
+          syncAudioRecorderButton();
+          showToast("錄音處理失敗：" + ((err && err.message) || "未知錯誤"), "error");
+        });
+      };
+
+      startAudioSignalMonitor(stream);
+      mediaRecorder.start(250);
+      syncAudioRecorderButton();
+      showToast(
+        "已開始錄音，再按一次紅色按鈕即可停止。"
+          + (audioRecorderState.inputLabel ? " 目前麥克風：" + audioRecorderState.inputLabel : ""),
+        "info"
+      );
+    } catch (err) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast(explainRecorderError(err), "error");
+    }
+  }
+
+  function stopAudioRecording() {
+    if (!audioRecorderState.mediaRecorder || audioRecorderState.mediaRecorder.state === "inactive") {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      return;
+    }
+
+    audioRecorderState.isRecording = false;
+    audioRecorderState.isProcessing = true;
+    syncAudioRecorderButton();
+
+    try {
+      audioRecorderState.mediaRecorder.stop();
+    } catch (_err) {
+      resetAudioRecorderState();
+      syncAudioRecorderButton();
+      showToast("停止錄音失敗，請再試一次。", "error");
+    }
+  }
+
   window.triggerAudioUpload = function () {
-    const audioFileInput = document.getElementById("audioFileInput");
     if (!audioFileInput) return;
     audioFileInput.value = "";
     audioFileInput.onchange = async function () {
@@ -2156,6 +3929,10 @@
       formData.append("file", file);
 
       try {
+        if (audioUploadBtn) {
+          audioUploadBtn.classList.add("is-transcribing");
+        }
+
         const res = await fetch("/workspace/upload", { method: "POST", body: formData });
         const data = await res.json();
         if (data.status !== "success") throw new Error(data.detail || "Upload failed");
@@ -2179,10 +3956,25 @@
         });
       } catch (err) {
         showToast("音檔上傳失敗：" + err.message, "error");
+      } finally {
+        if (audioUploadBtn) {
+          audioUploadBtn.classList.remove("is-transcribing");
+        }
       }
     };
     audioFileInput.click();
   };
+
+  if (audioRecorderBtn) {
+    syncAudioRecorderButton();
+    audioRecorderBtn.addEventListener("click", function () {
+      if (audioRecorderState.isRecording) {
+        stopAudioRecording();
+      } else {
+        startAudioRecording();
+      }
+    });
+  }
 
   if (chatInput && sendBtn) {
     chatInput.addEventListener("input", function () {
@@ -2250,6 +4042,36 @@
   if (sidebarName) sidebarName.textContent = safeName;
   if (sidebarDept) sidebarDept.textContent = (userData.dept || "MCP Workspace") + " · Connected";
 
+  const userDocModal = document.getElementById("userDocModal");
+  if (userDocModal) {
+    userDocModal.addEventListener("click", function (event) {
+      if (event.target === userDocModal) {
+        closeUserDocumentModal();
+      }
+    });
+  }
+
+  const userDocModalFullscreenBtn = document.getElementById("userDocModalFullscreenBtn");
+  if (userDocModalFullscreenBtn) {
+    userDocModalFullscreenBtn.addEventListener("click", function () {
+      toggleUserDocumentModalFullscreen();
+    });
+  }
+
+  document.addEventListener("fullscreenchange", syncUserDocumentModalFullscreenUi);
+  document.addEventListener("webkitfullscreenchange", syncUserDocumentModalFullscreenUi);
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && userDocModalPseudoFullscreen) {
+      exitUserDocumentModalFullscreen();
+    }
+  });
+  window.addEventListener("pagehide", function () {
+    resetAudioRecorderState();
+    syncAudioRecorderButton();
+  });
+
+  syncDocumentCenterVisibility("info");
+
   setInterval(updateSessionDuration, 1000);
   updateSessionDuration();
   updateStats();
@@ -2257,6 +4079,7 @@
 
   hydrateAuthFromServer().finally(function () {
     loadSideInfo();
+    loadUserDocuments({ silent: true });
     renderConversationList();
     window.loadConversationById(state.sessionId, true);
     syncComposerState();

@@ -138,6 +138,16 @@ class UMA:
         except Exception:
             return result
 
+    def _resolve_skill_runtime_paths(self, skill_name: str) -> tuple[Optional[Dict[str, Any]], Path]:
+        """
+        Resolve the concrete skill directory for execution/knowledge loading.
+        Priority: registry path (supports system/dept/personal) -> legacy system path fallback.
+        """
+        skill_data = self.registry.get_skill(skill_name)
+        if skill_data and skill_data.get("path"):
+            return skill_data, Path(skill_data["path"]).resolve()
+        return skill_data, (self.executor.skills_home / skill_name).resolve()
+
 
     def _skill_directory(self, skill_name: str) -> Optional[Path]:
         """Return the actual on-disk path for a skill, regardless of scope.
@@ -160,8 +170,8 @@ class UMA:
         - 'code':       scripts/ has .py files (but no main.py) → reference guide + python-executor
         - 'semantic':   no scripts/ or empty → LLM processes directly with language capabilities
         """
-        skill_dir = self._skill_directory(skill_name)
-        if not skill_dir or not skill_dir.exists():
+        _, skill_dir = self._resolve_skill_runtime_paths(skill_name)
+        if not skill_dir.exists():
             return "semantic"
         scripts_dir = skill_dir / "scripts"
 
@@ -182,7 +192,7 @@ class UMA:
         Text files (.md, .txt) are injected as full content.
         Binary files (.docx, .xlsx, .pdf) are listed as available system templates.
         """
-        skill_dir = self.executor.skills_home / skill_name
+        _, skill_dir = self._resolve_skill_runtime_paths(skill_name)
         refs_dir = None
         for candidate in ["references", "assets"]:
             d = skill_dir / candidate
@@ -242,8 +252,10 @@ class UMA:
         except:
             arg_dict = {"raw": arguments}
 
+        # Resolve concrete skill location across scopes (system/dept/personal)
+        skill_data, skill_dir = self._resolve_skill_runtime_paths(skill_name)
+
         # Phase 3: Risk-level gate
-        skill_data = self.registry.get_skill(skill_name)
         if skill_data:
             meta = skill_data.get("metadata", {})
             if meta.get("risk_level", "").lower() == "high":
@@ -282,8 +294,6 @@ class UMA:
                     }
 
         mode = self._detect_execution_mode(skill_name)
-        # Resolve real on-disk directory (works across system/dept/personal scopes)
-        skill_dir = self._skill_directory(skill_name) or (self.executor.skills_home / skill_name)
 
         # === Executable: run script directly ===
         if mode == "executable":
@@ -588,5 +598,4 @@ if __name__ == "__main__":
     for name, data in registry.skills.items():
         ready_status = "READY" if data["metadata"]["_env_ready"] else f"MISSING: {data['metadata']['_missing_deps']}"
         print(f"Skill: {name} | Version: {data['metadata']['version']} | Env: {ready_status}")
-
 

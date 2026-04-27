@@ -6,6 +6,7 @@ import re
 import uuid
 from typing import AsyncGenerator
 
+from fastapi import HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from main import PROJECT_ROOT
@@ -21,6 +22,86 @@ logger = logging.getLogger("MCP_Server.ChatCore")
 _AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".aac", ".ogg", ".opus", ".webm"}
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".heic", ".heif"}
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
+_TEXT_EXTRACTABLE_DOCUMENT_EXTENSIONS = {".txt", ".md", ".pdf", ".docx"}
+_INLINE_SELECTED_DOCUMENT_ACTIONS = {"meeting_notes", "transcript", "todo"}
+_USER_DOCUMENT_ACTION_ALIASES = {
+    "meeting_notes": "meeting_notes",
+    "meeting": "meeting_notes",
+    "minutes": "meeting_notes",
+    "transcript": "transcript",
+    "transcribe": "transcript",
+    "todo": "todo",
+    "tasks": "todo",
+}
+_ALLOWED_CHAT_LANGUAGES = {
+    "繁體中文",
+    "简体中文",
+    "English",
+    "日本語",
+    "한국어",
+    "自動偵測",
+}
+_LANGUAGE_CANONICAL_MAP = {
+    "繁體中文": "繁體中文",
+    "繁体中文": "繁體中文",
+    "traditional chinese": "繁體中文",
+    "zh-tw": "繁體中文",
+    "zh-hant": "繁體中文",
+    "简体中文": "简体中文",
+    "simplified chinese": "简体中文",
+    "zh-cn": "简体中文",
+    "zh-hans": "简体中文",
+    "english": "English",
+    "en": "English",
+    "日本語": "日本語",
+    "japanese": "日本語",
+    "ja": "日本語",
+    "한국어": "한국어",
+    "korean": "한국어",
+    "ko": "한국어",
+    "自動偵測": "自動偵測",
+    "自动侦测": "自動偵測",
+    "auto": "自動偵測",
+    "auto-detect": "自動偵測",
+}
+_DEFAULT_CHAT_LANGUAGE = "繁體中文"
+
+
+def _canonicalize_language(value: str | None) -> str | None:
+    if not value:
+        return None
+    token = str(value).strip()
+    if not token:
+        return None
+    if token in _ALLOWED_CHAT_LANGUAGES:
+        return token
+    mapped = _LANGUAGE_CANONICAL_MAP.get(token.lower())
+    if mapped in _ALLOWED_CHAT_LANGUAGES:
+        return mapped
+    return None
+
+
+def _extract_profile_language(user_context: dict | None) -> str | None:
+    if not isinstance(user_context, dict):
+        return None
+    prefs = user_context.get("preferences")
+    if isinstance(prefs, dict):
+        lang = _canonicalize_language(prefs.get("language"))
+        if lang:
+            return lang
+    return _canonicalize_language(user_context.get("language"))
+
+
+def _resolve_response_language(requested_language: str | None, user_context: dict | None) -> tuple[str, str]:
+    requested = _canonicalize_language(requested_language)
+    if requested and requested != "自動偵測":
+        return requested, "request"
+
+    profile = _extract_profile_language(user_context)
+    if profile and profile != "自動偵測":
+        return profile, "profile"
+
+    return _DEFAULT_CHAT_LANGUAGE, "default"
 
 
 def _is_audio_file_path(file_path: str | None) -> bool:
@@ -97,6 +178,142 @@ def _needs_meeting_todo_pipeline(user_text: str, file_path: str | None = None) -
     return has_audio_signal and has_todo_signal
 
 
+def _infer_user_document_selection_from_chat(req: ChatRequest) -> None:
+    if (req.user_document_id or "").strip():
+        return
+
+    raw_user_id = (req.user_id or "").strip()
+    if not raw_user_id:
+        return
+
+    try:
+        from server.services.user_document_chat import resolve_document_task_request
+        from server.services.user_document_service import sanitize_user_key, user_document_service
+
+        user_key = sanitize_user_key(raw_user_id)
+        inferred = resolve_document_task_request(
+            req.user_input,
+            user_document_service.list_documents(user_key),
+        )
+        if not inferred:
+            return
+
+        document = inferred.get("document") or {}
+        doc_id = (document.get("doc_id") or "").strip()
+        if not doc_id:
+            return
+
+        req.user_document_id = doc_id
+        if not (req.user_document_action or "").strip():
+            req.user_document_action = inferred.get("action")
+        logger.info(
+            "[ChatCore] Inferred user document selection from chat. doc_id=%s action=%s",
+            doc_id,
+            req.user_document_action,
+        )
+    except Exception as exc:
+        logger.warning(f"[ChatCore] Failed to infer user document selection: {exc}")
+
+
+def _normalize_user_document_action(action: str | None) -> str | None:
+    token = (action or "").strip().lower()
+    if not token:
+        return None
+    return _USER_DOCUMENT_ACTION_ALIASES.get(token)
+
+
+def _build_selected_user_document_content_block(
+    doc_name: str,
+    doc_text: str,
+    max_chars: int = 24000,
+) -> str:
+    content = (doc_text or "").strip()
+    if not content:
+        return ""
+
+    snippet = content
+    truncated = False
+    if len(snippet) > max_chars:
+        snippet = snippet[:max_chars].rstrip()
+        truncated = True
+
+    block = (
+        "\n\n[Selected Document Content]\n"
+        f"File: {doc_name}\n"
+        "Use the extracted text below as the primary source for this request.\n\n"
+        f"{snippet}"
+    )
+    if truncated:
+        block += f"\n\n[文件內容較長，本輪先附上前 {max_chars} 字。]"
+    return block
+
+
+def _build_user_document_action_instruction(
+    action: str | None,
+    doc_name: str,
+    media_type: str,
+) -> str:
+    base = (
+        "\n\n[Document Center Selection]\n"
+        f"User selected '{doc_name}' from document center as the input {media_type} for this turn.\n"
+        "Use existing file context directly, and do not ask the user to upload again or provide an absolute path.\n"
+    )
+    if action == "meeting_notes":
+        return (
+            base
+            + "Target output: meeting notes with agenda, key decisions, open issues, and action items.\n"
+            + "If this is audio, transcribe first before summarizing.\n"
+            + "Preferred tool order when available: mcp-transcribe -> mcp-meeting-analyzer."
+        )
+    if action == "transcript":
+        return (
+            base
+            + "Target output: a clean transcript with speaker separation and readable paragraph breaks.\n"
+            + "If timestamps are available, include them.\n"
+            + "Preferred tool when available: mcp-transcribe."
+        )
+    if action == "todo":
+        return (
+            base
+            + "Target output: TODO/task list extracted from the content.\n"
+            + "If this is audio, run transcript -> meeting analysis -> TODO extraction flow.\n"
+            + "Preferred tool order when available: mcp-transcribe -> mcp-meeting-analyzer -> mcp-notion-crud."
+        )
+    return base.strip()
+
+
+def _resolve_selected_user_document(req: ChatRequest) -> tuple[str, dict, str | None]:
+    doc_id = (req.user_document_id or "").strip()
+    if not doc_id:
+        raise HTTPException(status_code=400, detail="missing_user_document_id")
+
+    raw_user_id = (req.user_id or "").strip()
+    if not raw_user_id:
+        raise HTTPException(status_code=401, detail="user_document_requires_login")
+
+    from server.services.user_document_service import (
+        ExpiredDocumentError,
+        sanitize_user_key,
+        user_document_service,
+    )
+
+    user_key = sanitize_user_key(raw_user_id)
+    try:
+        document = user_document_service.get_document(user_key, doc_id)
+        path = user_document_service.get_document_path(user_key, doc_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ExpiredDocumentError as exc:
+        raise HTTPException(status_code=410, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Document file missing: {doc_id}")
+
+    return str(path), document, _normalize_user_document_action(req.user_document_action)
+
+
 async def process_chat_native(req: ChatRequest):
     """Handle a web chat turn through the active provider adapter."""
 
@@ -116,38 +333,6 @@ async def process_chat_native(req: ChatRequest):
 
     uma = get_uma()
 
-    # Load user context for three-tier skill filtering
-    _user_context = None
-    _sid = req.session_id or "default"
-    try:
-        import json as _json
-        from pathlib import Path as _P
-        _uc_path = _P(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{_sid}.json"
-        if _uc_path.exists():
-            _user_context = _json.loads(_uc_path.read_text(encoding="utf-8"))
-    except Exception:
-        pass
-
-    # Always inject session_id so downstream (workflow_executor / HitL approval
-    # payload / workflow_resume) can write completion messages back to this
-    # session's history. Without this, background resume has nowhere to
-    # notify the originating Web chat UI.
-    if _user_context is None:
-        _user_context = {}
-    if not _user_context.get("session_id"):
-        _user_context["session_id"] = _sid
-
-    adapter = create_adapter(
-        provider=provider,
-        uma=uma,
-        model=req.model,
-        user_context=_user_context,
-        api_base=req.api_base,
-        api_key=req.api_key,
-    )
-    if not adapter.is_available:
-        return {"status": "error", "message": f"{provider.capitalize()} adapter is not available"}
-
     from server.services.runtime import get_universal_system_prompt
 
     session_mgr = get_session_manager()
@@ -159,9 +344,48 @@ async def process_chat_native(req: ChatRequest):
     except Exception:
         session_id = "default"
 
+    from server.services.identity_context import resolve_identity_context
+
+    resolved_user_id, _user_context = resolve_identity_context(
+        session_id=session_id,
+        explicit_user_id=(req.user_id or "").strip(),
+        session_mgr=session_mgr,
+        persist_binding=True,
+        allow_session_binding=True,
+    )
+    if resolved_user_id:
+        req.user_id = resolved_user_id
+    if _user_context is None:
+        _user_context = {}
+    if not _user_context.get("session_id"):
+        _user_context["session_id"] = session_id
+
+    adapter = create_adapter(
+        provider=provider,
+        uma=uma,
+        model=req.model,
+        user_context=_user_context,
+        api_base=req.api_base,
+        api_key=req.api_key,
+    )
+    if not adapter.is_available:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{provider.capitalize()} adapter is not available",
+        )
+
+    _infer_user_document_selection_from_chat(req)
+
+    selected_user_doc_path = ""
+    selected_user_doc: dict = {}
+    selected_user_doc_action = None
+    if (req.user_document_id or "").strip():
+        selected_user_doc_path, selected_user_doc, selected_user_doc_action = _resolve_selected_user_document(req)
+
     # Register file context for downstream tools (WebUI parity with LINE pipeline).
     active_original_file = None
     for candidate in (
+        selected_user_doc_path or None,
         (req.attached_file or "").strip() or None,
         _extract_file_path_from_text(req.user_input or ""),
     ):
@@ -202,10 +426,155 @@ async def process_chat_native(req: ChatRequest):
     )
     task_id = task["task_id"]
 
-    logger.info(f"Chat Request: [Model: {req.model}] [Lang: {req.language}] [Detail: {req.detail_level}]")
+    def _make_immediate_success_response(final_text: str, extra_payload: dict | None = None):
+        async def _event_generator():
+            yield {
+                "data": json.dumps(
+                    {"status": "task_started", "task_id": task_id, "session_id": session_id, "turn_id": turn_id},
+                    ensure_ascii=False,
+                )
+            }
+            session_mgr.append_message(session_id, "user", req.user_input)
+            session_mgr.append_message(session_id, "assistant", final_text)
+            task_registry.mark_completed(task_id, final_text=final_text, assistant_message_persisted=True)
+            success_payload = {
+                "status": "success",
+                "content": final_text,
+                "task_id": task_id,
+                "session_id": session_id,
+                "turn_id": turn_id,
+            }
+            if extra_payload:
+                success_payload.update(extra_payload)
+            yield {
+                "data": json.dumps(
+                    success_payload,
+                    ensure_ascii=False,
+                )
+            }
+
+        return EventSourceResponse(_event_generator(), media_type="text/event-stream")
+
+    try:
+        from server.services.user_document_chat import (
+            PENDING_CANDIDATES_KEY,
+            PENDING_DOCUMENT_KEY,
+            resolve_document_turn,
+        )
+        from server.services.user_document_service import sanitize_user_key, user_document_service
+
+        raw_user_id = (req.user_id or "").strip()
+        if raw_user_id:
+            user_doc_key = sanitize_user_key(raw_user_id)
+            documents = user_document_service.list_documents(user_doc_key)
+            documents_by_id = {doc.get("doc_id"): doc for doc in documents}
+
+            # If this turn explicitly targets a Document Center file for downstream actions
+            # (e.g. transcript / todo pipeline), skip deterministic preview/list interception.
+            explicit_doc_action_turn = bool((req.user_document_id or "").strip())
+            if explicit_doc_action_turn:
+                session_mgr.set_metadata(session_id, PENDING_DOCUMENT_KEY, None)
+                session_mgr.set_metadata(session_id, PENDING_CANDIDATES_KEY, [])
+                raise RuntimeError("skip_document_turn_interception")
+
+            pending_doc_meta = session_mgr.get_metadata(session_id, PENDING_DOCUMENT_KEY, default=None)
+            pending_doc_id = pending_doc_meta.get("doc_id") if isinstance(pending_doc_meta, dict) else ""
+            pending_document = documents_by_id.get(pending_doc_id) if pending_doc_id else None
+
+            pending_candidate_ids = session_mgr.get_metadata(session_id, PENDING_CANDIDATES_KEY, default=[]) or []
+            pending_candidates = [documents_by_id[doc_id] for doc_id in pending_candidate_ids if doc_id in documents_by_id]
+
+            doc_turn = resolve_document_turn(
+                req.user_input,
+                documents,
+                pending_document=pending_document,
+                pending_candidates=pending_candidates,
+            )
+            if doc_turn:
+                if doc_turn.get("clear_pending") or doc_turn.get("clear_pending_document"):
+                    session_mgr.set_metadata(session_id, PENDING_DOCUMENT_KEY, None)
+                if doc_turn.get("clear_pending") or doc_turn.get("clear_pending_candidates"):
+                    session_mgr.set_metadata(session_id, PENDING_CANDIDATES_KEY, [])
+
+                selected_doc = doc_turn.get("set_pending_document")
+                if selected_doc:
+                    session_mgr.set_metadata(
+                        session_id,
+                        PENDING_DOCUMENT_KEY,
+                        {
+                            "doc_id": selected_doc.get("doc_id"),
+                            "display_name": selected_doc.get("display_name") or selected_doc.get("original_filename"),
+                        },
+                    )
+
+                selected_candidates = doc_turn.get("set_pending_candidates")
+                if selected_candidates:
+                    session_mgr.set_metadata(
+                        session_id,
+                        PENDING_CANDIDATES_KEY,
+                        [doc.get("doc_id") for doc in selected_candidates if doc.get("doc_id")],
+                    )
+
+                action = doc_turn.get("action", "")
+                final_text = doc_turn.get("message", "")
+                document = doc_turn.get("document") or {}
+                doc_id = document.get("doc_id", "")
+                doc_name = document.get("display_name") or document.get("original_filename") or doc_id or "文件"
+                response_meta = None
+
+                if action == "show_preview" and doc_id:
+                    final_text = (
+                        f"已直接為你開啟「{doc_name}」的服務內預覽。\n"
+                        f"[在服務內預覽](/api/user-documents/{doc_id}/viewer)\n"
+                        f"[下載原檔](/api/user-documents/{doc_id}/file?disposition=attachment)"
+                    )
+                    response_meta = {
+                        "document_action": {
+                            "type": "open_preview",
+                            "doc_id": doc_id,
+                            "display_name": doc_name,
+                        }
+                    }
+                elif action == "show_link" and doc_id:
+                    final_text = (
+                        f"以下是「{doc_name}」可直接開啟的連結：\n"
+                        f"[服務內預覽](/api/user-documents/{doc_id}/viewer)\n"
+                        f"[下載原檔](/api/user-documents/{doc_id}/file?disposition=attachment)"
+                    )
+                elif action == "show_text" and doc_id:
+                    _, doc_text = user_document_service.get_text_content(user_doc_key, doc_id)
+                    snippet = (doc_text or "").strip()
+                    if len(snippet) > 8000:
+                        snippet = snippet[:8000].rstrip() + "\n\n[內容較長，先顯示前 8000 字。]"
+                    final_text = (
+                        f"以下是「{doc_name}」的文字內容：\n\n"
+                        f"{snippet or '目前沒有可讀取的文字內容。'}"
+                    )
+
+                return _make_immediate_success_response(final_text, extra_payload=response_meta)
+    except Exception as doc_turn_error:
+        if str(doc_turn_error) == "skip_document_turn_interception":
+            logger.info("[DocTurn] bypassed due to explicit user_document_id action turn")
+        else:
+            logger.warning(f"[DocTurn] Fallback to normal chat due to error: {doc_turn_error}")
+
+    requested_language = req.language
+    profile_language = _extract_profile_language(_user_context)
+    resolved_language, language_source = _resolve_response_language(requested_language, _user_context)
+    req.language = resolved_language
+
+    logger.info(
+        "Chat Request: [Model: %s] [Lang: %s] [Detail: %s] [LangReq: %s] [LangProfile: %s] [LangSource: %s]",
+        req.model,
+        resolved_language,
+        req.detail_level,
+        requested_language,
+        profile_language or "-",
+        language_source,
+    )
     dynamic_prompt = get_universal_system_prompt(
         platform="web",
-        language=req.language or "繁體中文",
+        language=resolved_language,
         detail_level=req.detail_level or "詳細",
     )
     logger.info(f"Generated Dynamic Prompt (Sample): {dynamic_prompt[:100]}... [MID] ...{dynamic_prompt[-100:]}")
@@ -213,6 +582,42 @@ async def process_chat_native(req: ChatRequest):
     session_mgr._update_system_prompt(session_id, dynamic_prompt)
 
     user_content = req.user_input
+    if selected_user_doc:
+        _doc_name = (
+            selected_user_doc.get("display_name")
+            or selected_user_doc.get("original_filename")
+            or selected_user_doc.get("doc_id")
+            or "document"
+        )
+        _media_type = _detect_media_type_label(active_original_file or selected_user_doc_path)
+        user_content += _build_user_document_action_instruction(
+            selected_user_doc_action,
+            _doc_name,
+            _media_type,
+        )
+        if (
+            selected_user_doc_action in _INLINE_SELECTED_DOCUMENT_ACTIONS
+            and (selected_user_doc.get("extension") or "").lower() in _TEXT_EXTRACTABLE_DOCUMENT_EXTENSIONS
+        ):
+            try:
+                from server.services.user_document_service import sanitize_user_key, user_document_service
+
+                user_doc_key = sanitize_user_key((req.user_id or "").strip())
+                _, selected_doc_text = user_document_service.get_text_content(
+                    user_doc_key,
+                    selected_user_doc.get("doc_id", ""),
+                )
+                user_content += _build_selected_user_document_content_block(
+                    _doc_name,
+                    selected_doc_text,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[ChatCore] Failed to inline selected document content for %s: %s",
+                    _doc_name,
+                    exc,
+                )
+
     _upload_handoff = bool(req.upload_handoff)
 
     # ── Workflow-First Matching ─────────────────────────────────────
@@ -469,12 +874,6 @@ async def process_chat_native(req: ChatRequest):
         if skill_knowledge:
             user_content += f"\n\n[Skill Knowledge: {req.injected_skill}]\n{skill_knowledge}"
 
-    if req.language and req.language != "自動偵測":
-        user_content += (
-            f"\n\n(System Note: Respond strictly in {req.language}. "
-            "If input is in another language, translate your answer.)"
-        )
-
     if _upload_handoff:
         _file_name = os.path.basename(active_original_file) if active_original_file else "uploaded file"
         _media_type = _detect_media_type_label(active_original_file)
@@ -577,7 +976,7 @@ async def process_chat_native(req: ChatRequest):
                     messages=outbound_history,
                     user_query=user_content,
                     session_id=session_id,
-                    attached_file=req.attached_file,
+                    attached_file=active_original_file or req.attached_file,
                     temperature=req.temperature or 0.7,
                     visual_docs=req.selected_docs or [],
                     tools_enabled=_tools_enabled,

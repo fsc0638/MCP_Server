@@ -104,8 +104,17 @@ class ProfileUpdater:
     def _inject_employee_header(self, session_id: str, content: str) -> str:
         """Prepend employee info block from user context if available."""
         try:
-            from server.services.employee_lookup import get_user_context
-            ctx = get_user_context(session_id)
+            from server.dependencies.session import get_session_manager
+            from server.services.identity_context import resolve_identity_context
+
+            _sm = get_session_manager()
+            _, ctx = resolve_identity_context(
+                session_id=session_id,
+                explicit_user_id="",
+                session_mgr=_sm,
+                persist_binding=False,
+                allow_session_binding=True,
+            )
             if not ctx or not ctx.get("onboarding_completed"):
                 return content
             # Build fixed header block

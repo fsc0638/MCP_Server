@@ -757,6 +757,13 @@ def _extract_file_content(file_path: str) -> tuple:
             import pandas as pd
             df = pd.read_csv(file_path)
             text = df.to_markdown(index=False)
+        elif lower.endswith(('.m4a', '.mp3', '.wav', '.aac', '.flac', '.ogg',
+                             '.opus', '.webm', '.mp4', '.avi', '.mov', '.mkv',
+                             '.wmv', '.png', '.jpg', '.jpeg', '.gif', '.bmp',
+                             '.tiff', '.svg', '.ico', '.zip', '.rar', '.7z',
+                             '.tar', '.gz', '.exe', '.dll', '.bin', '.dat')):
+            # 二進位/媒體檔案不進行文字提取，避免亂碼進入 LLM
+            return "", f"二進位檔案格式 ({os.path.splitext(file_path)[1]})，不支援文字提取"
         else:
             # .txt, .md, .log, .json, .py, .js, .xml, etc.
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
@@ -1202,15 +1209,22 @@ def _process_line_message(
                             import asyncio
                             from server.services.workflow_executor import get_workflow_executor
                             _wf_exec = get_workflow_executor()
-                            _wf_uc = None
-                            try:
-                                _wf_uc_p = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
-                                if _wf_uc_p.exists():
-                                    _wf_uc = json.loads(_wf_uc_p.read_text(encoding="utf-8"))
-                            except Exception:
-                                pass
+                            from server.services.identity_context import resolve_identity_context
+                            _persist_bind = not (
+                                session_id.startswith("line_group_")
+                                or session_id.startswith("line_room_")
+                            )
+                            _resolved_uid, _wf_uc = resolve_identity_context(
+                                session_id=session_id,
+                                explicit_user_id=(user_id or ""),
+                                session_mgr=_session_mgr,
+                                persist_binding=_persist_bind,
+                                allow_session_binding=True,
+                            )
                             _wf_uc = _wf_uc or {}
                             _wf_uc["session_id"] = session_id
+                            if _resolved_uid:
+                                _wf_uc.setdefault("user_id", _resolved_uid)
                             _wf_result = asyncio.get_event_loop().run_until_complete(
                                 _wf_exec.execute(
                                     workflow=_pending_wf["workflow"],
@@ -1277,11 +1291,27 @@ def _process_line_message(
                             import asyncio
                             from server.services.workflow_executor import get_workflow_executor
                             _wf_exec = get_workflow_executor()
+                            from server.services.identity_context import resolve_identity_context
+                            _persist_bind = not (
+                                session_id.startswith("line_group_")
+                                or session_id.startswith("line_room_")
+                            )
+                            _resolved_uid, _wf_uc_exec = resolve_identity_context(
+                                session_id=session_id,
+                                explicit_user_id=(user_id or ""),
+                                session_mgr=_session_mgr,
+                                persist_binding=_persist_bind,
+                                allow_session_binding=True,
+                            )
+                            _wf_uc_exec = _wf_uc_exec or {}
+                            _wf_uc_exec["session_id"] = session_id
+                            if _resolved_uid:
+                                _wf_uc_exec.setdefault("user_id", _resolved_uid)
                             _wf_result = asyncio.get_event_loop().run_until_complete(
                                 _wf_exec.execute(
                                     workflow=_target_wf,
                                     user_input=_wf_name_query,
-                                    user_context={"session_id": session_id},
+                                    user_context=_wf_uc_exec,
                                 )
                             )
                             _wf_reply = _wf_result.get("final_output", "")
@@ -1442,11 +1472,27 @@ def _process_line_message(
                             extracted_text, extract_err = _extract_file_content(attached_file_path)
 
                             if extract_err:
-                                user_input = (
-                                    f"[系統通知：使用者上傳了文件 {filename}，但伺服器無法提取內容。\n"
-                                    f"錯誤訊息：{extract_err}\n"
-                                    f"請告知使用者檔案可能已損壞、加密或格式不支援。]"
-                                )
+                                _audio_exts = ('.m4a', '.mp3', '.wav', '.aac', '.flac', '.ogg', '.opus', '.webm')
+                                _video_exts = ('.mp4', '.avi', '.mov', '.mkv', '.wmv')
+                                if filename.lower().endswith(_audio_exts):
+                                    user_input = (
+                                        f"[系統通知：使用者上傳了音訊檔案 {filename}。\n"
+                                        f"這是音訊格式，無法直接提取文字。\n"
+                                        f"請立即使用 mcp-transcribe 技能進行語音轉錄。\n"
+                                        f"file_path: {attached_file_path}]"
+                                    )
+                                elif filename.lower().endswith(_video_exts):
+                                    user_input = (
+                                        f"[系統通知：使用者上傳了影片檔案 {filename}。\n"
+                                        f"這是影片格式，無法直接提取文字。\n"
+                                        f"請告知使用者目前不支援影片轉錄。]"
+                                    )
+                                else:
+                                    user_input = (
+                                        f"[系統通知：使用者上傳了文件 {filename}，但伺服器無法提取內容。\n"
+                                        f"錯誤訊息：{extract_err}\n"
+                                        f"請告知使用者檔案可能已損壞、加密或格式不支援。]"
+                                    )
                             elif len(extracted_text) <= 15000:
                                 # Single-pass mode: full content fits in one message
                                 user_input = (
@@ -1524,13 +1570,22 @@ def _process_line_message(
                     from server.services.workflow_matcher import get_workflow_matcher
                     _wf_matcher = get_workflow_matcher()
                     # Load user context for scope filtering
-                    _wf_user_ctx = None
-                    try:
-                        _wf_uc_path = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
-                        if _wf_uc_path.exists():
-                            _wf_user_ctx = json.loads(_wf_uc_path.read_text(encoding="utf-8"))
-                    except Exception:
-                        pass
+                    from server.services.identity_context import resolve_identity_context
+                    _persist_bind = not (
+                        session_id.startswith("line_group_")
+                        or session_id.startswith("line_room_")
+                    )
+                    _wf_uid, _wf_user_ctx = resolve_identity_context(
+                        session_id=session_id,
+                        explicit_user_id=(user_id or ""),
+                        session_mgr=_session_mgr,
+                        persist_binding=_persist_bind,
+                        allow_session_binding=True,
+                    )
+                    _wf_user_ctx = _wf_user_ctx or {}
+                    _wf_user_ctx["session_id"] = session_id
+                    if _wf_uid:
+                        _wf_user_ctx.setdefault("user_id", _wf_uid)
                     _wf_match = _wf_matcher.match(user_input, user_context=_wf_user_ctx)
                     if _wf_match:
                         _wf_mode = _wf_match["workflow"].get("trigger_mode", "auto")
@@ -1542,6 +1597,8 @@ def _process_line_message(
                             _wf_exec = get_workflow_executor()
                             _wf_user_ctx_exec = _wf_user_ctx or {}
                             _wf_user_ctx_exec["session_id"] = session_id
+                            if _wf_uid:
+                                _wf_user_ctx_exec.setdefault("user_id", _wf_uid)
                             _wf_result = asyncio.get_event_loop().run_until_complete(
                                 _wf_exec.execute(
                                     workflow=_wf_match["workflow"],
@@ -1651,9 +1708,20 @@ def _process_line_message(
             adapter = OpenAIAdapter(uma=uma, model=_routed_model)
             # Inject user_context for three-tier skill filtering
             try:
-                _uc_path = Path(os.getenv("PROJECT_ROOT", ".")) / "workspace" / "users" / f"{session_id}.json"
-                if _uc_path.exists():
-                    adapter.user_context = json.loads(_uc_path.read_text(encoding="utf-8"))
+                from server.services.identity_context import resolve_identity_context
+                _persist_bind = not (
+                    session_id.startswith("line_group_")
+                    or session_id.startswith("line_room_")
+                )
+                _, _adapter_ctx = resolve_identity_context(
+                    session_id=session_id,
+                    explicit_user_id=(user_id or ""),
+                    session_mgr=_session_mgr,
+                    persist_binding=_persist_bind,
+                    allow_session_binding=True,
+                )
+                if _adapter_ctx:
+                    adapter.user_context = _adapter_ctx
             except Exception:
                 pass
             # Tier-aware max_output_tokens:

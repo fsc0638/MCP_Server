@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from server.routes import models, documents, chat, skills, workspace, resources, auth, workflow, approvals, workflow_resume, audit, workflow_runs
+from server.routes.user_documents import router as user_documents_router
 from server.integrations.line_connector import router as line_router
 from main import PROJECT_ROOT
 from server.dependencies.uma import get_uma_instance as get_uma
@@ -37,6 +38,7 @@ app.include_router(workflow_resume.router)
 app.include_router(workflow_runs.router)
 app.include_router(approvals.router)
 app.include_router(audit.router)
+app.include_router(user_documents_router)
 app.include_router(line_router)
 
 frontend_dir = PROJECT_ROOT / "frontend"
@@ -114,6 +116,22 @@ def _scheduled_line_uploads_cleanup():
             logger.info(f"[Scheduler] LINE uploads cleanup: removed {deleted_files} file(s) older than 168h")
     except Exception as e:
         logger.error(f"[Scheduler] LINE uploads cleanup failed: {e}")
+
+
+def _scheduled_user_documents_cleanup():
+    """Scheduled job: delete expired user document center files."""
+    try:
+        from server.services.user_document_service import user_document_service
+
+        summary = user_document_service.cleanup_expired_documents()
+        if summary["removed_documents"]:
+            logger.info(
+                "[Scheduler] User documents cleanup: removed %s document(s), %s empty user folder(s)",
+                summary["removed_documents"],
+                summary["removed_users"],
+            )
+    except Exception as e:
+        logger.error(f"[Scheduler] User documents cleanup failed: {e}")
 
 
 def _scheduled_push_tick():
@@ -220,6 +238,14 @@ def _setup_scheduler():
             replace_existing=True,
         )
 
+        __scheduler.add_job(
+            _scheduled_user_documents_cleanup,
+            CronTrigger(hour=0, minute=10),
+            id="user_documents_cleanup",
+            name="User Documents Cleanup (TTL)",
+            replace_existing=True,
+        )
+
         # Scheduled Push: check every minute for due tasks
         from apscheduler.triggers.interval import IntervalTrigger
         __scheduler.add_job(
@@ -260,7 +286,7 @@ def _setup_scheduler():
         )
 
         __scheduler.start()
-        logger.info("[Scheduler] APScheduler started with 7 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), line_uploads_cleanup(00:05), push_tick(1min), continuous_learner(10min), log_cleanup(02h)")
+        logger.info("[Scheduler] APScheduler started with 8 jobs: profile_update(09/12/17h), token_summary(17h), cache_cleanup(00h), line_uploads_cleanup(00:05), user_documents_cleanup(00:10), push_tick(1min), continuous_learner(10min), log_cleanup(02h)")
 
         # Register workflow-native cron jobs from disk (trigger.schedule)
         try:

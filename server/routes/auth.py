@@ -1,6 +1,7 @@
 """Authentication routes."""
 
 import os
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Cookie, Response
 from fastapi.responses import RedirectResponse, JSONResponse
 from google.oauth2 import id_token
@@ -18,6 +19,70 @@ class GoogleLoginRequest(BaseModel):
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+_ALLOWED_PREFERENCE_LANGUAGES = {
+    "繁體中文",
+    "简体中文",
+    "English",
+    "日本語",
+    "한국어",
+    "自動偵測",
+}
+_PREFERENCE_LANGUAGE_CANONICAL = {
+    "繁體中文": "繁體中文",
+    "繁体中文": "繁體中文",
+    "traditional chinese": "繁體中文",
+    "zh-tw": "繁體中文",
+    "zh-hant": "繁體中文",
+    "简体中文": "简体中文",
+    "simplified chinese": "简体中文",
+    "zh-cn": "简体中文",
+    "zh-hans": "简体中文",
+    "english": "English",
+    "en": "English",
+    "日本語": "日本語",
+    "japanese": "日本語",
+    "ja": "日本語",
+    "한국어": "한국어",
+    "korean": "한국어",
+    "ko": "한국어",
+    "自動偵測": "自動偵測",
+    "自动侦测": "自動偵測",
+    "auto": "自動偵測",
+    "auto-detect": "自動偵測",
+}
+
+
+def _canonicalize_preference_language(value: str | None) -> Optional[str]:
+    if not value:
+        return None
+    token = str(value).strip()
+    if not token:
+        return None
+    if token in _ALLOWED_PREFERENCE_LANGUAGES:
+        return token
+    mapped = _PREFERENCE_LANGUAGE_CANONICAL.get(token.lower())
+    if mapped in _ALLOWED_PREFERENCE_LANGUAGES:
+        return mapped
+    return None
+
+
+def _resolve_context_identity(user_id: str) -> tuple[str, dict]:
+    """Return (context_user_id, context_dict) for a session user_id."""
+    from server.services.employee_lookup import get_user_context
+
+    uid = (user_id or "").strip()
+    candidates = [uid]
+    if uid.startswith("U") and not uid.startswith("pw_"):
+        candidates.append(f"line_{uid}")
+
+    for cand in candidates:
+        try:
+            ctx = get_user_context(cand)
+        except Exception:
+            ctx = None
+        if ctx:
+            return cand, dict(ctx)
+    return uid, {}
 
 
 def _auto_bind_line_user_context(user: dict) -> None:
@@ -321,6 +386,90 @@ def me(mcp_session: str = Cookie(default="", alias="mcp_session")):
     user["_debug_sess_user_id"] = sess.user_id
     user["_debug_ctx_found"] = _ctx is not None
     return {"status": "success", "user": user}
+
+
+class PreferenceUpdateRequest(BaseModel):
+    language: str = ""
+
+
+@router.post("/preferences")
+def update_preferences_api(
+    req: PreferenceUpdateRequest,
+    mcp_session: str = Cookie(default="", alias="mcp_session"),
+):
+    """Persist user preference fields to workspace user context."""
+    if not mcp_session:
+        raise HTTPException(status_code=401, detail="not_logged_in")
+
+    from server.services.session_token_cookie import verify_token
+    token = verify_token(mcp_session)
+    if not token:
+        raise HTTPException(status_code=401, detail="invalid_session")
+
+    from server.services.auth_session_store import get_auth_session_store
+    sess = get_auth_session_store().get(token)
+    if not sess:
+        raise HTTPException(status_code=401, detail="session_expired")
+
+    language = _canonicalize_preference_language(req.language)
+    if not language:
+        raise HTTPException(status_code=400, detail="invalid_language")
+
+    from server.services.employee_lookup import save_user_context
+
+    context_user_id, ctx = _resolve_context_identity(sess.user_id)
+
+    # Create minimal context when profile doesn't exist yet.
+    if not ctx:
+        ctx = {
+            "user_id": context_user_id,
+            "name": sess.name or "User",
+            "email": "",
+            "department": "",
+            "department_code": "",
+            "department_name": "",
+            "title": "",
+            "extension": "",
+            "preferences": {
+                "language": "繁體中文",
+                "style": "適中",
+                "primary_use": [],
+            },
+            "role": "editor",
+            "groups": [],
+            "skill_access": {
+                "system": "all",
+                "department": [],
+                "personal": True,
+            },
+            "onboarding_completed": False,
+            "source": "web_settings",
+        }
+
+    prefs = ctx.get("preferences")
+    if not isinstance(prefs, dict):
+        prefs = {}
+    prefs["language"] = language
+    ctx["preferences"] = prefs
+    ctx["user_id"] = context_user_id
+    ctx["updated_at"] = _now_iso()
+
+    save_user_context(ctx)
+    _auth_logger.info(
+        "[Preferences] user=%s context_user_id=%s language=%s",
+        sess.user_id,
+        context_user_id,
+        language,
+    )
+
+    return {
+        "status": "success",
+        "preferences": {
+            "language": language,
+            "style": prefs.get("style", ""),
+            "primary_use": prefs.get("primary_use", []),
+        },
+    }
 
 
 # ── Password Login ────────────────────────────────────────────────────────

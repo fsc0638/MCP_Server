@@ -598,11 +598,26 @@ class ScheduledPushService:
                 if not wf_data:
                     return f"排程工作流執行失敗：找不到 {workflow_id}"
                 executor = get_workflow_executor()
+                from server.dependencies.session import get_session_manager
+                from server.services.identity_context import resolve_identity_context
+
+                _sm = get_session_manager()
+                _resolved_uid, _wf_uc = resolve_identity_context(
+                    session_id=session_id,
+                    explicit_user_id="",
+                    session_mgr=_sm,
+                    persist_binding=True,
+                    allow_session_binding=True,
+                )
+                _wf_uc = _wf_uc or {}
+                _wf_uc["session_id"] = session_id
+                if _resolved_uid:
+                    _wf_uc.setdefault("user_id", _resolved_uid)
                 result = asyncio.get_event_loop().run_until_complete(
                     executor.execute(
                         workflow=wf_data,
                         user_input=original_request or f"排程執行 {wf_data.get('name', workflow_id)}",
-                        user_context={"session_id": session_id},
+                        user_context=_wf_uc,
                     )
                 )
                 output = result.get("final_output", "")

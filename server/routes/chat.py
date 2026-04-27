@@ -6,7 +6,7 @@ import logging
 import uuid
 from typing import AsyncGenerator, Dict
 
-from fastapi import APIRouter, HTTPException, Cookie
+from fastapi import APIRouter, Cookie, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from server.dependencies.session import get_session_manager
@@ -37,7 +37,19 @@ def _get_active_task_for_session(session_id: str) -> Dict:
 
 
 @router.post("/chat")
-async def chat(req: ChatRequest):
+async def chat(req: ChatRequest, mcp_session: str = Cookie(default="", alias="mcp_session")):
+    if not req.user_id and mcp_session:
+        session = None
+        try:
+            from server.services.auth_session_store import get_auth_session_store
+            from server.services.session_token_cookie import verify_token
+            token = verify_token(mcp_session)
+            if token:
+                session = get_auth_session_store().get(token)
+        except Exception:
+            session = None
+        if session and getattr(session, "user_id", ""):
+            req.user_id = session.user_id
     return await process_chat(req)
 
 

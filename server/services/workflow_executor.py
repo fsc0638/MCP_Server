@@ -1137,13 +1137,23 @@ class WorkflowExecutor:
                 # risk gate when this skill was already approved for this run.
                 # See uma_core.execute_tool_call docstring + §10-1.
                 _run_id_for_gate = ctx.get("run_id") or ""
+                def _execute_tool_call():
+                    try:
+                        return uma.execute_tool_call(
+                            skill_name,
+                            json.dumps(block_params, ensure_ascii=False),
+                            approved_for_run=_run_id_for_gate,
+                        )
+                    except TypeError as exc:
+                        if "approved_for_run" not in str(exc):
+                            raise
+                        return uma.execute_tool_call(
+                            skill_name,
+                            json.dumps(block_params, ensure_ascii=False),
+                        )
                 result = await loop.run_in_executor(
                     None,
-                    lambda: uma.execute_tool_call(
-                        skill_name,
-                        json.dumps(block_params, ensure_ascii=False),
-                        approved_for_run=_run_id_for_gate,
-                    ),
+                    _execute_tool_call,
                 )
                 # ── Phase 2 HitL: skill self-reports requires_approval ──
                 # Skills marked risk_level=high short-circuit in UMA and return
